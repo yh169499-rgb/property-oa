@@ -104,6 +104,10 @@ test('strictly validates calendar dates, clock times, and custom absolute window
     staffId: 10, workDate: '2026-07-30', assignmentType: 'work',
     startAt: '2026-07-31T08:00:00+08:00', endAt: '2026-07-31T18:00:00+08:00',
   }), /workDate/);
+  assert.throws(() => validateAssignment({
+    staffId: 10, workDate: '2026-07-30', assignmentType: 'work',
+    startAt: '2026-07-30T20:00:00-10:00', endAt: '2026-07-31T06:00:00-10:00',
+  }), /workDate/);
 });
 
 test('rejects nonexistent staff without creating an orphan assignment', async (t) => {

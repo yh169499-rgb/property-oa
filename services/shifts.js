@@ -38,6 +38,17 @@ function isValidTime(value) {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value || '');
 }
 
+function shanghaiDate(timestamp) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function resolveShiftWindow(workDate, startTime, endTime) {
   if (!isValidDate(workDate) || !isValidTime(startTime) || !isValidTime(endTime)) {
     throw assignmentError('班次日期或时间格式无效');
@@ -59,8 +70,8 @@ function validateCustomWindow(value) {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
     throw assignmentError('自定义起止时间无效，结束时间必须晚于开始时间');
   }
-  const startDate = value.startAt.slice(0, 10);
-  const endDate = value.endAt.slice(0, 10);
+  const startDate = shanghaiDate(start);
+  const endDate = shanghaiDate(end);
   if (startDate !== value.workDate
       || ![value.workDate, nextDate(value.workDate)].includes(endDate)) {
     throw assignmentError('自定义起止时间必须与 workDate 当天或跨夜窗口一致');
