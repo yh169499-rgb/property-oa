@@ -10,6 +10,7 @@ const ticketRoutes = require('./routes/tickets');
 const communityRoutes = require('./routes/communities');
 const staffRoutes = require('./routes/staff');
 const settingsRoutes = require('./routes/settings');
+const profileRoutes = require('./routes/profiles');
 
 function createServerApp() {
   const app = express();
@@ -34,6 +35,7 @@ function createServerApp() {
   app.use('/api/communities', communityRoutes);
   app.use('/api/staff', staffRoutes);
   app.use('/api', settingsRoutes);
+  app.use('/api', profileRoutes);
 
   return app;
 }
