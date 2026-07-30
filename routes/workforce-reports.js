@@ -11,11 +11,15 @@ const {
 } = require('../services/reporting');
 
 const router = express.Router();
-const PUBLIC_ERROR_CODES = new Set([
-  'INVALID_DATE',
+const BUSINESS_ERROR_CODES = new Set([
   'INVALID_CALENDAR_REQUEST',
+  'INVALID_DATE',
   'PROFILE_NOT_FOUND',
   'CALENDAR_SCOPE_FORBIDDEN',
+  'REPORT_SCOPE_FORBIDDEN',
+  'INVALID_DATE_RANGE',
+  'INVALID_STAFF_ID',
+  'INVALID_REPORT_PERIOD',
 ]);
 
 function all(sql, params = []) {
@@ -28,16 +32,13 @@ function all(sql, params = []) {
 }
 
 function fail(res, error) {
-  if (!Number.isInteger(error.status) || !PUBLIC_ERROR_CODES.has(error.code)) {
-    return res.status(500).json({
-      error: '内部服务器错误',
-      code: 'INTERNAL_ERROR',
+  if (BUSINESS_ERROR_CODES.has(error.code)) {
+    return res.status(error.status || 400).json({
+      error: error.message || '请求失败',
+      code: error.code,
     });
   }
-  return res.status(error.status).json({
-    error: error.message || '请求失败',
-    code: error.code || 'INVALID_CALENDAR_REQUEST',
-  });
+  return res.status(500).json({ error: '内部服务器错误', code: 'INTERNAL_ERROR' });
 }
 
 function ownProfile(profiles, userId) {
@@ -65,6 +66,53 @@ function assertStaffScope(req, requestedId, options = {}) {
     throw error;
   }
   return { own, profiles };
+}
+
+function tableExists(name) {
+  return all(
+    "SELECT 1 present FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [name]
+  ).length > 0;
+}
+
+function dashboardScope(req, communityId) {
+  const profiles = all('SELECT id, user_id, name, manager_id FROM staff_profiles');
+  const own = ownProfile(profiles, req.user.id);
+  if (!own) {
+    const error = new Error('人员档案不存在');
+    error.status = 404;
+    error.code = 'PROFILE_NOT_FOUND';
+    throw error;
+  }
+  const staffIds = [Number(own.id), ...descendantIds(profiles, own.id).map(Number)];
+  if (communityId) {
+    const placeholders = staffIds.map(() => '?').join(',');
+    const hasTeamTicket = all(
+      `SELECT 1
+         FROM tickets
+        WHERE community_id = ?
+          AND assignee_user_id IN (
+            SELECT user_id FROM staff_profiles WHERE id IN (${placeholders})
+          )
+        LIMIT 1`,
+      [communityId, ...staffIds]
+    ).length > 0;
+    const hasPermission = tableExists('community_permissions') && all(
+      `SELECT 1
+         FROM community_permissions cp
+         JOIN staff_profiles sp ON sp.name = cp.staff_name
+        WHERE cp.community_id = ? AND sp.id IN (${placeholders})
+        LIMIT 1`,
+      [communityId, ...staffIds]
+    ).length > 0;
+    if (!hasTeamTicket && !hasPermission) {
+      const error = new Error('无权查看该小区统计');
+      error.status = 403;
+      error.code = 'REPORT_SCOPE_FORBIDDEN';
+      throw error;
+    }
+  }
+  return staffIds;
 }
 
 router.get('/calendar/day', requireAuth, (req, res) => {
@@ -121,8 +169,10 @@ router.get('/dashboard/stats', requireAuth, (req, res) => {
       error.code = 'REPORT_SCOPE_FORBIDDEN';
       throw error;
     }
+    const staffIds = dashboardScope(req, req.query.community_id);
     res.json({ data: getDashboardStats(database.getDB(), {
       communityId: req.query.community_id,
+      staffIds,
     }) });
   } catch (error) {
     fail(res, error);

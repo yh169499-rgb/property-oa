@@ -79,6 +79,42 @@ function one(db, sql, params = []) {
   return rows(db, sql, params)[0] || {};
 }
 
+function ticketColumns(db) {
+  const result = db.exec('PRAGMA table_info(tickets)');
+  return new Set(result[0] ? result[0].values.map((row) => row[1]) : []);
+}
+
+function completionExpression(db, alias = 't') {
+  const columns = ticketColumns(db);
+  const available = ['finished', 'completed_at', 'finished_at']
+    .filter((column) => columns.has(column))
+    .map((column) => `NULLIF(${alias}.${column}, '')`);
+  if (available.length === 0) return 'NULL';
+  if (available.length === 1) return available[0];
+  return `COALESCE(${available.join(', ')})`;
+}
+
+function completedMetrics(completedRows) {
+  const valid = completedRows.map((ticket) => {
+    const start = Date.parse(ticket.start_time);
+    const end = Date.parse(ticket.completion_time);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    return { ...ticket, durationHours: (end - start) / 3600000 };
+  }).filter(Boolean);
+  const slaSamples = valid.filter((ticket) => (
+    Number.isFinite(Number(ticket.estimated_hours)) && Number(ticket.estimated_hours) > 0
+  ));
+  const onTime = slaSamples.filter((ticket) => (
+    ticket.durationHours <= Number(ticket.estimated_hours)
+  )).length;
+  return {
+    averageHours: valid.length
+      ? Number((valid.reduce((sum, ticket) => sum + ticket.durationHours, 0) / valid.length).toFixed(1))
+      : 0,
+    onTimeRate: slaSamples.length ? Number(((onTime / slaSamples.length) * 100).toFixed(1)) : 0,
+  };
+}
+
 function rangeFor(filters = {}) {
   if (filters.from || filters.to) {
     if (!filters.from || !filters.to) throw invalidDate('开始日期和结束日期必须同时提供');
@@ -91,6 +127,28 @@ function communityClause(filters, column = 't.community_id') {
   return filters.communityId || filters.community_id
     ? { sql: ` AND ${column} = ?`, params: [filters.communityId || filters.community_id] }
     : { sql: '', params: [] };
+}
+
+function ticketStaffClause(filters, alias = 't') {
+  if (!Object.hasOwn(filters, 'staffIds')) return { sql: '', params: [] };
+  const ids = [...new Set((filters.staffIds || []).map(Number).filter(Number.isInteger))];
+  if (ids.length === 0) return { sql: ' AND 0', params: [] };
+  return {
+    sql: ` AND ${alias}.assignee_user_id IN (
+      SELECT user_id FROM staff_profiles WHERE id IN (${ids.map(() => '?').join(',')})
+    )`,
+    params: ids,
+  };
+}
+
+function directStaffClause(filters, column) {
+  if (!Object.hasOwn(filters, 'staffIds')) return { sql: '', params: [] };
+  const ids = [...new Set((filters.staffIds || []).map(Number).filter(Number.isInteger))];
+  if (ids.length === 0) return { sql: ' AND 0', params: [] };
+  return {
+    sql: ` AND ${column} IN (${ids.map(() => '?').join(',')})`,
+    params: ids,
+  };
 }
 
 function reportForStaffIds(db, staffIds, filters = {}) {
@@ -112,20 +170,16 @@ function reportForStaffIds(db, staffIds, filters = {}) {
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?`,
   [...baseParams, range.from, range.toExclusive]);
 
+  const completion = completionExpression(db);
   const completedRows = rows(db, `
-    SELECT t.created, t.assigned_at, t.finished, t.estimated_hours
+    SELECT COALESCE(NULLIF(t.assigned_at, ''), t.created) start_time,
+           ${completion} completion_time, t.estimated_hours
       FROM tickets t
      WHERE ${staffPredicate}${community.sql}
-       AND t.status = 'done' AND NULLIF(t.finished, '') IS NOT NULL
-       AND t.finished >= ? AND t.finished < ?`,
+       AND t.status = 'done' AND ${completion} IS NOT NULL
+       AND ${completion} >= ? AND ${completion} < ?`,
   [...baseParams, range.from, range.toExclusive]);
-  const durations = completedRows.map((ticket) => (
-    Date.parse(ticket.finished) - Date.parse(ticket.assigned_at || ticket.created)
-  ) / 3600000).filter((hours) => Number.isFinite(hours) && hours >= 0);
-  const withSla = completedRows.filter((ticket) => Number(ticket.estimated_hours) > 0);
-  const onTime = withSla.filter((ticket) => (
-    Date.parse(ticket.finished) - Date.parse(ticket.assigned_at || ticket.created)
-  ) <= Number(ticket.estimated_hours) * 3600000).length;
+  const metrics = completedMetrics(completedRows);
 
   const current = one(db, `
     SELECT
@@ -152,10 +206,8 @@ function reportForStaffIds(db, staffIds, filters = {}) {
     received: { total: Number(received.total || 0), basis: 'assigned_at_or_created' },
     completed: {
       total: completedRows.length,
-      averageHours: durations.length
-        ? Number((durations.reduce((sum, value) => sum + value, 0) / durations.length).toFixed(1))
-        : 0,
-      onTimeRate: withSla.length ? Number(((onTime / withSla.length) * 100).toFixed(1)) : 0,
+      averageHours: metrics.averageHours,
+      onTimeRate: metrics.onTimeRate,
     },
     current: { doing: Number(current.doing || 0), pending: Number(current.pending || 0) },
     attendance,
@@ -205,47 +257,46 @@ function getManagerReport(db, staffId, filters = {}) {
 function getDashboardStats(db, filters = {}) {
   const range = shanghaiMonthRange(filters.now);
   const community = communityClause(filters);
+  const ticketStaff = ticketStaffClause(filters);
   const monthly = rows(db, `
-    SELECT type, status, created, finished, estimated_hours
+    SELECT type, status, created, estimated_hours
       FROM tickets t
-     WHERE t.created >= ? AND t.created < ?${community.sql}`,
-  [range.from, range.toExclusive, ...community.params]);
+     WHERE t.created >= ? AND t.created < ?${community.sql}${ticketStaff.sql}`,
+  [range.from, range.toExclusive, ...community.params, ...ticketStaff.params]);
   const byType = { repair: 0, complaint: 0, help: 0 };
   for (const ticket of monthly) byType[ticket.type] = (byType[ticket.type] || 0) + 1;
+  const completion = completionExpression(db);
   const done = rows(db, `
-    SELECT created, finished, estimated_hours
+    SELECT COALESCE(NULLIF(t.assigned_at, ''), t.created) start_time,
+           ${completion} completion_time, t.estimated_hours
       FROM tickets t
-     WHERE t.status = 'done' AND NULLIF(t.finished, '') IS NOT NULL
-       AND t.finished >= ? AND t.finished < ?${community.sql}`,
-  [range.from, range.toExclusive, ...community.params]);
-  const durations = done.map((ticket) => (
-    Date.parse(ticket.finished) - Date.parse(ticket.created)
-  ) / 3600000).filter((hours) => Number.isFinite(hours) && hours >= 0);
-  const withSla = done.filter((ticket) => Number(ticket.estimated_hours) > 0);
-  const onTime = withSla.filter((ticket) => (
-    Date.parse(ticket.finished) - Date.parse(ticket.created)
-  ) <= Number(ticket.estimated_hours) * 3600000).length;
+     WHERE t.status = 'done' AND ${completion} IS NOT NULL
+       AND ${completion} >= ? AND ${completion} < ?${community.sql}${ticketStaff.sql}`,
+  [range.from, range.toExclusive, ...community.params, ...ticketStaff.params]);
+  const metrics = completedMetrics(done);
   const urgent = one(db, `
     SELECT COUNT(*) total FROM tickets t
-     WHERE t.priority = 'urgent' AND t.status <> 'done'${community.sql}`,
-  community.params);
+     WHERE t.priority = 'urgent' AND t.status <> 'done'${community.sql}${ticketStaff.sql}`,
+  [...community.params, ...ticketStaff.params]);
   const today = shanghaiDayRange(new Date((new Date(filters.now || Date.now())).getTime() + SHANGHAI_OFFSET_MS)
     .toISOString().slice(0, 10));
+  const actionStaff = directStaffClause(filters, 'actor_staff_id');
   const managerActions = one(db, `
     SELECT COUNT(*) total FROM ticket_activity_logs
-     WHERE created_at >= ? AND created_at < ?`, [today.from, today.toExclusive]);
+     WHERE created_at >= ? AND created_at < ?${actionStaff.sql}`,
+  [today.from, today.toExclusive, ...actionStaff.params]);
+  const attendanceStaff = directStaffClause(filters, 'staff_id');
   const attendance = one(db, `
     SELECT COUNT(*) actual FROM attendance_records
-     WHERE work_date = ?`, [shanghaiDateFromInstant(today.from)]);
+     WHERE work_date = ?${attendanceStaff.sql}`,
+  [shanghaiDateFromInstant(today.from), ...attendanceStaff.params]);
   return {
     range,
     monthTotal: monthly.length,
     byType,
     urgentPending: Number(urgent.total || 0),
-    averageHours: durations.length
-      ? Number((durations.reduce((sum, value) => sum + value, 0) / durations.length).toFixed(1))
-      : 0,
-    onTimeRate: withSla.length ? Number(((onTime / withSla.length) * 100).toFixed(1)) : 0,
+    averageHours: metrics.averageHours,
+    onTimeRate: metrics.onTimeRate,
     todayManagerActions: Number(managerActions.total || 0),
     teamAttendance: { actual: Number(attendance.actual || 0) },
   };
@@ -255,6 +306,7 @@ module.exports = {
   shanghaiDayRange,
   shanghaiMonthRange,
   inclusiveDateRange,
+  completionExpression,
   getDashboardStats,
   getStaffReport,
   getManagerReport,

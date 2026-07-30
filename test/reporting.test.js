@@ -132,3 +132,76 @@ test('旧 /api/report 匿名无 staff_id 保持兼容，staff_id 分支要求登
   assert.equal(scoped.status, 401);
   assert.equal(scopedBody.code, 'AUTH_REQUIRED');
 });
+
+test('历史完成列参与完成统计，负耗时和无效时间不进入耗时与准时率样本', async (t) => {
+  const db = await fixture();
+  db.run('ALTER TABLE tickets ADD COLUMN completed_at TEXT DEFAULT ""');
+  db.run(`
+    INSERT INTO tickets
+      (id, status, created, assigned_at, finished, completed_at, estimated_hours, assignee_user_id)
+    VALUES
+      ('historical', 'done', '2026-07-05T00:00:00Z', '2026-07-05T00:00:00Z', '', '2026-07-05T02:00:00Z', 3, 3),
+      ('negative', 'done', '2026-07-06T03:00:00Z', '2026-07-06T03:00:00Z', '2026-07-06T02:00:00Z', '', 10, 3),
+      ('bad-start', 'done', '2026-07-07T00:00:00Z', 'not-a-date', '2026-07-07T02:00:00Z', '', 10, 3);
+  `);
+  const { getStaffReport, getDashboardStats } = require('../services/reporting');
+  const report = getStaffReport(db, 3, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(report.completed.total, 3);
+  assert.equal(report.completed.averageHours, 2);
+  assert.equal(report.completed.onTimeRate, 100);
+
+  const dashboard = getDashboardStats(db, { now: '2026-07-15T00:00:00+08:00' });
+  assert.equal(dashboard.averageHours, 2);
+  assert.equal(dashboard.onTimeRate, 100);
+
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`);
+  assert.equal((await legacy.json()).stats.done, 3);
+});
+
+test('主管看板只统计本人递归团队并拒绝跨树社区', async (t) => {
+  const db = await fixture();
+  const now = new Date().toISOString();
+  db.run(`
+    INSERT INTO tickets (id, status, created, community_id, assignee_user_id) VALUES
+      ('own-tree', 'wait', ?, 'team-a', 1),
+      ('deep-tree', 'wait', ?, 'team-a', 3),
+      ('other-tree', 'wait', ?, 'team-b', 4)
+  `, [now, now, now]);
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const leadOne = authHeader({ id: 1, role: 'lead' });
+  const leadFour = authHeader({ id: 4, role: 'lead' });
+
+  const own = await fetch(`${server.url}/api/dashboard/stats`, { headers: leadOne });
+  assert.equal(own.status, 200);
+  assert.equal((await own.json()).data.monthTotal, 2);
+
+  const other = await fetch(`${server.url}/api/dashboard/stats`, { headers: leadFour });
+  assert.equal(other.status, 200);
+  assert.equal((await other.json()).data.monthTotal, 1);
+
+  const forbidden = await fetch(`${server.url}/api/dashboard/stats?community_id=team-b`, {
+    headers: leadOne,
+  });
+  assert.equal(forbidden.status, 403);
+  assert.equal((await forbidden.json()).code, 'REPORT_SCOPE_FORBIDDEN');
+});
+
+test('报告路由对未知数据库异常返回通用 500 且不回显 SQL', async (t) => {
+  const db = await fixture();
+  db.run('DROP TABLE tickets');
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const headers = authHeader({ id: 3, role: 'worker' });
+
+  for (const path of ['/api/reports/staff/3', '/api/report?staff_id=3']) {
+    const response = await fetch(`${server.url}${path}`, { headers });
+    const body = await response.json();
+    assert.equal(response.status, 500);
+    assert.equal(body.code, 'INTERNAL_ERROR');
+    assert.equal(body.error, '服务器内部错误');
+    assert.doesNotMatch(JSON.stringify(body), /tickets|SQL|no such/i);
+  }
+});
