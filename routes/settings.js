@@ -6,6 +6,9 @@ const fetch = require('node-fetch');
 const router = express.Router();
 const { queryAll, queryOne, run, saveDB } = require('../db');
 const config = require('../config');
+const { requireAuth } = require('../middleware/auth');
+const { descendantIds } = require('../services/organization');
+const { getStaffReport } = require('../services/reporting');
 
 // ============ 句子秒懂 Token ============
 let cachedAccessToken = null;
@@ -127,7 +130,33 @@ router.get('/sla/alert', async (req, res) => {
 });
 
 // GET /api/report
-router.get('/report', (req, res) => {
+router.get('/report', requireAuth, (req, res) => {
+  if (req.query.staff_id !== undefined && req.query.staff_id !== '') {
+    try {
+      const profiles = queryAll('SELECT id, user_id, manager_id FROM staff_profiles');
+      const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
+      if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
+      const target = Number(req.query.staff_id);
+      const allowed = req.user.role === 'admin'
+        || target === Number(own.id)
+        || (req.user.role === 'lead'
+          && descendantIds(profiles, own.id).map(Number).includes(target));
+      if (!allowed) {
+        return res.status(403).json({ error: '无权查看该人员', code: 'REPORT_SCOPE_FORBIDDEN' });
+      }
+      const data = getStaffReport(require('../db').getDB(), target, {
+        from: req.query.from,
+        to: req.query.to,
+        communityId: req.query.community_id,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return res.status(error.status || 400).json({
+        error: error.message || '请求失败',
+        code: error.code || 'INVALID_REPORT_REQUEST',
+      });
+    }
+  }
   const from = req.query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
   const to = req.query.to || new Date().toISOString();
   const communityId = req.query.community_id;
