@@ -128,20 +128,26 @@ function staffColor(name) {
    ============================================================ */
 function initNav() {
   $$('.nav button').forEach(b => {
-    b.onclick = () => {
-      $$('.nav button').forEach(x => x.classList.remove('active'));
-      b.classList.add('active');
-      $$('.page').forEach(p => p.classList.remove('active'));
-      $('#page-' + b.dataset.page).classList.add('active');
-      if (b.dataset.page === 'dashboard') setTimeout(function() {
-        // 销毁旧图表实例避免display:none时尺寸为0的问题
-        Object.keys(charts).forEach(function(k) { try { charts[k].dispose(); } catch(e) {} });
-        charts = {};
-        renderDashboard();
-      }, 50);
-      if (b.dataset.page === 'schedule') setTimeout(renderSchedule, 30);
-    };
+    b.onclick = () => showPage(b.dataset.page);
   });
+}
+
+function showPage(page, navPage) {
+  var target = $('#page-' + page);
+  if (!target) return false;
+  $$('.nav button').forEach(x => x.classList.remove('active'));
+  var activeNav = $$('.nav button').find(b => b.dataset.page === (navPage || page));
+  if (activeNav) activeNav.classList.add('active');
+  $$('.page').forEach(p => p.classList.remove('active'));
+  target.classList.add('active');
+  if (page === 'dashboard') setTimeout(function() {
+    // 销毁旧图表实例避免display:none时尺寸为0的问题
+    Object.keys(charts).forEach(function(k) { try { charts[k].dispose(); } catch(e) {} });
+    charts = {};
+    renderDashboard();
+  }, 50);
+  if (page === 'schedule') setTimeout(renderSchedule, 30);
+  return true;
 }
 
 function navTo(page) {
@@ -198,9 +204,9 @@ function roleWorkerName() {
 function applyRoleView() {
   var isWorker = currentRole.startsWith('worker_');
   var isKeeper = currentRole.startsWith('pm_keeper_');
-  // 师傅/管家视图：隐藏管理平台和看板
+  // 师傅/管家视图：隐藏管理工作台和看板
   $$('.nav button').forEach(b => {
-    if (b.dataset.page === 'admin') b.style.display = (isWorker || isKeeper) ? 'none' : '';
+    if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
     if (b.dataset.page === 'dashboard') b.style.display = (isWorker || isKeeper) ? 'none' : '';
   });
   // 重新加载小区列表（按角色权限过滤）
@@ -209,13 +215,10 @@ function applyRoleView() {
   initSchedule();
   // 更新日程页面标题和导航按钮文字
   var schedTitle = document.querySelector('#page-schedule .page-title');
-  var schedNavBtn = $$('.nav button').find(b => b.dataset.page === 'schedule');
   if (isWorker || isKeeper) {
     if (schedTitle) schedTitle.textContent = '我的';
-    if (schedNavBtn) schedNavBtn.textContent = '👤 我的';
   } else {
     if (schedTitle) schedTitle.textContent = '师傅日程 · 排班与冲突检测';
-    if (schedNavBtn) schedNavBtn.textContent = '📅 师傅日程';
   }
   // 切换到师傅视图时默认显示工单页
   if (isWorker) { navTo('repair'); }

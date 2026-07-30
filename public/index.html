@@ -111,13 +111,13 @@
       <button class="btn sm ghost" onclick="openCommunityModal()" title="管理小区">⚙️</button>
     </div>
     <nav class="nav">
-      <button class="active" data-page="dashboard">📊 看板</button>
-      <button data-page="repair">🔧 报修工单</button>
-      <button data-page="complaint">📣 投诉工单</button>
-      <button data-page="help">🙋 帮助/其他</button>
-      <button data-page="done">✅ 已完成</button>
-      <button data-page="schedule">📅 师傅日程</button>
-      <button data-page="admin">⚙️ 管理平台</button>
+      <button class="active" data-page="dashboard">首页</button>
+      <button data-page="repair">报修</button>
+      <button data-page="complaint">投诉</button>
+      <button data-page="help">帮助</button>
+      <button data-page="done">已完成</button>
+      <button data-page="management">管理工作台</button>
+      <button data-page="my">我的</button>
     </nav>
     <div class="role-switch">
       <label>当前角色</label>
@@ -230,7 +230,26 @@
       </div>
     </section>
 
-    <!-- ============ 师傅日程 / 我的 ============ -->
+    <!-- ============ 新版工作力页面骨架 ============ -->
+    <section class="page" id="page-management">
+      <div class="page-title">管理工作台</div>
+      <div class="page-sub">新版工作台正在接入，现有管理功能仍可继续使用。</div>
+      <div class="card">
+        <div class="toolbar">
+          <button class="btn" onclick="showPage('admin', 'management')">人员管理</button>
+          <button class="btn gray" onclick="showPage('schedule', 'management')">师傅日程</button>
+        </div>
+      </div>
+    </section>
+    <section class="page" id="page-my">
+      <div class="page-title">我的</div>
+      <div class="page-sub">个人中心正在加载，当前可继续访问原个人资料页面。</div>
+      <div class="card">
+        <button class="btn" onclick="showPage('schedule', 'my')">查看个人资料</button>
+      </div>
+    </section>
+
+    <!-- ============ 旧师傅日程（任务 12 接管前保留 DOM） ============ -->
     <section class="page" id="page-schedule">
       <div class="page-title">师傅日程 · 排班与冲突检测</div>
       <div class="page-sub">查看各维修师傅/管家的工单排布，快速识别日程冲突，辅助派单决策</div>
@@ -420,6 +439,12 @@
   <script src="js/api.js"></script>
   <script src="echarts.min.js"></script>
   <script src="data.js"></script>
+  <script src="js/workforce-utils.js"></script>
+  <script src="js/workforce-api.js"></script>
+  <script src="js/responsive-calendar.js"></script>
+  <script src="js/staff-report.js"></script>
+  <script src="js/my-page.js"></script>
+  <script src="js/management-workspace.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
