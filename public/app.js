@@ -988,6 +988,7 @@ function checkAssignConflicts(workerName, newTicket, estHours){
   return results;
 }
 function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
+function confirmDone(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可确认待审核工单');return;}t.status='done';t.finished=new Date().toISOString();pushStep(t,'主管确认完成',roleObj().name);save();apiPatch(t.id,{status:'done',finished:t.finished});afterAction(id,'工单已确认完成');}
 function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回给原负责人，不允许转单');}
 function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
 function afterAction(id,msg){toast(msg);enhanceState();renderAll();renderDashboard();if(id)openDrawer(id);}
@@ -1057,7 +1058,8 @@ function urgeTicket(id) {
   t.urged.push({ who: roleObj().name, time: new Date().toISOString() });
   pushStep(t, '⚡ 催办', roleObj().name);
   save();
-  syncMetadata(t);
+  var meta = JSON.stringify({ notes: t.notes || [], urged: t.urged || [], suspendReason: t.suspendReason || '', suspendEstimate: t.suspendEstimate || '', steps: t.steps || [] });
+  apiPatch(t.id, { metadata: meta, _action: 'urge' });
   toast('已催办「' + t.id + '」，处理人将收到提醒');
   openDrawer(id);
 }

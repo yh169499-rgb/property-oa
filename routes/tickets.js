@@ -6,9 +6,14 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const router = express.Router();
-const { queryAll, queryOne, run, saveDB } = require('../db');
+const { queryAll, queryOne, run, saveDB, getDB } = require('../db');
 const config = require('../config');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
+const {
+  detectTicketAction,
+  resolveAssigneeUserId,
+  recordTicketActivity
+} = require('../services/ticket-activity');
 
 // 上传配置
 if (!fs.existsSync(config.UPLOAD_DIR)) fs.mkdirSync(config.UPLOAD_DIR, { recursive: true });
@@ -152,20 +157,57 @@ router.post('/', (req, res) => {
 // PATCH /api/tickets/:id
 router.patch('/:id', (req, res) => {
   const updates = req.body;
+  if (updates._action !== undefined && updates._action !== 'urge') {
+    return res.status(400).json({ error: '不支持的工单动作' });
+  }
+  const db = getDB();
+  const before = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
+  if (!before) return res.status(404).json({ error: '工单不存在' });
+  const action = detectTicketAction(before, updates);
   const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', community_id: 'community_id', metadata: 'metadata' };
   const sets = [], values = [];
   for (const [key, col] of Object.entries(allowed)) {
     if (updates[key] !== undefined) { sets.push(`${col} = ?`); values.push(updates[key]); }
   }
+  if (updates.worker !== undefined && updates.worker !== before.worker) {
+    const workerName = String(updates.worker || '').trim();
+    sets.push('assignee_user_id = ?', 'assigned_at = ?');
+    values.push(
+      resolveAssigneeUserId(db, workerName),
+      workerName ? new Date().toISOString() : null
+    );
+  }
   if (!sets.length) return res.status(400).json({ error: '无更新字段' });
   values.push(req.params.id);
+  let transactionStarted = false;
   try {
+    db.run('BEGIN');
+    transactionStarted = true;
     run(`UPDATE tickets SET ${sets.join(', ')} WHERE id = ?`, values);
+    if (req.user && action) {
+      const actorProfile = queryOne(
+        'SELECT id FROM staff_profiles WHERE user_id = ?',
+        [req.user.id]
+      );
+      recordTicketActivity(db, {
+        ticketId: req.params.id,
+        actorUserId: req.user.id,
+        actorStaffId: actorProfile ? actorProfile.id : null,
+        action,
+        metadata: updates,
+        createdAt: new Date().toISOString()
+      });
+    }
+    db.run('COMMIT');
+    transactionStarted = false;
     saveDB();
     const row = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
     if (!row) return res.status(404).json({ error: '工单不存在' });
     res.json({ success: true, record: rowToTicket(row) });
   } catch (e) {
+    if (transactionStarted) {
+      try { db.run('ROLLBACK'); } catch (rollbackError) {}
+    }
     res.status(500).json({ error: e.message });
   }
 });
