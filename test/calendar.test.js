@@ -69,7 +69,17 @@ async function fixture() {
       ('UTC-OUT', '员工甲', 3, '2026-07-30T16:00:00.000Z', '跨日', '上海',
        'doing', '2026-07-30T15:30:00.000Z', 1, 'utc'),
       ('INACTIVE', '停用员工', 6, '2026-07-30T09:00:00+08:00', '其他', '停用',
-       'doing', '2026-07-30T08:30:00+08:00', 1, 'c1')
+       'doing', '2026-07-30T08:30:00+08:00', 1, 'c1'),
+      ('AVG-NOW', '员工甲', 3, '2026-07-30T09:00:00+08:00', '平均', '上海',
+       'doing', '2026-07-30T08:30:00+08:00', 0, 'avg'),
+      ('AVG-H1', '员工甲', 3, '2026-07-20T09:00:00+08:00', '历史', '上海',
+       'done', '2026-07-20T08:30:00+08:00', 0, 'avg'),
+      ('AVG-H2', '员工甲', 3, '2026-07-21T09:00:00+08:00', '历史', '上海',
+       'done', '2026-07-21T08:30:00+08:00', 0, 'avg')
+  `);
+  db.run(`
+    UPDATE tickets SET finished = '2026-07-20T11:00:00+08:00' WHERE id = 'AVG-H1';
+    UPDATE tickets SET finished = '2026-07-21T13:00:00+08:00' WHERE id = 'AVG-H2'
   `);
   return db;
 }
@@ -130,18 +140,24 @@ test('hides inactive profiles by default and for explicit or self selection', as
   assert.deepEqual((await response.json()).people, []);
 });
 
-test('loads completed ticket history in one batch instead of per person', async (t) => {
+test('aggregates completed history in SQL without loading individual rows', async (t) => {
   const db = await fixture();
   t.after(() => db.close());
   const originalPrepare = db.prepare.bind(db);
-  let historyQueries = 0;
+  const historySql = [];
   db.prepare = (sql) => {
-    if (/finished <>/.test(sql)) historyQueries += 1;
+    if (/finished <>/.test(sql)) historySql.push(sql);
     return originalPrepare(sql);
   };
   const { buildDayCalendar } = require('../services/calendar');
-  buildDayCalendar(db, { date: '2026-07-30', viewerUserId: 1 });
-  assert.equal(historyQueries, 1);
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, communityId: 'avg', viewerUserId: 1,
+  });
+  assert.equal(historySql.length, 1);
+  assert.match(historySql[0], /SELECT\s+assignee_user_id,\s*AVG\s*\(/i);
+  assert.match(historySql[0], /GROUP BY\s+assignee_user_id/i);
+  assert.doesNotMatch(historySql[0], /SELECT\s+worker/i);
+  assert.equal(result.events[0].estimatedHours, 3);
 });
 
 test('ordinary user is forced to own staff profile despite requested filters', async (t) => {
@@ -155,7 +171,10 @@ test('ordinary user is forced to own staff profile despite requested filters', a
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.deepEqual(body.people.map((person) => person.id), [11]);
-  assert.deepEqual(body.events.map((event) => event.ticketId), ['UTC-IN', 'WX1001', 'WX1002']);
+  assert.deepEqual(
+    body.events.map((event) => event.ticketId),
+    ['UTC-IN', 'AVG-NOW', 'WX1001', 'WX1002']
+  );
 });
 
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {

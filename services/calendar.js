@@ -36,16 +36,23 @@ function shanghaiDayRange(date) {
 function estimateTicketWindow(ticket, staffHistory = [], now = new Date()) {
   const startAt = ticket.assigned_at || ticket.assignedAt || ticket.created
     || (now instanceof Date ? now.toISOString() : now);
-  const completedHours = staffHistory
-    .map((item) => {
-      const start = Date.parse(item.assigned_at || item.assignedAt || item.created);
-      const end = Date.parse(item.finished);
-      return (end - start) / 3600000;
-    })
-    .filter((hours) => Number.isFinite(hours) && hours > 0);
-  const historicalAverage = completedHours.length
-    ? completedHours.reduce((sum, hours) => sum + hours, 0) / completedHours.length
-    : 1;
+  let historicalAverage = 1;
+  if (Array.isArray(staffHistory)) {
+    const completedHours = staffHistory
+      .map((item) => {
+        const start = Date.parse(item.assigned_at || item.assignedAt || item.created);
+        const end = Date.parse(item.finished);
+        return (end - start) / 3600000;
+      })
+      .filter((hours) => Number.isFinite(hours) && hours > 0);
+    if (completedHours.length) {
+      historicalAverage = completedHours.reduce((sum, hours) => sum + hours, 0)
+        / completedHours.length;
+    }
+  } else {
+    const avgMinutes = Number(staffHistory && staffHistory.avgMinutes);
+    if (avgMinutes > 0) historicalAverage = Math.round((avgMinutes / 60) * 1e6) / 1e6;
+  }
   const explicitHours = Number(ticket.estimated_hours ?? ticket.estimatedHours);
   const durationHours = explicitHours > 0 ? explicitHours : historicalAverage;
   return {
@@ -184,30 +191,32 @@ function buildDayCalendar(db, {
   const profileByUser = new Map(selected.map((profile) => [Number(profile.user_id), profile]));
   const profileByName = new Map(selected.map((profile) => [profile.name, profile]));
   const histories = new Map();
-  for (const profile of selected) histories.set(Number(profile.id), []);
-  if (selected.length) {
-    const userIds = selected.filter((profile) => profile.user_id !== null).map((profile) => profile.user_id);
-    const names = selected.map((profile) => profile.name);
-    const clauses = [];
-    const params = [];
-    if (userIds.length) {
-      clauses.push(`assignee_user_id IN (${userIds.map(() => '?').join(', ')})`);
-      params.push(...userIds);
-    }
-    clauses.push(`(assignee_user_id IS NULL AND worker IN (${names.map(() => '?').join(', ')}))`);
-    params.push(...names);
+  for (const profile of selected) histories.set(Number(profile.id), { avgMinutes: null });
+  const userIds = selected
+    .filter((profile) => profile.user_id !== null)
+    .map((profile) => profile.user_id);
+  if (userIds.length) {
     const historyRows = queryAll(
       db,
-      `SELECT worker, assignee_user_id, assigned_at, created, finished FROM tickets
-       WHERE finished <> '' AND (${clauses.join(' OR ')})
-       ORDER BY finished DESC`,
-      params
+      `SELECT assignee_user_id,
+              AVG((julianday(finished)
+                - julianday(COALESCE(NULLIF(assigned_at, ''), created))) * 24 * 60)
+                AS avg_minutes
+       FROM tickets
+       WHERE finished <> ''
+         AND assignee_user_id IN (${userIds.map(() => '?').join(', ')})
+         AND julianday(finished) IS NOT NULL
+         AND julianday(COALESCE(NULLIF(assigned_at, ''), created)) IS NOT NULL
+         AND julianday(finished)
+           > julianday(COALESCE(NULLIF(assigned_at, ''), created))
+       GROUP BY assignee_user_id`,
+      userIds
     );
     for (const row of historyRows) {
-      const profile = row.assignee_user_id === null
-        ? profileByName.get(row.worker)
-        : profileByUser.get(Number(row.assignee_user_id));
-      if (profile) histories.get(Number(profile.id)).push(row);
+      const profile = profileByUser.get(Number(row.assignee_user_id));
+      if (profile) {
+        histories.set(Number(profile.id), { avgMinutes: Number(row.avg_minutes) });
+      }
     }
   }
   const events = tickets.map((ticket) => {
