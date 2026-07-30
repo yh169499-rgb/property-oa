@@ -28,7 +28,9 @@ async function fixture() {
       (3, '3', 'x', '员工甲', 'worker'),
       (4, '4', 'x', '员工乙', 'worker'),
       (5, '5', 'x', '外部员工', 'worker'),
-      (6, '6', 'x', '停用员工', 'worker')
+      (6, '6', 'x', '停用员工', 'worker'),
+      (7, '7', 'x', '重名员工', 'worker'),
+      (8, '8', 'x', '重名员工', 'worker')
   `);
   db.run(`
     INSERT INTO staff_profiles (id, user_id, name, manager_id, employment_status) VALUES
@@ -37,6 +39,12 @@ async function fixture() {
       (12, 4, '员工乙', 11, 'active'),
       (13, 5, '外部员工', NULL, 'active'),
       (14, 6, '停用员工', 10, 'inactive')
+  `);
+  db.run(`
+    INSERT INTO staff_profiles (id, user_id, name, manager_id, employment_status) VALUES
+      (15, NULL, '旧员工', 10, 'active'),
+      (16, 7, '重名员工', 10, 'active'),
+      (17, 8, '重名员工', 10, 'active')
   `);
   db.run(`
     INSERT INTO shift_assignments
@@ -75,11 +83,26 @@ async function fixture() {
       ('AVG-H1', '员工甲', 3, '2026-07-20T09:00:00+08:00', '历史', '上海',
        'done', '2026-07-20T08:30:00+08:00', 0, 'avg'),
       ('AVG-H2', '员工甲', 3, '2026-07-21T09:00:00+08:00', '历史', '上海',
-       'done', '2026-07-21T08:30:00+08:00', 0, 'avg')
+       'done', '2026-07-21T08:30:00+08:00', 0, 'avg'),
+      ('LEGACY-NOW', '旧员工', NULL, '2026-07-30T09:00:00+08:00', '旧工单', '上海',
+       'doing', '2026-07-30T08:30:00+08:00', 0, 'legacy'),
+      ('LEGACY-H1', '旧员工', NULL, '2026-07-20T09:00:00+08:00', '历史', '上海',
+       'done', '2026-07-20T08:30:00+08:00', 0, 'legacy'),
+      ('LEGACY-H2', '旧员工', NULL, '2026-07-21T09:00:00+08:00', '历史', '上海',
+       'done', '2026-07-21T08:30:00+08:00', 0, 'legacy'),
+      ('DUP-NOW', '重名员工', 7, '2026-07-30T10:00:00+08:00', '重名', '上海',
+       'doing', '2026-07-30T09:30:00+08:00', 0, 'duplicate'),
+      ('DUP-LEGACY-NOW', '重名员工', NULL, '2026-07-30T11:00:00+08:00', '重名', '上海',
+       'doing', '2026-07-30T10:30:00+08:00', 0, 'duplicate'),
+      ('DUP-H1', '重名员工', NULL, '2026-07-20T09:00:00+08:00', '历史', '上海',
+       'done', '2026-07-20T08:30:00+08:00', 0, 'duplicate')
   `);
   db.run(`
     UPDATE tickets SET finished = '2026-07-20T11:00:00+08:00' WHERE id = 'AVG-H1';
-    UPDATE tickets SET finished = '2026-07-21T13:00:00+08:00' WHERE id = 'AVG-H2'
+    UPDATE tickets SET finished = '2026-07-21T13:00:00+08:00' WHERE id = 'AVG-H2';
+    UPDATE tickets SET finished = '2026-07-20T11:00:00+08:00' WHERE id = 'LEGACY-H1';
+    UPDATE tickets SET finished = '2026-07-21T13:00:00+08:00' WHERE id = 'LEGACY-H2';
+    UPDATE tickets SET finished = '2026-07-20T15:00:00+08:00' WHERE id = 'DUP-H1'
   `);
   return db;
 }
@@ -91,7 +114,7 @@ test('aggregates people, shifts, attendance, tickets and same-staff conflicts', 
   const result = buildDayCalendar(db, {
     date: '2026-07-30', managerId: 10, communityId: 'c1', viewerUserId: 2,
   });
-  assert.equal(result.people.length, 2);
+  assert.equal(result.people.length, 5);
   assert.equal(result.people.find((person) => person.id === 11).shift.assignmentType, 'work');
   assert.equal(result.people.find((person) => person.id === 11).attendance.status, 'normal');
   assert.equal(result.people.find((person) => person.id === 12).shift.assignmentType, 'leave');
@@ -154,10 +177,35 @@ test('aggregates completed history in SQL without loading individual rows', asyn
     date: '2026-07-30', staffId: 11, communityId: 'avg', viewerUserId: 1,
   });
   assert.equal(historySql.length, 1);
-  assert.match(historySql[0], /SELECT\s+assignee_user_id,\s*AVG\s*\(/i);
+  assert.match(historySql[0], /AVG\s*\(/i);
   assert.match(historySql[0], /GROUP BY\s+assignee_user_id/i);
+  assert.match(historySql[0], /UNION ALL/i);
   assert.doesNotMatch(historySql[0], /SELECT\s+worker/i);
   assert.equal(result.events[0].estimatedHours, 3);
+});
+
+test('uses legacy name average only for a uniquely named profile', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', managerId: 10, communityId: 'legacy', viewerUserId: 1,
+  });
+  assert.equal(result.events[0].ticketId, 'LEGACY-NOW');
+  assert.equal(result.events[0].staffId, 15);
+  assert.equal(result.events[0].estimatedHours, 3);
+});
+
+test('does not apply legacy name history or current tickets to duplicate names', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', managerId: 10, communityId: 'duplicate', viewerUserId: 1,
+  });
+  assert.deepEqual(result.events.map((event) => event.ticketId), ['DUP-NOW']);
+  assert.equal(result.events[0].staffId, 16);
+  assert.equal(result.events[0].estimatedHours, 1);
 });
 
 test('ordinary user is forced to own staff profile despite requested filters', async (t) => {

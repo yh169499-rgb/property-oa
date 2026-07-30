@@ -124,6 +124,14 @@ function buildDayCalendar(db, {
   ) : [];
   const shiftByStaff = new Map(shifts.map((row) => [Number(row.staff_id), row]));
   const attendanceByStaff = new Map(attendance.map((row) => [Number(row.staff_id), row]));
+  const profileNameCounts = new Map();
+  for (const profile of profiles) {
+    profileNameCounts.set(profile.name, (profileNameCounts.get(profile.name) || 0) + 1);
+  }
+  const uniqueProfileByName = new Map(
+    selected.filter((profile) => profile.name && profileNameCounts.get(profile.name) === 1)
+      .map((profile) => [profile.name, profile])
+  );
 
   const people = selected.map((profile) => {
     const shift = shiftByStaff.get(Number(profile.id));
@@ -158,7 +166,7 @@ function buildDayCalendar(db, {
     const identityClauses = [];
     const identityParams = [];
     const userIds = selected.filter((profile) => profile.user_id !== null).map((profile) => profile.user_id);
-    const names = selected.map((profile) => profile.name);
+    const names = [...uniqueProfileByName.keys()];
     if (userIds.length) {
       identityClauses.push(`assignee_user_id IN (${userIds.map(() => '?').join(', ')})`);
       identityParams.push(...userIds);
@@ -167,53 +175,77 @@ function buildDayCalendar(db, {
       identityClauses.push(`(assignee_user_id IS NULL AND worker IN (${names.map(() => '?').join(', ')}))`);
       identityParams.push(...names);
     }
-    const { from, toExclusive } = shanghaiDayRange(date);
-    const where = [
-      `(${identityClauses.join(' OR ')})`,
-      "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
-      "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
-    ];
-    const params = [...identityParams, from, toExclusive];
-    if (communityId !== undefined && communityId !== null && communityId !== '') {
-      where.push('community_id = ?');
-      params.push(communityId);
+    if (identityClauses.length) {
+      const { from, toExclusive } = shanghaiDayRange(date);
+      const where = [
+        `(${identityClauses.join(' OR ')})`,
+        "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
+        "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
+      ];
+      const params = [...identityParams, from, toExclusive];
+      if (communityId !== undefined && communityId !== null && communityId !== '') {
+        where.push('community_id = ?');
+        params.push(communityId);
+      }
+      tickets = queryAll(
+        db,
+        `SELECT id, type, cat, desc, loc, status, worker, assignee_user_id,
+                assigned_at, created, finished, estimated_hours, community_id
+         FROM tickets WHERE ${where.join(' AND ')}
+         ORDER BY julianday(COALESCE(NULLIF(assigned_at, ''), created)), id`,
+        params
+      );
     }
-    tickets = queryAll(
-      db,
-      `SELECT id, type, cat, desc, loc, status, worker, assignee_user_id,
-              assigned_at, created, finished, estimated_hours, community_id
-       FROM tickets WHERE ${where.join(' AND ')}
-       ORDER BY julianday(COALESCE(NULLIF(assigned_at, ''), created)), id`,
-      params
-    );
   }
 
   const profileByUser = new Map(selected.map((profile) => [Number(profile.user_id), profile]));
-  const profileByName = new Map(selected.map((profile) => [profile.name, profile]));
   const histories = new Map();
   for (const profile of selected) histories.set(Number(profile.id), { avgMinutes: null });
   const userIds = selected
     .filter((profile) => profile.user_id !== null)
     .map((profile) => profile.user_id);
+  const uniqueNames = [...uniqueProfileByName.keys()];
+  const aggregateQueries = [];
+  const aggregateParams = [];
+  const averageExpression = `(julianday(finished)
+    - julianday(COALESCE(NULLIF(assigned_at, ''), created))) * 24 * 60`;
+  const validDuration = `finished <> ''
+    AND julianday(finished) IS NOT NULL
+    AND julianday(COALESCE(NULLIF(assigned_at, ''), created)) IS NOT NULL
+    AND julianday(finished) > julianday(COALESCE(NULLIF(assigned_at, ''), created))`;
   if (userIds.length) {
+    aggregateQueries.push(
+      `SELECT 'user' AS key_type, CAST(assignee_user_id AS TEXT) AS key_value,
+              AVG(${averageExpression}) AS avg_minutes
+       FROM tickets
+       WHERE ${validDuration}
+         AND assignee_user_id IN (${userIds.map(() => '?').join(', ')})
+       GROUP BY assignee_user_id`
+    );
+    aggregateParams.push(...userIds);
+  }
+  if (uniqueNames.length) {
+    aggregateQueries.push(
+      `SELECT 'name' AS key_type, worker AS key_value,
+              AVG(${averageExpression}) AS avg_minutes
+       FROM tickets
+       WHERE ${validDuration}
+         AND assignee_user_id IS NULL
+         AND worker IN (${uniqueNames.map(() => '?').join(', ')})
+       GROUP BY worker`
+    );
+    aggregateParams.push(...uniqueNames);
+  }
+  if (aggregateQueries.length) {
     const historyRows = queryAll(
       db,
-      `SELECT assignee_user_id,
-              AVG((julianday(finished)
-                - julianday(COALESCE(NULLIF(assigned_at, ''), created))) * 24 * 60)
-                AS avg_minutes
-       FROM tickets
-       WHERE finished <> ''
-         AND assignee_user_id IN (${userIds.map(() => '?').join(', ')})
-         AND julianday(finished) IS NOT NULL
-         AND julianday(COALESCE(NULLIF(assigned_at, ''), created)) IS NOT NULL
-         AND julianday(finished)
-           > julianday(COALESCE(NULLIF(assigned_at, ''), created))
-       GROUP BY assignee_user_id`,
-      userIds
+      aggregateQueries.join('\nUNION ALL\n'),
+      aggregateParams
     );
     for (const row of historyRows) {
-      const profile = profileByUser.get(Number(row.assignee_user_id));
+      const profile = row.key_type === 'user'
+        ? profileByUser.get(Number(row.key_value))
+        : uniqueProfileByName.get(row.key_value);
       if (profile) {
         histories.set(Number(profile.id), { avgMinutes: Number(row.avg_minutes) });
       }
@@ -221,7 +253,7 @@ function buildDayCalendar(db, {
   }
   const events = tickets.map((ticket) => {
     const profile = ticket.assignee_user_id === null
-      ? profileByName.get(ticket.worker)
+      ? uniqueProfileByName.get(ticket.worker)
       : profileByUser.get(Number(ticket.assignee_user_id));
     const window = estimateTicketWindow(ticket, histories.get(Number(profile.id)));
     return {
