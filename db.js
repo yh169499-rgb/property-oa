@@ -5,6 +5,10 @@ const fs = require('fs');
 const initSqlJs = require('sql.js');
 const config = require('./config');
 const { ensureWorkforceSchema } = require('./workforce-schema');
+const {
+  migrateUsersToProfiles,
+  backfillTicketAssignees,
+} = require('./services/workforce-migration');
 
 let db;
 let persistToDisk = true;
@@ -125,11 +129,14 @@ async function initDB() {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_recurrence ON tickets (community_id, repeat_key, created)`);
   ensureWorkforceSchema(db);
+  const nowIso = new Date().toISOString();
+  migrateUsersToProfiles(db, nowIso);
+  backfillTicketAssignees(db);
 
   // 确保默认小区存在
   const defaultCommunity = queryOne("SELECT id FROM communities WHERE id = 'default'");
   if (!defaultCommunity) {
-    db.run("INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', ?)", [new Date().toISOString()]);
+    db.run("INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', ?)", [nowIso]);
   }
 
   saveDB();
