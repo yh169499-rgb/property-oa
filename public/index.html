@@ -238,24 +238,11 @@
     </section>
     <section class="page" id="page-my">
       <div class="page-title">我的</div>
-      <div class="page-sub">个人中心正在加载，当前可继续访问原个人资料页面。</div>
-      <div class="card">
-        <button class="btn" onclick="showPage('schedule', 'my')">查看个人资料</button>
-      </div>
-    </section>
-
-    <!-- 兼容容器：旧入口依赖，已不作为导航目标，后续任务删除。 -->
-    <section class="page" id="page-schedule">
-      <div class="page-title">师傅日程 · 排班与冲突检测</div>
-      <div class="page-sub">查看各维修师傅/管家的工单排布，快速识别日程冲突，辅助派单决策</div>
-
-      <!-- 个人信息卡片（所有角色可见） -->
+      <div class="page-sub">查看个人资料与当前在岗状态；后续由个人中心模块继续扩展。</div>
       <div class="card" id="my-profile-card" style="display:none;margin-bottom:16px">
         <h4 style="font-size:14px;margin-bottom:12px">👤 个人信息</h4>
         <div id="my-profile-content"></div>
       </div>
-
-      <!-- 我的状态卡片（仅非主管可见） -->
       <div class="card" id="my-status-card" style="display:none;margin-bottom:16px">
         <h4 style="font-size:14px;margin-bottom:12px">📋 我的状态</h4>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -269,87 +256,16 @@
           <button class="btn sm" onclick="updateMyStatus()">更新状态</button>
         </div>
       </div>
-
-      <div class="card">
-        <div class="toolbar">
-          <select id="schedule-worker"><option value="">全部人员</option></select>
-          <input type="date" id="schedule-date" style="padding:6px 10px;border:1px solid #e6eaf0;border-radius:8px" />
-          <span class="spacer"></span>
-          <span class="count" id="schedule-summary"></span>
-        </div>
-        <div class="schedule-grid" id="schedule-grid"></div>
-        <div style="margin-top:14px">
-          <h4 style="font-size:14px;margin-bottom:8px">⚠️ 日程冲突提示</h4>
-          <div id="schedule-conflicts" style="font-size:13px;color:var(--text-2)">暂无冲突</div>
-        </div>
-      </div>
     </section>
 
-    <!-- ============ 管理平台 ============ -->
-    <!-- 兼容容器：旧入口依赖，已不作为导航目标，后续任务删除。 -->
-    <section class="page" id="page-admin">
-      <div class="page-title">管理平台 · 人员管理</div>
-      <div class="page-sub">对维修工 / 物业管家等人员进行增删改查</div>
-
-      <!-- 主管"我的"概览 -->
-      <div class="card" id="admin-profile-card" style="margin-bottom:16px">
-        <h3 style="font-size:14px;margin-bottom:12px">📌 待办概览</h3>
-        <div id="admin-profile-content" style="font-size:13px">加载中...</div>
-      </div>
-
-      <!-- 待审核注册 -->
-      <div class="card" id="pending-reg-card" style="margin-bottom:16px">
-        <h3 style="font-size:14px;margin-bottom:12px">📬 待审核注册申请 <span id="pending-count" style="font-size:12px;color:var(--muted)"></span></h3>
-        <div id="pending-reg-list" style="font-size:13px">加载中...</div>
-      </div>
-
-      <div class="card">
-        <div class="toolbar">
-          <button class="btn" onclick="openStaffModal()">＋ 新增人员</button>
-          <span class="spacer"></span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr>
-              <th>姓名</th><th>角色</th><th>工种</th><th>电话</th><th>在岗状态</th><th>已处理工单</th><th>操作</th>
-            </tr></thead>
-            <tbody id="tbody-staff"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card" id="legacy-management-settings" style="margin-top:20px">
-        <h3 style="font-size:16px;margin-bottom:12px">⚙️ 系统设置</h3>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
-          <label style="font-size:14px">待派单提醒推送间隔：</label>
-          <select id="reminder-interval" style="padding:6px 12px;border:1px solid #e6eaf0;border-radius:8px">
-            <option value="1">1 分钟</option>
-            <option value="3">3 分钟</option>
-            <option value="5" selected>5 分钟</option>
-            <option value="10">10 分钟</option>
-            <option value="15">15 分钟</option>
-            <option value="30">30 分钟</option>
-            <option value="60">60 分钟</option>
-            <option value="0">关闭推送</option>
-          </select>
-          <button class="btn" onclick="saveReminderInterval()">保存</button>
-          <span id="reminder-status" style="font-size:13px;color:#389e0d"></span>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <label style="font-size:14px">超时告警推送间隔：</label>
-          <select id="sla-interval" style="padding:6px 12px;border:1px solid #e6eaf0;border-radius:8px">
-            <option value="5">5 分钟</option>
-            <option value="10">10 分钟</option>
-            <option value="15">15 分钟</option>
-            <option value="30">30 分钟</option>
-            <option value="60">60 分钟</option>
-            <option value="0" selected>关闭推送</option>
-          </select>
-          <button class="btn" onclick="saveSlaInterval()">保存</button>
-          <span id="sla-status" style="font-size:13px;color:#389e0d"></span>
-        </div>
-        <div style="margin-top:8px;font-size:12px;color:#8c8c8c">设置推送间隔，到时间后自动向预警群推送提醒。设为"关闭"则不推送。</div>
-      </div>
-    </section>
+    <!-- 仅供旧日程脚本兼容的数据容器；不是页面，也不是导航目标。 -->
+    <div id="legacy-schedule-data" hidden>
+      <select id="schedule-worker"><option value="">全部人员</option></select>
+      <input type="date" id="schedule-date">
+      <span id="schedule-summary"></span>
+      <div id="schedule-grid"></div>
+      <div id="schedule-conflicts"></div>
+    </div>
 
   </div>
 

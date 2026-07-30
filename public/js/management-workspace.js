@@ -367,11 +367,10 @@
     var target = panel('schedule');
     var today = new Date().toISOString().slice(0, 10);
     var results = await Promise.all([
-      request('/api/shifts?from=' + today + '&to=' + today),
       request('/api/shift-templates'),
       profiles.length ? Promise.resolve(profiles) : request('/api/staff/profiles')
     ]);
-    profiles = results[2] || [];
+    profiles = results[1] || [];
     empty(target);
     var toolbar = node('div', 'management-toolbar');
     var date = node('input'); date.type = 'date'; date.value = today;
@@ -382,11 +381,50 @@
       { value: 'work', label: '上班' }, { value: 'rest', label: '休息' },
       { value: 'leave', label: '请假' }
     ], 'work');
-    var template = select([{ value: '', label: '不使用模板' }].concat((results[1] || []).map(function (t) {
+    var template = select([{ value: '', label: '不使用模板' }].concat((results[0] || []).map(function (t) {
       return { value: t.id, label: t.name };
     })), '');
     [field('日期', date), field('人员', staff), field('类型', type), field('模板', template)]
       .forEach(function (el) { toolbar.appendChild(el); });
+    var list = node('div', 'management-list card');
+    async function refresh() {
+      var url = '/api/shifts?work_date=' + encodeURIComponent(date.value);
+      if (staff.value) url += '&staff_id=' + encodeURIComponent(staff.value);
+      empty(list);
+      list.appendChild(node('div', 'management-state', '加载中…'));
+      try {
+        var assignments = await request(url);
+        empty(list);
+        (assignments || []).forEach(function (shift) {
+          var person = profiles.find(function (p) {
+            return Number(p.id) === Number(shift.staff_id);
+          });
+          var row = node('div', 'management-list-row');
+          row.appendChild(node('strong', '',
+            shift.staff_name || (person ? person.name : ('人员 #' + shift.staff_id))));
+          row.appendChild(node('span', '',
+            shift.work_date + ' · ' + shift.assignment_type
+            + (shift.template_name ? ' · ' + shift.template_name : '')));
+          var remove = node('button', 'btn gray sm', '删除');
+          remove.addEventListener('click', async function () {
+            try {
+              await request('/api/shifts/' + shift.id, { method: 'DELETE' });
+              await refresh();
+            } catch (error) {
+              showMessage(target, error.message, true);
+            }
+          });
+          row.appendChild(remove);
+          list.appendChild(row);
+        });
+        if (!list.firstChild) list.appendChild(node('div', 'management-state', '所选条件暂无排班'));
+      } catch (error) {
+        empty(list);
+        showMessage(list, error.message, true);
+      }
+    }
+    date.addEventListener('change', refresh);
+    staff.addEventListener('change', refresh);
     var add = node('button', 'btn sm', '新增排班');
     add.addEventListener('click', async function () {
       if (!staff.value) return showMessage(target, '请选择人员', true);
@@ -397,27 +435,13 @@
             assignmentType: type.value, templateId: template.value ? Number(template.value) : null
           })
         });
-        loaded.schedule = false; activate('schedule');
+        await refresh();
       } catch (error) { showMessage(target, error.message, true); }
     });
     toolbar.appendChild(add);
     target.appendChild(toolbar);
-    var list = node('div', 'management-list card');
-    (results[0] || []).forEach(function (shift) {
-      var person = profiles.find(function (p) { return Number(p.id) === Number(shift.staff_id); });
-      var row = node('div', 'management-list-row');
-      row.appendChild(node('strong', '', person ? person.name : ('人员 #' + shift.staff_id)));
-      row.appendChild(node('span', '', shift.work_date + ' · ' + shift.assignment_type));
-      var remove = node('button', 'btn gray sm', '删除');
-      remove.addEventListener('click', async function () {
-        await request('/api/shifts/' + shift.id, { method: 'DELETE' });
-        loaded.schedule = false; activate('schedule');
-      });
-      row.appendChild(remove);
-      list.appendChild(row);
-    });
-    if (!list.firstChild) list.appendChild(node('div', 'management-state', '当日暂无排班'));
     target.appendChild(list);
+    await refresh();
   }
   function renderAttendance() {
     var target = panel('attendance'); empty(target);
@@ -425,15 +449,19 @@
   }
   function renderRegistrations() {
     var target = panel('registrations'); empty(target);
-    target.appendChild(node('h3', '', '注册审核'));
+    var title = node('h3', '', '注册审核 ');
+    var count = node('span');
+    count.id = 'pending-count';
+    title.appendChild(count);
+    target.appendChild(title);
     var mount = node('div', 'card');
-    mount.id = 'management-pending-registrations';
+    mount.id = 'pending-reg-list';
+    mount.appendChild(node('div', 'management-state', '加载中…'));
     target.appendChild(mount);
     if (typeof window.loadPendingRegistrations === 'function') {
       window.loadPendingRegistrations();
-      var legacy = document.getElementById('pending-reg-list');
-      if (legacy) mount.appendChild(legacy);
     } else {
+      empty(mount);
       mount.appendChild(node('div', 'management-state', '注册审核入口暂不可用'));
     }
   }
@@ -451,30 +479,39 @@
     var community = node('button', 'card management-setting', '小区管理');
     community.addEventListener('click', function () { if (typeof window.openCommunityModal === 'function') window.openCommunityModal(); });
     links.appendChild(community);
+    var intervals = [1, 3, 5, 10, 15, 30, 60, 0].map(function (minutes) {
+      return { value: minutes, label: minutes ? minutes + ' 分钟' : '关闭推送' };
+    });
     var reminder = node('div', 'card management-setting');
     reminder.appendChild(node('strong', '', '待派单提醒'));
-    var reminderSelect = document.getElementById('reminder-interval');
-    var openLegacySettings = function () {
-      if (reminderSelect) reminderSelect.focus();
-      var legacy = document.getElementById('legacy-management-settings');
-      if (legacy) legacy.hidden = false;
-    };
-    var reminderButton = node('button', 'btn sm', '打开设置');
-    reminderButton.addEventListener('click', openLegacySettings);
+    var reminderSelect = select(intervals, 5);
+    reminderSelect.id = 'reminder-interval';
+    reminder.appendChild(reminderSelect);
+    var reminderButton = node('button', 'btn sm', '保存');
+    reminderButton.addEventListener('click', function () {
+      if (typeof window.saveReminderInterval === 'function') window.saveReminderInterval();
+    });
     reminder.appendChild(reminderButton);
+    var reminderStatus = node('span');
+    reminderStatus.id = 'reminder-status';
+    reminder.appendChild(reminderStatus);
     links.appendChild(reminder);
     var sla = node('div', 'card management-setting');
     sla.appendChild(node('strong', '', 'SLA 超时告警'));
-    var slaButton = node('button', 'btn sm', '打开设置');
-    slaButton.addEventListener('click', openLegacySettings);
+    var slaSelect = select(intervals.slice(2), 0);
+    slaSelect.id = 'sla-interval';
+    sla.appendChild(slaSelect);
+    var slaButton = node('button', 'btn sm', '保存');
+    slaButton.addEventListener('click', function () {
+      if (typeof window.saveSlaInterval === 'function') window.saveSlaInterval();
+    });
     sla.appendChild(slaButton);
+    var slaStatus = node('span');
+    slaStatus.id = 'sla-status';
+    sla.appendChild(slaStatus);
     links.appendChild(sla);
     target.appendChild(links);
-    var legacySettings = document.getElementById('legacy-management-settings');
-    if (legacySettings) {
-      legacySettings.hidden = false;
-      target.appendChild(legacySettings);
-    }
+    if (typeof window.loadReminderInterval === 'function') window.loadReminderInterval();
   }
 
   window.ManagementWorkspace = {
