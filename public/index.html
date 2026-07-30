@@ -233,13 +233,8 @@
     <!-- ============ 新版工作力页面骨架 ============ -->
     <section class="page" id="page-management">
       <div class="page-title">管理工作台</div>
-      <div class="page-sub">新版工作台正在接入，现有管理功能仍可继续使用。</div>
-      <div class="card">
-        <div class="toolbar">
-          <button class="btn" onclick="showPage('admin', 'management')">人员管理</button>
-          <button class="btn gray" onclick="showPage('schedule', 'management')">师傅日程</button>
-        </div>
-      </div>
+      <div class="page-sub">统一管理组织、排班、审核与系统设置。</div>
+      <div id="management-workspace"></div>
     </section>
     <section class="page" id="page-my">
       <div class="page-title">我的</div>
@@ -249,7 +244,7 @@
       </div>
     </section>
 
-    <!-- ============ 旧师傅日程（任务 12 接管前保留 DOM） ============ -->
+    <!-- 兼容容器：旧入口依赖，已不作为导航目标，后续任务删除。 -->
     <section class="page" id="page-schedule">
       <div class="page-title">师傅日程 · 排班与冲突检测</div>
       <div class="page-sub">查看各维修师傅/管家的工单排布，快速识别日程冲突，辅助派单决策</div>
@@ -291,6 +286,7 @@
     </section>
 
     <!-- ============ 管理平台 ============ -->
+    <!-- 兼容容器：旧入口依赖，已不作为导航目标，后续任务删除。 -->
     <section class="page" id="page-admin">
       <div class="page-title">管理平台 · 人员管理</div>
       <div class="page-sub">对维修工 / 物业管家等人员进行增删改查</div>
@@ -321,7 +317,7 @@
           </table>
         </div>
       </div>
-      <div class="card" style="margin-top:20px">
+      <div class="card" id="legacy-management-settings" style="margin-top:20px">
         <h3 style="font-size:16px;margin-bottom:12px">⚙️ 系统设置</h3>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
           <label style="font-size:14px">待派单提醒推送间隔：</label>

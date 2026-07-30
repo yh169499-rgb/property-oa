@@ -147,6 +147,9 @@ function showPage(page, navPage) {
     renderDashboard();
   }, 50);
   if (page === 'schedule') setTimeout(renderSchedule, 30);
+  if (page === 'management' && window.ManagementWorkspace) {
+    setTimeout(window.ManagementWorkspace.init, 0);
+  }
   return true;
 }
 
