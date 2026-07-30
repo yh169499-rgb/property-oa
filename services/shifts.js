@@ -25,10 +25,21 @@ function nextDate(date) {
   return value.toISOString().slice(0, 10);
 }
 
+function isValidDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+function isValidTime(value) {
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value || '');
+}
+
 function resolveShiftWindow(workDate, startTime, endTime) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(workDate || '')
-      || !/^\d{2}:\d{2}$/.test(startTime || '')
-      || !/^\d{2}:\d{2}$/.test(endTime || '')) {
+  if (!isValidDate(workDate) || !isValidTime(startTime) || !isValidTime(endTime)) {
     throw assignmentError('班次日期或时间格式无效');
   }
   const endDate = endTime <= startTime ? nextDate(workDate) : workDate;
@@ -36,6 +47,24 @@ function resolveShiftWindow(workDate, startTime, endTime) {
     startAt: `${workDate}T${startTime}:00+08:00`,
     endAt: `${endDate}T${endTime}:00+08:00`,
   };
+}
+
+function validateCustomWindow(value) {
+  const absoluteIso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+  if (!absoluteIso.test(value.startAt || '') || !absoluteIso.test(value.endAt || '')) {
+    throw assignmentError('自定义起止时间必须是可解析的绝对时间');
+  }
+  const start = Date.parse(value.startAt);
+  const end = Date.parse(value.endAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    throw assignmentError('自定义起止时间无效，结束时间必须晚于开始时间');
+  }
+  const startDate = value.startAt.slice(0, 10);
+  const endDate = value.endAt.slice(0, 10);
+  if (startDate !== value.workDate
+      || ![value.workDate, nextDate(value.workDate)].includes(endDate)) {
+    throw assignmentError('自定义起止时间必须与 workDate 当天或跨夜窗口一致');
+  }
 }
 
 function normalize(input = {}) {
@@ -56,7 +85,7 @@ function validateAssignment(input) {
   if (!Number.isInteger(Number(value.staffId)) || Number(value.staffId) <= 0) {
     throw assignmentError('staffId 无效');
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.workDate || '')) {
+  if (!isValidDate(value.workDate)) {
     throw assignmentError('workDate 无效');
   }
   if (!['work', 'rest', 'leave'].includes(value.assignmentType)) {
@@ -64,6 +93,9 @@ function validateAssignment(input) {
   }
   if (value.assignmentType === 'work' && !value.templateId && !(value.startAt && value.endAt)) {
     throw assignmentError('工作安排必须提供 templateId 或起止时间');
+  }
+  if (value.assignmentType === 'work' && !value.templateId) {
+    validateCustomWindow(value);
   }
   if (value.assignmentType !== 'work' && (value.templateId || value.startAt || value.endAt)) {
     throw assignmentError('休息或请假安排不能设置工作班次');
@@ -79,6 +111,9 @@ function validateAssignment(input) {
 
 function prepareAssignment(db, input) {
   const value = validateAssignment(input);
+  if (!queryOne(db, 'SELECT id FROM staff_profiles WHERE id = ?', [value.staffId])) {
+    throw assignmentError('人员档案不存在', 'STAFF_NOT_FOUND', 404);
+  }
   if (value.assignmentType === 'work' && value.templateId) {
     const template = queryOne(
       db,
@@ -133,17 +168,62 @@ function createBatchAssignments(db, input, operatorUserId) {
     throw assignmentError('staffIds 和 dates 必须是非空数组');
   }
   const pairs = staffIds.flatMap((staffId) => dates.map((workDate) => ({ staffId, workDate })));
-  const conflicts = pairs.filter(({ staffId, workDate }) =>
+  const seen = new Set();
+  const duplicateConflicts = [];
+  const prepared = pairs.map(({ staffId, workDate }) => {
+    const key = `${staffId}\u0000${workDate}`;
+    if (seen.has(key)) duplicateConflicts.push({ staffId: Number(staffId), workDate });
+    seen.add(key);
+    return prepareAssignment(db, { ...input, staffId, workDate });
+  });
+  const existingConflicts = pairs.filter(({ staffId, workDate }) =>
     queryOne(db, 'SELECT id FROM shift_assignments WHERE staff_id = ? AND work_date = ?', [staffId, workDate])
-  );
-  if (conflicts.length && !input.overwrite) {
+  ).map(({ staffId, workDate }) => ({ staffId: Number(staffId), workDate }));
+  const conflicts = [
+    ...duplicateConflicts,
+    ...(!input.overwrite ? existingConflicts : []),
+  ];
+  if (conflicts.length) {
     throw assignmentError('部分人员日期已有排班', 'SHIFT_ALREADY_EXISTS', 409, {
-      conflicts: conflicts.map(({ staffId, workDate }) => ({ staffId: Number(staffId), workDate })),
+      conflicts,
     });
   }
-  return pairs.map(({ staffId, workDate }) => createAssignment(db, {
-    ...input, staffId, workDate,
-  }, operatorUserId, { overwrite: Boolean(input.overwrite) }));
+  db.run('BEGIN');
+  try {
+    const rows = prepared.map((value) =>
+      createAssignment(db, value, operatorUserId, { overwrite: Boolean(input.overwrite) })
+    );
+    db.run('COMMIT');
+    return rows;
+  } catch (error) {
+    db.run('ROLLBACK');
+    throw error;
+  }
+}
+
+function updateAssignment(db, id, input, operatorUserId) {
+  const current = queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ?', [id]);
+  if (!current) throw assignmentError('排班不存在', 'SHIFT_NOT_FOUND', 404);
+  const value = prepareAssignment(db, input);
+  const conflict = queryOne(
+    db,
+    'SELECT id FROM shift_assignments WHERE staff_id = ? AND work_date = ? AND id <> ?',
+    [value.staffId, value.workDate, id]
+  );
+  if (conflict) {
+    throw assignmentError('该人员当天已有排班', 'SHIFT_ALREADY_EXISTS', 409, {
+      conflicts: [{ staffId: Number(value.staffId), workDate: value.workDate }],
+    });
+  }
+  db.run(
+    `UPDATE shift_assignments SET staff_id = ?, work_date = ?, assignment_type = ?,
+     template_id = ?, start_at = ?, end_at = ?, leave_type = ?, note = ?,
+     created_by = ?, updated_at = ? WHERE id = ?`,
+    [value.staffId, value.workDate, value.assignmentType, value.templateId,
+      value.startAt, value.endAt, value.leaveType, value.note, operatorUserId,
+      new Date().toISOString(), id]
+  );
+  return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ?', [id]);
 }
 
 function listAssignments(db, filters = {}) {
@@ -178,5 +258,6 @@ module.exports = {
   validateAssignment,
   createAssignment,
   createBatchAssignments,
+  updateAssignment,
   listAssignments,
 };

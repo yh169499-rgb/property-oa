@@ -3,9 +3,11 @@ const router = express.Router();
 const database = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
+  resolveShiftWindow,
   validateAssignment,
   createAssignment,
   createBatchAssignments,
+  updateAssignment,
   listAssignments,
 } = require('../services/shifts');
 
@@ -34,6 +36,12 @@ function all(sql, params) {
   return rows;
 }
 
+function patchValue(body, camelKey, snakeKey, fallback) {
+  if (Object.prototype.hasOwnProperty.call(body, camelKey)) return body[camelKey];
+  if (Object.prototype.hasOwnProperty.call(body, snakeKey)) return body[snakeKey];
+  return fallback;
+}
+
 function templateInput(body, current = {}) {
   const value = {
     name: body.name ?? current.name,
@@ -42,8 +50,12 @@ function templateInput(body, current = {}) {
     color: body.color ?? current.color ?? '',
     graceMinutes: body.graceMinutes ?? body.grace_minutes ?? current.grace_minutes ?? 5,
   };
-  if (!value.name || !/^\d{2}:\d{2}$/.test(value.startTime || '')
-      || !/^\d{2}:\d{2}$/.test(value.endTime || '')
+  try {
+    resolveShiftWindow('2000-01-01', value.startTime, value.endTime);
+  } catch {
+    value.invalidTime = true;
+  }
+  if (!value.name || value.invalidTime
       || !Number.isInteger(Number(value.graceMinutes)) || Number(value.graceMinutes) < 0) {
     const error = new Error('班次模板参数无效');
     error.code = 'INVALID_SHIFT_TEMPLATE';
@@ -124,11 +136,19 @@ router.patch('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
   try {
     const current = one('SELECT * FROM shift_assignments WHERE id = ?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
-    const value = validateAssignment({ ...current, ...req.body });
-    const updated = createAssignment(database.getDB(), value, req.user.id, { overwrite: true });
-    if (Number(updated.id) !== Number(current.id)) {
-      database.run('DELETE FROM shift_assignments WHERE id = ?', [current.id]);
-    }
+    const value = validateAssignment({
+      staffId: patchValue(req.body, 'staffId', 'staff_id', current.staff_id),
+      workDate: patchValue(req.body, 'workDate', 'work_date', current.work_date),
+      assignmentType: patchValue(
+        req.body, 'assignmentType', 'assignment_type', current.assignment_type
+      ),
+      templateId: patchValue(req.body, 'templateId', 'template_id', current.template_id),
+      startAt: patchValue(req.body, 'startAt', 'start_at', current.start_at),
+      endAt: patchValue(req.body, 'endAt', 'end_at', current.end_at),
+      leaveType: patchValue(req.body, 'leaveType', 'leave_type', current.leave_type),
+      note: req.body.note ?? current.note,
+    });
+    const updated = updateAssignment(database.getDB(), current.id, value, req.user.id);
     database.saveDB();
     res.json({ data: updated });
   } catch (error) {
