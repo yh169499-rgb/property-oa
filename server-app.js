@@ -11,6 +11,7 @@ const communityRoutes = require('./routes/communities');
 const staffRoutes = require('./routes/staff');
 const settingsRoutes = require('./routes/settings');
 const profileRoutes = require('./routes/profiles');
+const shiftRoutes = require('./routes/shifts');
 
 function createServerApp() {
   const app = express();
@@ -36,6 +37,7 @@ function createServerApp() {
   app.use('/api/staff', staffRoutes);
   app.use('/api', settingsRoutes);
   app.use('/api', profileRoutes);
+  app.use('/api', shiftRoutes);
 
   return app;
 }
