@@ -25,6 +25,14 @@ function isValidDate(value) {
     && parsed.getUTCDate() === day;
 }
 
+function shanghaiDayRange(date) {
+  const fromMs = Date.parse(`${date}T00:00:00+08:00`);
+  return {
+    from: new Date(fromMs).toISOString(),
+    toExclusive: new Date(fromMs + 86400000).toISOString(),
+  };
+}
+
 function estimateTicketWindow(ticket, staffHistory = [], now = new Date()) {
   const startAt = ticket.assigned_at || ticket.assignedAt || ticket.created
     || (now instanceof Date ? now.toISOString() : now);
@@ -82,7 +90,7 @@ function buildDayCalendar(db, {
   const profiles = queryAll(
     db,
     `SELECT id, user_id, name, position, manager_id, employment_status
-     FROM staff_profiles ORDER BY id`
+     FROM staff_profiles WHERE employment_status = 'active' ORDER BY id`
   );
   let selected = profiles;
   if (staffId !== undefined && staffId !== null && staffId !== '') {
@@ -152,11 +160,13 @@ function buildDayCalendar(db, {
       identityClauses.push(`(assignee_user_id IS NULL AND worker IN (${names.map(() => '?').join(', ')}))`);
       identityParams.push(...names);
     }
+    const { from, toExclusive } = shanghaiDayRange(date);
     const where = [
       `(${identityClauses.join(' OR ')})`,
-      "substr(COALESCE(NULLIF(assigned_at, ''), created), 1, 10) = ?",
+      "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
+      "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
     ];
-    const params = [...identityParams, date];
+    const params = [...identityParams, from, toExclusive];
     if (communityId !== undefined && communityId !== null && communityId !== '') {
       where.push('community_id = ?');
       params.push(communityId);
@@ -166,7 +176,7 @@ function buildDayCalendar(db, {
       `SELECT id, type, cat, desc, loc, status, worker, assignee_user_id,
               assigned_at, created, finished, estimated_hours, community_id
        FROM tickets WHERE ${where.join(' AND ')}
-       ORDER BY COALESCE(NULLIF(assigned_at, ''), created), id`,
+       ORDER BY julianday(COALESCE(NULLIF(assigned_at, ''), created)), id`,
       params
     );
   }
@@ -174,13 +184,31 @@ function buildDayCalendar(db, {
   const profileByUser = new Map(selected.map((profile) => [Number(profile.user_id), profile]));
   const profileByName = new Map(selected.map((profile) => [profile.name, profile]));
   const histories = new Map();
-  for (const profile of selected) {
-    histories.set(Number(profile.id), queryAll(
+  for (const profile of selected) histories.set(Number(profile.id), []);
+  if (selected.length) {
+    const userIds = selected.filter((profile) => profile.user_id !== null).map((profile) => profile.user_id);
+    const names = selected.map((profile) => profile.name);
+    const clauses = [];
+    const params = [];
+    if (userIds.length) {
+      clauses.push(`assignee_user_id IN (${userIds.map(() => '?').join(', ')})`);
+      params.push(...userIds);
+    }
+    clauses.push(`(assignee_user_id IS NULL AND worker IN (${names.map(() => '?').join(', ')}))`);
+    params.push(...names);
+    const historyRows = queryAll(
       db,
-      `SELECT assigned_at, created, finished FROM tickets
-       WHERE finished <> '' AND (assignee_user_id = ? OR (assignee_user_id IS NULL AND worker = ?))`,
-      [profile.user_id, profile.name]
-    ));
+      `SELECT worker, assignee_user_id, assigned_at, created, finished FROM tickets
+       WHERE finished <> '' AND (${clauses.join(' OR ')})
+       ORDER BY finished DESC`,
+      params
+    );
+    for (const row of historyRows) {
+      const profile = row.assignee_user_id === null
+        ? profileByName.get(row.worker)
+        : profileByUser.get(Number(row.assignee_user_id));
+      if (profile) histories.get(Number(profile.id)).push(row);
+    }
   }
   const events = tickets.map((ticket) => {
     const profile = ticket.assignee_user_id === null

@@ -27,14 +27,16 @@ async function fixture() {
       (2, '2', 'x', '主管', 'lead'),
       (3, '3', 'x', '员工甲', 'worker'),
       (4, '4', 'x', '员工乙', 'worker'),
-      (5, '5', 'x', '外部员工', 'worker')
+      (5, '5', 'x', '外部员工', 'worker'),
+      (6, '6', 'x', '停用员工', 'worker')
   `);
   db.run(`
-    INSERT INTO staff_profiles (id, user_id, name, manager_id) VALUES
-      (10, 2, '主管', NULL),
-      (11, 3, '员工甲', 10),
-      (12, 4, '员工乙', 11),
-      (13, 5, '外部员工', NULL)
+    INSERT INTO staff_profiles (id, user_id, name, manager_id, employment_status) VALUES
+      (10, 2, '主管', NULL, 'active'),
+      (11, 3, '员工甲', 10, 'active'),
+      (12, 4, '员工乙', 11, 'active'),
+      (13, 5, '外部员工', NULL, 'active'),
+      (14, 6, '停用员工', 10, 'inactive')
   `);
   db.run(`
     INSERT INTO shift_assignments
@@ -61,7 +63,13 @@ async function fixture() {
       ('WX1003', '员工乙', 4, '2026-07-30T14:00:00+08:00', '巡检', '3栋',
        'wait', '2026-07-30T13:30:00+08:00', 1, 'c1'),
       ('WX9999', '外部员工', 5, '2026-07-30T09:00:00+08:00', '其他', '外部',
-       'doing', '2026-07-30T08:30:00+08:00', 1, 'c2')
+       'doing', '2026-07-30T08:30:00+08:00', 1, 'c2'),
+      ('UTC-IN', '员工甲', 3, '2026-07-29T16:30:00.000Z', '跨日', '上海',
+       'doing', '2026-07-29T16:00:00.000Z', 1, 'utc'),
+      ('UTC-OUT', '员工甲', 3, '2026-07-30T16:00:00.000Z', '跨日', '上海',
+       'doing', '2026-07-30T15:30:00.000Z', 1, 'utc'),
+      ('INACTIVE', '停用员工', 6, '2026-07-30T09:00:00+08:00', '其他', '停用',
+       'doing', '2026-07-30T08:30:00+08:00', 1, 'c1')
   `);
   return db;
 }
@@ -92,6 +100,50 @@ test('does not report overlaps belonging to different staff', () => {
   ]), []);
 });
 
+test('uses Asia/Shanghai absolute day boundaries for UTC ticket timestamps', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, communityId: 'utc', viewerUserId: 1,
+  });
+  assert.deepEqual(result.events.map((event) => event.ticketId), ['UTC-IN']);
+});
+
+test('hides inactive profiles by default and for explicit or self selection', async (t) => {
+  const db = await fixture();
+  const { buildDayCalendar } = require('../services/calendar');
+  assert.equal(buildDayCalendar(db, {
+    date: '2026-07-30', viewerUserId: 1,
+  }).people.some((person) => person.id === 14), false);
+  assert.deepEqual(buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 14, viewerUserId: 1,
+  }).people, []);
+
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const response = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30`,
+    { headers: authHeader({ id: 6, role: 'worker' }) }
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).people, []);
+});
+
+test('loads completed ticket history in one batch instead of per person', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  const originalPrepare = db.prepare.bind(db);
+  let historyQueries = 0;
+  db.prepare = (sql) => {
+    if (/finished <>/.test(sql)) historyQueries += 1;
+    return originalPrepare(sql);
+  };
+  const { buildDayCalendar } = require('../services/calendar');
+  buildDayCalendar(db, { date: '2026-07-30', viewerUserId: 1 });
+  assert.equal(historyQueries, 1);
+});
+
 test('ordinary user is forced to own staff profile despite requested filters', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
@@ -103,7 +155,7 @@ test('ordinary user is forced to own staff profile despite requested filters', a
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.deepEqual(body.people.map((person) => person.id), [11]);
-  assert.deepEqual(body.events.map((event) => event.ticketId), ['WX1001', 'WX1002']);
+  assert.deepEqual(body.events.map((event) => event.ticketId), ['UTC-IN', 'WX1001', 'WX1002']);
 });
 
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {
@@ -136,4 +188,25 @@ test('calendar endpoint requires authentication and strictly validates date', as
   );
   assert.equal(response.status, 400);
   assert.equal((await response.json()).code, 'INVALID_DATE');
+});
+
+test('calendar endpoint hides unexpected database errors', async (t) => {
+  const db = await fixture();
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  db.prepare = () => {
+    const error = new Error('SQL secret: no such column');
+    error.status = 400;
+    error.code = 'SQLITE_FAILURE';
+    throw error;
+  };
+  const response = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30`,
+    { headers: authHeader({ id: 1, role: 'admin' }) }
+  );
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: '内部服务器错误',
+    code: 'INTERNAL_ERROR',
+  });
 });

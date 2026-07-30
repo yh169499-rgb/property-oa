@@ -5,6 +5,12 @@ const { descendantIds } = require('../services/organization');
 const { buildDayCalendar } = require('../services/calendar');
 
 const router = express.Router();
+const PUBLIC_ERROR_CODES = new Set([
+  'INVALID_DATE',
+  'INVALID_CALENDAR_REQUEST',
+  'PROFILE_NOT_FOUND',
+  'CALENDAR_SCOPE_FORBIDDEN',
+]);
 
 function all(sql, params = []) {
   const statement = database.getDB().prepare(sql);
@@ -16,7 +22,13 @@ function all(sql, params = []) {
 }
 
 function fail(res, error) {
-  res.status(error.status || 400).json({
+  if (!Number.isInteger(error.status) || !PUBLIC_ERROR_CODES.has(error.code)) {
+    return res.status(500).json({
+      error: '内部服务器错误',
+      code: 'INTERNAL_ERROR',
+    });
+  }
+  return res.status(error.status).json({
     error: error.message || '请求失败',
     code: error.code || 'INVALID_CALENDAR_REQUEST',
   });
