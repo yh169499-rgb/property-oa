@@ -6,7 +6,6 @@ const fetch = require('node-fetch');
 const router = express.Router();
 const { queryAll, queryOne, run, saveDB } = require('../db');
 const config = require('../config');
-const { requireAuth } = require('../middleware/auth');
 const { descendantIds } = require('../services/organization');
 const { getStaffReport } = require('../services/reporting');
 
@@ -130,9 +129,15 @@ router.get('/sla/alert', async (req, res) => {
 });
 
 // GET /api/report
-router.get('/report', requireAuth, (req, res) => {
+router.get('/report', (req, res) => {
   if (req.query.staff_id !== undefined && req.query.staff_id !== '') {
     try {
+      if (!req.user) {
+        return res.status(401).json({
+          error: '未登录或 token 已过期',
+          code: 'AUTH_REQUIRED',
+        });
+      }
       const profiles = queryAll('SELECT id, user_id, manager_id FROM staff_profiles');
       const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
       if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });

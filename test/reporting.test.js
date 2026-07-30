@@ -115,3 +115,20 @@ test('报告路由要求登录并限制本人或递归团队范围', async (t) =
   assert.equal(attendance.response.status, 200);
   assert.deepEqual(attendance.body.data, []);
 });
+
+test('旧 /api/report 匿名无 staff_id 保持兼容，staff_id 分支要求登录', async (t) => {
+  const db = await fixture();
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+
+  const legacy = await fetch(`${server.url}/api/report`);
+  const legacyBody = await legacy.json();
+  assert.equal(legacy.status, 200);
+  assert.equal(legacyBody.success, true);
+  assert.deepEqual(Object.keys(legacyBody.stats).sort(), ['avgHours', 'done', 'total']);
+
+  const scoped = await fetch(`${server.url}/api/report?staff_id=3`);
+  const scopedBody = await scoped.json();
+  assert.equal(scoped.status, 401);
+  assert.equal(scopedBody.code, 'AUTH_REQUIRED');
+});
