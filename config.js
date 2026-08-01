@@ -9,7 +9,9 @@ const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
   fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
     const [key, ...val] = line.split('=');
-    if (key && val.length) process.env[key.trim()] = val.join('=').trim();
+    if (key && val.length && process.env[key.trim()] === undefined) {
+      process.env[key.trim()] = val.join('=').trim();
+    }
   });
 }
 
