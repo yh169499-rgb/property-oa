@@ -216,8 +216,6 @@ function applyRoleView() {
   });
   // 重新加载小区列表（按角色权限过滤）
   reloadCommunities();
-  // 重新初始化日程选择器（根据角色限制可见范围）
-  initSchedule();
   // 切换到师傅视图时默认显示工单页
   if (isWorker) { navTo('repair'); }
   else if (isKeeper) { navTo('complaint'); }
@@ -1427,7 +1425,7 @@ window.onload=async function(){
   // 禁用导航直到渲染完成
   var nav = document.querySelector('.nav');
   if (nav) { nav.style.pointerEvents = 'none'; nav.style.opacity = '0.5'; }
-  await load();enhanceState();setupEnhancedUI();initCommunitySelect();initNav();initRole();['repair','complaint','help'].forEach(initFilters);initDoneFilters();initSchedule();loadReminderInterval();renderAll();renderDashboard();applyRoleView();$('#drawerClose').onclick=closeDrawer;$('#drawerMask').onclick=closeDrawer;startAutoSync();checkLogin();
+  await load();enhanceState();setupEnhancedUI();initCommunitySelect();initNav();initRole();['repair','complaint','help'].forEach(initFilters);initDoneFilters();loadReminderInterval();renderAll();renderDashboard();applyRoleView();$('#drawerClose').onclick=closeDrawer;$('#drawerMask').onclick=closeDrawer;startAutoSync();checkLogin();
   // 渲染完毕，启用导航
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };

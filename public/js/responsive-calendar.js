@@ -72,6 +72,7 @@
   }
   function renderGrid(root, data) {
     var chart = el('div', 'calendar-day-grid');
+    chart.style.setProperty('--calendar-people', Math.max(1, (data.people || []).length));
     var ruler = el('div', 'calendar-time-ruler');
     ruler.appendChild(el('div', 'calendar-sticky-head', '时间'));
     for (var hour = 0; hour < 24; hour++) {
@@ -139,6 +140,18 @@
     root.dataset.calendarView = view;
     if (view === 'agenda') renderAgenda(root, data || {});
     else renderGrid(root, data || {});
+    if (!options || options.live !== false) {
+      root._responsiveCalendarData = data || {};
+      if (!root._responsiveCalendarBound && typeof window.addEventListener === 'function') {
+        root._responsiveCalendarBound = true;
+        window.addEventListener('resize', function () {
+          window.clearTimeout(root._responsiveCalendarResizeTimer);
+          root._responsiveCalendarResizeTimer = window.setTimeout(function () {
+            render(root, root._responsiveCalendarData || {}, { live: false });
+          }, 100);
+        });
+      }
+    }
   }
   window.ResponsiveCalendar = { render: render };
 }());

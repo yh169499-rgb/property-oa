@@ -33,7 +33,7 @@
       error.details = body.details || {};
       throw error;
     }
-    return body.data;
+    return Object.prototype.hasOwnProperty.call(body, 'data') ? body.data : body;
   }
   function empty(el) { while (el.firstChild) el.removeChild(el.firstChild); }
   function node(tag, className, text) {
@@ -365,7 +365,7 @@
 
   async function loadSchedule() {
     var target = panel('schedule');
-    var today = new Date().toISOString().slice(0, 10);
+    var today = window.WorkforceUtils.localDateKey(new Date());
     var results = await Promise.all([
       request('/api/shift-templates'),
       profiles.length ? Promise.resolve(profiles) : request('/api/staff/profiles')
@@ -384,9 +384,23 @@
     var template = select([{ value: '', label: '不使用模板' }].concat((results[0] || []).map(function (t) {
       return { value: t.id, label: t.name };
     })), '');
-    [field('日期', date), field('人员', staff), field('类型', type), field('模板', template)]
+    if ((results[0] || []).length) template.value = String(results[0][0].id);
+    var leaveType = select([
+      { value: '事假', label: '事假' }, { value: '病假', label: '病假' },
+      { value: '年假', label: '年假' }, { value: '其他', label: '其他' }
+    ], '事假');
+    var templateField = field('模板', template);
+    var leaveField = field('请假类型', leaveType); leaveField.hidden = true;
+    function syncAssignmentFields() {
+      templateField.hidden = type.value !== 'work';
+      leaveField.hidden = type.value !== 'leave';
+    }
+    type.addEventListener('change', syncAssignmentFields);
+    [field('日期', date), field('人员', staff), field('类型', type), templateField, leaveField]
       .forEach(function (el) { toolbar.appendChild(el); });
+    syncAssignmentFields();
     var list = node('div', 'management-list card');
+    var calendar = node('div', 'management-calendar card');
     async function refresh() {
       var url = '/api/shifts?work_date=' + encodeURIComponent(date.value);
       if (staff.value) url += '&staff_id=' + encodeURIComponent(staff.value);
@@ -418,6 +432,10 @@
           list.appendChild(row);
         });
         if (!list.firstChild) list.appendChild(node('div', 'management-state', '所选条件暂无排班'));
+        var calendarUrl = '/api/calendar/day?date=' + encodeURIComponent(date.value);
+        if (staff.value) calendarUrl += '&staff_id=' + encodeURIComponent(staff.value);
+        var calendarData = await request(calendarUrl);
+        window.ResponsiveCalendar.render(calendar, calendarData || {}, { width: window.innerWidth });
       } catch (error) {
         empty(list);
         showMessage(list, error.message, true);
@@ -428,24 +446,133 @@
     var add = node('button', 'btn sm', '新增排班');
     add.addEventListener('click', async function () {
       if (!staff.value) return showMessage(target, '请选择人员', true);
+      if (type.value === 'work' && !template.value) {
+        return showMessage(target, '上班排班请选择班次模板', true);
+      }
       try {
         await request('/api/shifts', {
           method: 'POST', body: JSON.stringify({
             staffId: Number(staff.value), workDate: date.value,
-            assignmentType: type.value, templateId: template.value ? Number(template.value) : null
+            assignmentType: type.value,
+            templateId: type.value === 'work' && template.value ? Number(template.value) : null,
+            leaveType: type.value === 'leave' ? leaveType.value : null
           })
         });
         await refresh();
       } catch (error) { showMessage(target, error.message, true); }
     });
     toolbar.appendChild(add);
+    var batch = node('button', 'btn gray sm', '批量排班');
+    batch.addEventListener('click', function () {
+      var dialog = modal('批量排班');
+      var people = node('select'); people.multiple = true; people.size = Math.min(8, Math.max(3, profiles.length));
+      profiles.forEach(function (profile) {
+        var option = node('option', '', profile.name); option.value = profile.id; people.appendChild(option);
+      });
+      var from = node('input'); from.type = 'date'; from.value = date.value;
+      var to = node('input'); to.type = 'date'; to.value = date.value;
+      var batchType = select([
+        { value: 'work', label: '上班' }, { value: 'rest', label: '休息' }, { value: 'leave', label: '请假' }
+      ], type.value);
+      var batchTemplate = select([{ value: '', label: '不使用模板' }].concat((results[0] || []).map(function (item) {
+        return { value: item.id, label: item.name };
+      })), template.value);
+      var batchLeaveType = select([
+        { value: '事假', label: '事假' }, { value: '病假', label: '病假' },
+        { value: '年假', label: '年假' }, { value: '其他', label: '其他' }
+      ], '事假');
+      var batchTemplateField = field('模板', batchTemplate);
+      var batchLeaveField = field('请假类型', batchLeaveType);
+      function syncBatchFields() {
+        batchTemplateField.hidden = batchType.value !== 'work';
+        batchLeaveField.hidden = batchType.value !== 'leave';
+      }
+      batchType.addEventListener('change', syncBatchFields);
+      [field('人员（可多选）', people), field('开始日期', from), field('结束日期', to),
+        field('类型', batchType), batchTemplateField, batchLeaveField]
+        .forEach(function (item) { dialog.box.appendChild(item); });
+      syncBatchFields();
+      var submit = node('button', 'btn', '保存批量排班');
+      submit.addEventListener('click', async function () {
+        var staffIds = Array.from(people.selectedOptions).map(function (item) { return Number(item.value); });
+        if (!staffIds.length) return showMessage(dialog.box, '请至少选择一名人员', true);
+        if (batchType.value === 'work' && !batchTemplate.value) {
+          return showMessage(dialog.box, '上班排班请选择班次模板', true);
+        }
+        var dates = [];
+        var cursor = new Date(from.value + 'T00:00:00+08:00');
+        var end = new Date(to.value + 'T00:00:00+08:00');
+        if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(end.getTime()) || cursor > end) {
+          return showMessage(dialog.box, '日期范围无效', true);
+        }
+        while (cursor <= end && dates.length <= 62) {
+          dates.push(window.WorkforceUtils.localDateKey(cursor));
+          cursor = new Date(cursor.getTime() + 86400000);
+        }
+        if (dates.length > 62) return showMessage(dialog.box, '单次最多安排 62 天', true);
+        var payload = {
+          staffIds: staffIds, dates: dates, assignmentType: batchType.value,
+          templateId: batchType.value === 'work' && batchTemplate.value
+            ? Number(batchTemplate.value) : null,
+          leaveType: batchType.value === 'leave' ? batchLeaveType.value : null,
+          overwrite: false
+        };
+        submit.disabled = true;
+        try {
+          try {
+            await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
+          } catch (error) {
+            if (error.code !== 'SHIFT_ALREADY_EXISTS' || !window.confirm('发现已有排班，是否覆盖冲突日期？')) throw error;
+            payload.overwrite = true;
+            await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
+          }
+          dialog.mask.remove();
+          await refresh();
+        } catch (error) {
+          showMessage(dialog.box, error.message, true); submit.disabled = false;
+        }
+      });
+      dialog.box.appendChild(submit);
+    });
+    toolbar.appendChild(batch);
     target.appendChild(toolbar);
     target.appendChild(list);
+    target.appendChild(calendar);
     await refresh();
   }
   function renderAttendance() {
     var target = panel('attendance'); empty(target);
-    target.appendChild(node('div', 'management-state card', '本轮暂未启用签到/补卡'));
+    var toolbar = node('div', 'management-toolbar');
+    var date = node('input'); date.type = 'date'; date.value = window.WorkforceUtils.localDateKey(new Date());
+    toolbar.appendChild(field('日期', date));
+    target.appendChild(toolbar);
+    var summary = node('div', 'manager-today-grid');
+    var detail = node('div', 'management-list card');
+    target.appendChild(summary); target.appendChild(detail);
+    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；此处只读展示已有考勤记录。'));
+    async function refresh() {
+      empty(summary); empty(detail);
+      try {
+        var data = await request('/api/calendar/day?date=' + encodeURIComponent(date.value));
+        var people = data.people || [];
+        var actual = people.filter(function (person) { return person.attendance; });
+        var abnormal = actual.filter(function (person) {
+          return !['normal', 'rest', 'leave'].includes(person.attendance.status);
+        });
+        [['应到', people.filter(function (p) { return p.shift && p.shift.assignmentType === 'work'; }).length],
+          ['已有记录', actual.length], ['异常', abnormal.length]].forEach(function (item) {
+          var card = node('div', 'card manager-today-card'); card.appendChild(node('span', '', item[0]));
+          card.appendChild(node('strong', '', item[1] + ' 人')); summary.appendChild(card);
+        });
+        people.forEach(function (person) {
+          var row = node('div', 'management-list-row');
+          row.appendChild(node('strong', '', person.name));
+          row.appendChild(node('span', '', person.attendance ? person.attendance.status : '暂无记录'));
+          detail.appendChild(row);
+        });
+      } catch (error) { showMessage(detail, error.message, true); }
+    }
+    date.addEventListener('change', refresh); refresh();
   }
   function renderRegistrations() {
     var target = panel('registrations'); empty(target);
