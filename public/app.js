@@ -149,6 +149,9 @@ function showPage(page, navPage) {
   if (page === 'management' && window.ManagementWorkspace) {
     setTimeout(window.ManagementWorkspace.init, 0);
   }
+  if (page === 'my' && window.MyPage && typeof window.MyPage.init === 'function') {
+    setTimeout(function() { window.MyPage.init('month'); }, 0);
+  }
   return true;
 }
 
@@ -1120,7 +1123,33 @@ function openStaffProfile(id){
   $('#drawerMask').classList.add('open');$('#drawer').classList.add('open');
 }
 
-function renderDashboard(){var ts=state.tickets,done=ts.filter(t=>t.status==='done');$('#kpi-total').innerHTML=ts.length+' <small>张</small>';$('#kpi-repair').innerHTML=ts.filter(t=>t.type==='repair').length+' <small>张</small>';$('#kpi-complaint').innerHTML=ts.filter(t=>t.type==='complaint').length+' <small>张</small>';$('#kpi-help').innerHTML=ts.filter(t=>t.type==='help').length+' <small>张</small>';$('#kpi-urgent').innerHTML=ts.filter(t=>t.priority==='urgent'&&t.status!=='done').length+' <small>张</small>';var d=done.map(t=>durHours(t.created,t.finished)).filter(x=>x!=null);$('#kpi-avg').innerHTML=(d.length?(d.reduce((a,b)=>a+b,0)/d.length).toFixed(1):'—')+' <small>小时</small>';$('#kpi-rate').innerHTML=(done.length?Math.round(done.filter(isOnTime).length/done.length*100):0)+' <small>%</small>';drawCharts();renderPerformance();}
+async function renderDashboard(){
+  var ids=['kpi-total','kpi-repair','kpi-complaint','kpi-help','kpi-urgent','kpi-avg','kpi-rate','dashboard-manager-actions','dashboard-team-attendance','dashboard-attendance-exceptions'];
+  var stateEl=$('#dashboard-api-state');
+  ids.forEach(function(id){var el=$('#'+id);if(el)el.textContent='—';});
+  if(stateEl){stateEl.textContent='正在加载本月统计…';stateEl.classList.remove('error');}
+  try{
+    var result=window.WorkforceAPI&&window.WorkforceAPI.dashboardStats
+      ? await window.WorkforceAPI.dashboardStats(currentCommunity)
+      : await API.get('/api/dashboard/stats?community_id='+encodeURIComponent(currentCommunity));
+    if(!result||!result.ok||!result.data)throw new Error(result&&result.error||'统计服务暂不可用');
+    var data=result.data,byType=data.byType||{};
+    function value(id,value,suffix){var el=$('#'+id);if(el)el.textContent=(value===null||value===undefined?'—':value)+(suffix||'');}
+    value('kpi-total',data.monthTotal,' 张');
+    value('kpi-repair',byType.repair||0,' 张');
+    value('kpi-complaint',byType.complaint||0,' 张');
+    value('kpi-help',byType.help||0,' 张');
+    value('kpi-urgent',data.urgentPending||0,' 张');
+    value('kpi-avg',Number(data.averageHours||0).toFixed(1),' 小时');
+    value('kpi-rate',Number(data.onTimeRate||0).toFixed(1),'%');
+    value('dashboard-manager-actions',data.todayManagerActions||0,' 次');
+    value('dashboard-team-attendance',data.teamAttendance&&data.teamAttendance.actual||0,' 人次');
+    value('dashboard-attendance-exceptions',data.teamAttendance&&data.teamAttendance.exceptions,' 人次');
+    if(stateEl)stateEl.textContent='统计区间：'+(data.range&&data.range.from?fmtTime(data.range.from):'本月')+' 至今';
+  }catch(error){
+    if(stateEl){stateEl.textContent=error.message||'月度统计加载失败';stateEl.classList.add('error');}
+  }
+}
 function drawCharts(){var blue='#1677ff',teal='#13c2c2',orange='#fa8c16',purple='#722ed1',green='#52c41a';function localDateStr(d){var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;}var today=new Date(),days=[],keys=[];for(var i=29;i>=0;i--){var d=new Date(today);d.setHours(0,0,0,0);d.setDate(d.getDate()-i);keys.push(localDateStr(d));days.push((d.getMonth()+1)+'/'+d.getDate());}var series=['repair','complaint','help'].map(type=>keys.map(k=>state.tickets.filter(t=>t.type===type&&localDateStr(new Date(t.created))===k).length));getChart('chart-trend').setOption({tooltip:{trigger:'axis'},legend:{data:['报修','投诉','帮助/其他']},grid:{left:40,right:20,top:40,bottom:30},xAxis:{type:'category',data:days},yAxis:{type:'value',minInterval:1},series:[{name:'报修',type:'line',smooth:true,data:series[0],itemStyle:{color:blue}},{name:'投诉',type:'line',smooth:true,data:series[1],itemStyle:{color:orange}},{name:'帮助/其他',type:'line',smooth:true,data:series[2],itemStyle:{color:teal}}]});var people=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家'),metrics=people.map(s=>staffMetrics(s.name));getChart('chart-worker-count').setOption({tooltip:{trigger:'axis'},grid:{left:40,right:20,top:20,bottom:60},xAxis:{type:'category',data:people.map(s=>s.name),axisLabel:{rotate:45,fontSize:11}},yAxis:{type:'value',minInterval:1},series:[{type:'bar',data:metrics.map(m=>m.done.length),itemStyle:{color:teal,borderRadius:[5,5,0,0]},label:{show:true,position:'top'}}]});getChart('chart-worker-dur').setOption({tooltip:{trigger:'axis',formatter:'{b}: {c} 小时'},grid:{left:60,right:20,top:30,bottom:60},xAxis:{type:'category',data:people.map(s=>s.name),axisLabel:{rotate:45,fontSize:11}},yAxis:{type:'value',name:'小时',nameTextStyle:{padding:[0,30,0,0]}},series:[{type:'bar',data:metrics.map(m=>m.avg==null?0:+m.avg.toFixed(1)),itemStyle:{color:purple,borderRadius:[5,5,0,0]},label:{show:true,position:'top',formatter:'{c}h'}}]});var cats={};state.tickets.forEach(t=>cats[t.cat]=(cats[t.cat]||0)+1);getChart('chart-cat').setOption({tooltip:{trigger:'item',formatter:'{b}: {c}张 ({d}%)'},legend:{bottom:0,textStyle:{fontSize:11}},color:[blue,orange,teal],series:[{type:'pie',radius:['30%','55%'],center:['50%','45%'],data:[{name:'报修',value:state.tickets.filter(t=>t.type==='repair').length},{name:'投诉',value:state.tickets.filter(t=>t.type==='complaint').length},{name:'帮助/其他',value:state.tickets.filter(t=>t.type==='help').length}],label:{formatter:'{b}\n{c}张',fontSize:11,lineHeight:14,overflow:'none'},labelLine:{length:15,length2:10}}]});var statuses={wait:0,doing:0,confirm:0,done:0};state.tickets.forEach(t=>statuses[t.status]++);getChart('chart-status').setOption({tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},legend:{bottom:0,textStyle:{fontSize:11}},color:[orange,blue,purple,green],series:[{type:'pie',radius:['28%','48%'],center:['50%','46%'],data:Object.entries(statuses).map(([k,value])=>({name:STATUS_LABEL[k],value})),label:{formatter:'{b} {c}',fontSize:11,overflow:'none'},labelLine:{length:15,length2:10}}]});var events=Object.entries(cats).sort((a,b)=>b[1]-a[1]);getChart('chart-event-frequency').setOption({tooltip:{trigger:'axis'},grid:{left:90,right:30,top:15,bottom:25},xAxis:{type:'value',minInterval:1},yAxis:{type:'category',inverse:true,data:events.map(x=>x[0])},series:[{type:'bar',data:events.map(x=>x[1]),itemStyle:{color:blue,borderRadius:[0,5,5,0]},label:{show:true,position:'right'}}]});}
 function renderAll(){['repair','complaint','help'].forEach(renderTickets);renderDone();renderStaff();updateNavBadges();if($('#page-dashboard').classList.contains('active'))renderDashboard();}
 

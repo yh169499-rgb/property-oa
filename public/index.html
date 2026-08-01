@@ -130,18 +130,27 @@
 
     <!-- ============ 看板 ============ -->
     <section class="page active" id="page-dashboard">
-      <div class="page-title" style="display:flex;align-items:center;gap:12px">运营看板 <button class="btn sm" onclick="showReport()">📋 生成报告</button></div>
-      <div class="page-sub">实时统计报修 / 投诉工单运行情况（数据来自本地演示数据，可在各模块操作后自动更新）</div>
+      <div class="page-title" style="display:flex;align-items:center;gap:12px">主管首页 <button class="btn sm" onclick="showReport()">📋 生成报告</button></div>
+      <div class="page-sub">本月团队运行概览，统计口径来自主管权限范围内的服务端数据。</div>
 
       <div class="kpi-grid">
         <div class="kpi" style="cursor:pointer" onclick="navTo('dashboard')"><div class="label">本月工单总量</div><div class="value" id="kpi-total">—</div><div class="trend">报修 + 投诉</div></div>
-        <div class="kpi teal" style="cursor:pointer" onclick="navTo('repair')"><div class="label">报修工单</div><div class="value" id="kpi-repair">—</div><div class="trend">水暖/电路/电器/门窗/公共设施</div></div>
-        <div class="kpi purple" style="cursor:pointer" onclick="navTo('complaint')"><div class="label">投诉工单</div><div class="value" id="kpi-complaint">—</div><div class="trend">突发/物业/便民/其他</div></div>
-        <div class="kpi orange"><div class="label">平均处理时长</div><div class="value" id="kpi-avg">—</div><div class="trend">已完成工单</div></div>
-        <div class="kpi green"><div class="label">按时完成率</div><div class="value" id="kpi-rate">—</div><div class="trend">24h 内完成</div></div>
+        <div class="kpi teal" style="cursor:pointer" onclick="navTo('repair')"><div class="label">本月报修</div><div class="value" id="kpi-repair">—</div><div class="trend">本月新建报修工单</div></div>
+        <div class="kpi purple" style="cursor:pointer" onclick="navTo('complaint')"><div class="label">本月投诉</div><div class="value" id="kpi-complaint">—</div><div class="trend">本月新建投诉工单</div></div>
+        <div class="kpi cyan" style="cursor:pointer" onclick="navTo('help')"><div class="label">本月帮助</div><div class="value" id="kpi-help">—</div><div class="trend">本月新建帮助工单</div></div>
+        <div class="kpi red"><div class="label">当前紧急待处理</div><div class="value" id="kpi-urgent">—</div><div class="trend">尚未完成的紧急工单</div></div>
+        <div class="kpi orange"><div class="label">本月平均处理时长</div><div class="value" id="kpi-avg">—</div><div class="trend">本月完成工单</div></div>
+        <div class="kpi green"><div class="label">本月按时完成率</div><div class="value" id="kpi-rate">—</div><div class="trend">按工单 SLA 口径</div></div>
       </div>
 
-      <div class="chart-grid">
+      <div class="manager-today-grid">
+        <section class="card manager-today-card"><span>今日主管动作</span><strong id="dashboard-manager-actions">—</strong><small>派单、审核与状态操作</small></section>
+        <section class="card manager-today-card"><span>团队到岗</span><strong id="dashboard-team-attendance">—</strong><small>今日已有实际考勤记录</small></section>
+        <section class="card manager-today-card"><span>考勤异常</span><strong id="dashboard-attendance-exceptions">—</strong><small>仅展示接口明确返回的异常</small></section>
+      </div>
+      <div id="dashboard-api-state" class="dashboard-api-state" role="status"></div>
+
+      <div class="chart-grid dashboard-legacy-charts" aria-hidden="true">
         <div class="chart-card chart-full">
           <h3>近 30 天工单趋势</h3>
           <div class="chart-box tall" id="chart-trend"></div>
@@ -237,25 +246,7 @@
       <div id="management-workspace"></div>
     </section>
     <section class="page" id="page-my">
-      <div class="page-title">我的</div>
-      <div class="page-sub">查看个人资料与当前在岗状态；后续由个人中心模块继续扩展。</div>
-      <div class="card" id="my-profile-card" style="display:none;margin-bottom:16px">
-        <h4 style="font-size:14px;margin-bottom:12px">👤 个人信息</h4>
-        <div id="my-profile-content"></div>
-      </div>
-      <div class="card" id="my-status-card" style="display:none;margin-bottom:16px">
-        <h4 style="font-size:14px;margin-bottom:12px">📋 我的状态</h4>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span style="font-size:13px;color:var(--text-2)">当前状态：</span>
-          <span id="my-status-label" style="font-weight:600"></span>
-          <select id="my-status-select" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px">
-            <option value="on">在岗待命</option>
-            <option value="busy">正在处理</option>
-            <option value="off">请假</option>
-          </select>
-          <button class="btn sm" onclick="updateMyStatus()">更新状态</button>
-        </div>
-      </div>
+      <div id="my-page-root" aria-live="polite"></div>
     </section>
 
     <!-- 仅供旧日程脚本兼容的数据容器；不是页面，也不是导航目标。 -->

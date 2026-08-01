@@ -1079,3 +1079,57 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
   .management-list-row { grid-template-columns:1fr auto; }
   .management-list-row span { grid-column:1 / -1; grid-row:2; }
 }
+
+/* ========== 主管指挥中心与我的 ========== */
+#page-dashboard { position:relative; }
+#page-dashboard::before { content:""; display:block; height:150px; margin:-24px -24px -118px; border-radius:0 0 28px 28px; background:linear-gradient(135deg,#092b55 0%,#145da0 58%,#1677ff 100%); }
+#page-dashboard > .page-title, #page-dashboard > .page-sub { position:relative; color:#fff; }
+#page-dashboard > .page-sub { color:rgba(255,255,255,.78); }
+#page-dashboard .kpi-grid { position:relative; grid-template-columns:repeat(4,minmax(150px,1fr)); }
+#page-dashboard .kpi { min-height:132px; border:1px solid rgba(255,255,255,.65); box-shadow:0 12px 30px rgba(15,60,110,.12); }
+.manager-today-grid { display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:14px; margin:16px 0; }
+.manager-today-card { display:grid; gap:7px; padding:18px; border:1px solid var(--hairline); }
+.manager-today-card span,.manager-today-card small { color:var(--text-2); }
+.manager-today-card strong { color:#0b4f8a; font-size:25px; }
+.dashboard-api-state { min-height:20px; margin:6px 0 14px; color:var(--text-2); font-size:12px; }
+.dashboard-api-state.error { color:var(--danger); }
+.dashboard-legacy-charts { display:none; }
+.my-hero { display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:18px; padding:26px; border-radius:20px; color:#fff; background:linear-gradient(135deg,#092b55,#1677ff); box-shadow:0 16px 36px rgba(22,119,255,.18); }
+.my-hero h2,.my-hero p { margin:4px 0; }
+.my-hero p,.my-eyebrow { color:rgba(255,255,255,.78); }
+.period-switch { display:flex; padding:4px; border-radius:999px; background:rgba(255,255,255,.16); }
+.period-switch button { min-width:42px; border:0; border-radius:999px; padding:8px 12px; color:#fff; background:transparent; cursor:pointer; }
+.period-switch button.active { color:#0b4f8a; background:#fff; }
+.my-page-grid { display:grid; grid-template-columns:minmax(280px,.9fr) minmax(320px,1.3fr); gap:16px; margin-bottom:16px; }
+.my-profile-panel,.my-summary-panel,.my-attendance-panel { padding:20px; }
+.my-profile-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.my-field { display:grid; gap:6px; }
+.my-field-label,.my-field-readonly { color:var(--text-2); font-size:12px; }
+.my-field input { width:100%; min-height:38px; border:1px solid var(--hairline-strong); border-radius:8px; padding:7px 10px; }
+.my-save { margin-top:16px; }
+.my-metrics { display:grid; grid-template-columns:repeat(3,minmax(100px,1fr)); gap:10px; }
+.my-metric { display:grid; gap:6px; min-height:84px; padding:14px; border-radius:12px; background:var(--bg); }
+.my-metric-label { color:var(--text-2); font-size:12px; }
+.my-metric-value { color:#0b4f8a; font-size:21px; }
+.my-section-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:14px; }
+.my-section-head h3,.my-section-head p { margin:0 0 4px; }
+.my-section-head p { color:var(--text-2); font-size:12px; }
+.attendance-calendar { display:grid; grid-template-columns:repeat(7,minmax(110px,1fr)); gap:8px; overflow-x:auto; }
+.attendance-day { min-height:94px; padding:10px; border-radius:10px; border-left:4px solid #94a3b8; background:#f8fafc; }
+.attendance-day span,.attendance-day small { display:block; color:var(--text-2); font-size:11px; }
+.attendance-day.status-normal { border-left-color:#22c55e; background:#f0fdf4; }
+.attendance-day.status-late,.attendance-day.status-early { border-left-color:#f59e0b; background:#fffbeb; }
+.attendance-day.status-absent { border-left-color:#ef4444; background:#fef2f2; }
+.attendance-day.status-leave,.attendance-day.status-rest { border-left-color:#64748b; background:#f1f5f9; }
+.my-empty { padding:24px; text-align:center; color:var(--text-2); }
+@media (max-width:1024px) {
+  #page-dashboard .kpi-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
+  .attendance-calendar { grid-template-columns:repeat(4,minmax(120px,1fr)); }
+}
+@media (max-width:768px) {
+  #page-dashboard::before { margin:-16px -16px -118px; }
+  #page-dashboard .kpi-grid,.manager-today-grid,.my-page-grid { grid-template-columns:1fr; }
+  .my-hero,.my-section-head { align-items:flex-start; flex-direction:column; }
+  .my-profile-fields,.my-metrics { grid-template-columns:1fr 1fr; }
+  .attendance-calendar { grid-template-columns:repeat(2,minmax(125px,1fr)); }
+}
