@@ -6,6 +6,12 @@ const {
   buildOrganizationTree,
   updateManager,
 } = require('../services/organization');
+const {
+  IMPORT_FIELD_ALIASES,
+  importKey,
+  normalizedImportPayload,
+  previewProfileImport,
+} = require('../services/workforce-migration');
 
 const router = express.Router();
 const SELF_FIELDS = new Set(['phone', 'birth_month']);
@@ -142,6 +148,78 @@ function updateOwnProfile(profile, userId, body) {
   saveDB();
   return profileById(profile.id);
 }
+
+function importProfiles(body) {
+  if (!body || !Array.isArray(body.profiles) || !body.profiles.length) {
+    throw apiError('profiles 必须是非空数组', 400, 'INVALID_IMPORT_PAYLOAD');
+  }
+  return body.profiles.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw apiError('档案项格式无效', 400, 'INVALID_IMPORT_PAYLOAD');
+    }
+    return normalizedImportPayload(item);
+  });
+}
+
+router.post('/staff/profiles/import-preview', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const profiles = importProfiles(req.body);
+    res.json({ data: { ...previewProfileImport(getDB(), profiles), import_key: importKey({ profiles }) } });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const profiles = importProfiles(req.body);
+    if (!Array.isArray(req.body.selections)) {
+      throw apiError('selections 必须是数组', 400, 'INVALID_IMPORT_SELECTIONS');
+    }
+    const normalized = normalizedImportPayload({ profiles, selections: req.body.selections });
+    const key = importKey(normalized);
+    const existingBatch = queryOne('SELECT * FROM workforce_import_batches WHERE import_key = ?', [key]);
+    if (existingBatch) {
+      return res.json({ data: { already_imported: true, import_key: key, summary: JSON.parse(existingBatch.summary_json || '{}') } });
+    }
+    const preview = previewProfileImport(getDB(), profiles);
+    const matched = new Map(preview.matches.map((item) => [item.index, item]));
+    const summary = withTransaction((db) => {
+      let updated = 0;
+      const fieldsUpdated = {};
+      req.body.selections.forEach((selection) => {
+        const index = Number(selection && selection.index);
+        const match = matched.get(index);
+        if (!match) throw apiError('勾选项未匹配到唯一档案', 409, 'IMPORT_MATCH_CONFLICT', { index });
+        const fields = Array.isArray(selection.fields) ? [...new Set(selection.fields)] : [];
+        const assignments = [];
+        const values = [];
+        fields.forEach((requested) => {
+          const column = IMPORT_FIELD_ALIASES[requested];
+          if (!column || !Object.prototype.hasOwnProperty.call(profiles[index], requested)) {
+            throw apiError('包含不可导入或缺失的字段', 400, 'INVALID_IMPORT_FIELD', { index, field: requested });
+          }
+          assignments.push(`${column} = ?`);
+          values.push(profiles[index][requested]);
+          fieldsUpdated[column] = (fieldsUpdated[column] || 0) + 1;
+        });
+        if (!assignments.length) return;
+        db.run(`UPDATE staff_profiles SET ${assignments.join(', ')}, updated_at = ? WHERE id = ?`,
+          [...values, new Date().toISOString(), match.profile.id]);
+        updated += 1;
+      });
+      const result = { updated, selected: req.body.selections.length, fields: fieldsUpdated };
+      db.run(`INSERT INTO workforce_import_batches
+        (import_key, imported_by, imported_at, summary_json) VALUES (?, ?, ?, ?)`,
+      [key, req.user.id, new Date().toISOString(), JSON.stringify(result)]);
+      return result;
+    });
+    saveDB();
+    res.json({ data: { already_imported: false, import_key: key, summary } });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
 
 router.get('/me', requireAuth, (req, res) => {
   try {

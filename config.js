@@ -16,7 +16,7 @@ if (fs.existsSync(envPath)) {
 module.exports = {
   PORT: process.env.PORT || 3001,
   NOTIFY_WEBHOOK: process.env.NOTIFY_WEBHOOK || '',
-  DB_PATH: path.join(__dirname, 'data.db'),
+  DB_PATH: process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(__dirname, 'data.db'),
   UPLOAD_DIR: path.join(__dirname, 'uploads'),
 
   // JWT
