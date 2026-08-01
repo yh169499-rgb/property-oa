@@ -594,10 +594,128 @@
   }
   function renderReports() {
     var target = panel('reports'); empty(target);
-    target.appendChild(node('div', 'management-state card', '报告模块正在接入，当前可从首页生成工单报告。'));
-    var button = node('button', 'btn sm', '打开现有报告');
-    button.addEventListener('click', function () { if (typeof window.showReport === 'function') window.showReport(); });
-    target.appendChild(button);
+    var today = window.WorkforceUtils.localDateKey(new Date());
+    var monthStart = today.slice(0, 7) + '-01';
+    var sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    var period = select([
+      { value: 'today', label: '今日' }, { value: 'week', label: '近 7 天' },
+      { value: 'month', label: '本月' }, { value: 'custom', label: '自定义' }
+    ], 'month');
+    var staff = select(profiles.map(function (profile) {
+      return { value: profile.id, label: profile.name + (profile.position ? ' · ' + profile.position : '') };
+    }), profiles[0] && profiles[0].id);
+    var from = node('input'); from.type = 'date'; from.value = monthStart;
+    var to = node('input'); to.type = 'date'; to.value = today;
+    var currentControl = document.getElementById('community-select');
+    var currentId = currentControl && currentControl.value
+      ? currentControl.value : (localStorage.getItem('juzi_oa_community_v1') || 'default');
+    var currentName = currentControl && currentControl.selectedOptions[0]
+      ? currentControl.selectedOptions[0].textContent : currentId;
+    var community = select([
+      { value: currentId, label: '当前小区（' + currentName + '）' },
+      { value: '', label: '全部授权小区' }
+    ], currentId);
+    function applyPeriod() {
+      if (period.value === 'today') from.value = to.value = today;
+      if (period.value === 'week') {
+        from.value = window.WorkforceUtils.localDateKey(sevenDaysAgo); to.value = today;
+      }
+      if (period.value === 'month') { from.value = monthStart; to.value = today; }
+      from.disabled = period.value !== 'custom'; to.disabled = period.value !== 'custom';
+    }
+    period.addEventListener('change', applyPeriod); applyPeriod();
+    var toolbar = node('div', 'management-toolbar staff-report-toolbar');
+    [field('人员', staff), field('周期', period), field('开始', from), field('结束', to), field('小区范围', community)]
+      .forEach(function (item) { toolbar.appendChild(item); });
+    var output = node('div', 'card staff-report-output');
+    var generate = node('button', 'btn', '生成报告');
+    generate.addEventListener('click', function () {
+      if (!staff.value) return showMessage(target, '暂无可生成报告的人员', true);
+      if (!from.value || !to.value || from.value > to.value) return showMessage(target, '日期范围无效', true);
+      window.StaffReport.load(output, Number(staff.value), {
+        from: from.value, to: to.value,
+        community_id: community.value,
+        community_name: community.options[community.selectedIndex].textContent
+      }).catch(function () {});
+    });
+    toolbar.appendChild(generate);
+    target.appendChild(toolbar); target.appendChild(output);
+    if (staff.value) generate.click();
+  }
+
+  function legacyProfiles() {
+    try {
+      var stored = JSON.parse(localStorage.getItem('juzi_oa_demo_v1') || '{}');
+      return (stored.staff || []).map(function (person) {
+        var profile = {
+          name: person.name || '', phone: person.phone || '', skill: person.skill || '',
+          joinDate: person.joinDate || person.join_date || '',
+          birthMonth: person.birthMonth || person.birth_month || '',
+          position: person.position || person.role || ''
+        };
+        if (person.status) profile.employmentStatus = person.status === 'off' ? 'inactive' : 'active';
+        return profile;
+      });
+    } catch (_) { return []; }
+  }
+
+  function openProfileImport() {
+    var dialog = modal('导入旧人员资料');
+    dialog.box.appendChild(node('p', 'management-help', '仅预览差异，不会立即写入。手机号优先匹配；没有手机号时仅接受唯一姓名。'));
+    var source = node('textarea', 'profile-import-source');
+    source.rows = 10; source.value = JSON.stringify(legacyProfiles(), null, 2);
+    dialog.box.appendChild(field('浏览器旧资料（JSON）', source));
+    var result = node('div', 'profile-import-result'); dialog.box.appendChild(result);
+    var preview = node('button', 'btn', '预览匹配'); dialog.box.appendChild(preview);
+    preview.addEventListener('click', async function () {
+      var payload;
+      try { payload = JSON.parse(source.value); } catch (_) { return showMessage(dialog.box, 'JSON 格式无效', true); }
+      if (!Array.isArray(payload) || !payload.length) return showMessage(dialog.box, '没有可导入的旧资料', true);
+      preview.disabled = true; empty(result);
+      try {
+        var response = await window.WorkforceAPI.importProfilesPreview(payload);
+        if (!response || response.ok === false) throw new Error(response && response.error || '预览失败');
+        var data = response.data || {};
+        result.appendChild(node('h4', '', '可匹配 ' + (data.matches || []).length + ' 条 · 冲突 ' + (data.conflicts || []).length + ' 条 · 未匹配 ' + (data.unmatched || []).length + ' 条'));
+        (data.matches || []).forEach(function (match) {
+          var card = node('div', 'profile-import-match');
+          card.appendChild(node('strong', '', (match.source.name || ('第 ' + (match.index + 1) + ' 条')) + ' → ' + match.profile.name + '（按' + (match.matched_by === 'phone' ? '手机号' : '姓名') + '）'));
+          var fields = node('div', 'profile-import-fields');
+          [['phone', '手机号'], ['skill', '技能'], ['joinDate', '入职日期'], ['birthMonth', '出生年月'], ['position', '职位'], ['employmentStatus', '在岗状态']]
+            .forEach(function (item) {
+              if (!Object.prototype.hasOwnProperty.call(match.source, item[0]) || match.source[item[0]] === '') return;
+              var label = node('label'); var checkbox = node('input'); checkbox.type = 'checkbox';
+              checkbox.checked = true; checkbox.className = 'profile-import-field';
+              checkbox.dataset.index = match.index; checkbox.dataset.field = item[0];
+              label.appendChild(checkbox); label.appendChild(node('span', '', item[1] + '：' + match.source[item[0]])); fields.appendChild(label);
+            });
+          card.appendChild(fields); result.appendChild(card);
+        });
+        (data.conflicts || []).forEach(function (item) { result.appendChild(node('div', 'management-warning', '同名冲突：' + (item.source.name || ('第 ' + (item.index + 1) + ' 条')) + '，请先在组织架构中消除重名歧义。')); });
+        (data.unmatched || []).forEach(function (item) { result.appendChild(node('div', 'management-warning', '未匹配：' + (item.source.name || ('第 ' + (item.index + 1) + ' 条')) + '，不会创建新人员。')); });
+        if (!(data.matches || []).length) return;
+        var confirm = node('button', 'btn', '确认导入勾选字段');
+        confirm.addEventListener('click', async function () {
+          var grouped = {};
+          result.querySelectorAll('.profile-import-field:checked').forEach(function (checkbox) {
+            if (!grouped[checkbox.dataset.index]) grouped[checkbox.dataset.index] = [];
+            grouped[checkbox.dataset.index].push(checkbox.dataset.field);
+          });
+          var selections = Object.keys(grouped).map(function (index) { return { index: Number(index), fields: grouped[index] }; });
+          if (!selections.length) return showMessage(dialog.box, '请至少勾选一个字段', true);
+          confirm.disabled = true;
+          var saved = await window.WorkforceAPI.importProfilesConfirm(payload, selections);
+          if (!saved || saved.ok === false) {
+            showMessage(dialog.box, saved && saved.error || '导入失败', true); confirm.disabled = false; return;
+          }
+          var summary = saved.data && saved.data.summary || {};
+          showMessage(dialog.box, (saved.data && saved.data.already_imported ? '该版本已导入过；' : '导入完成；') + '更新 ' + (summary.updated || 0) + ' 人。');
+          loaded.organization = false;
+        });
+        result.appendChild(confirm);
+      } catch (error) { showMessage(dialog.box, error.message, true); }
+      finally { preview.disabled = false; }
+    });
   }
   function renderSettings() {
     var target = panel('settings'); empty(target);
@@ -606,6 +724,9 @@
     var community = node('button', 'card management-setting', '小区管理');
     community.addEventListener('click', function () { if (typeof window.openCommunityModal === 'function') window.openCommunityModal(); });
     links.appendChild(community);
+    var profileImport = node('button', 'card management-setting', '导入旧人员资料');
+    profileImport.addEventListener('click', openProfileImport);
+    links.appendChild(profileImport);
     var intervals = [1, 3, 5, 10, 15, 30, 60, 0].map(function (minutes) {
       return { value: minutes, label: minutes ? minutes + ' 分钟' : '关闭推送' };
     });

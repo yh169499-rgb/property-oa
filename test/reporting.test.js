@@ -13,7 +13,8 @@ async function fixture() {
       id TEXT PRIMARY KEY, type TEXT DEFAULT 'repair', cat TEXT DEFAULT '',
       status TEXT DEFAULT 'wait', priority TEXT DEFAULT 'normal',
       created TEXT NOT NULL, finished TEXT DEFAULT '', estimated_hours REAL DEFAULT 0,
-      community_id TEXT DEFAULT 'default'
+      community_id TEXT DEFAULT 'default', reject_reason TEXT DEFAULT '',
+      is_recurring INTEGER DEFAULT 0, feedback_count INTEGER DEFAULT 1
     );
     CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, password TEXT, role TEXT);
   `);
@@ -46,11 +47,12 @@ test('人员报告按接单和完成双口径统计，考勤只数现有记录',
   const db = await fixture();
   db.run(`
     INSERT INTO tickets
-      (id, status, created, assigned_at, finished, estimated_hours, assignee_user_id)
+      (id, cat, status, created, assigned_at, finished, estimated_hours,
+       assignee_user_id, reject_reason, is_recurring, feedback_count)
     VALUES
-      ('old-received', 'done', '2026-06-10T00:00:00Z', '2026-06-20T00:00:00Z', '2026-07-03T00:00:00Z', 400, 3),
-      ('received', 'doing', '2026-07-04T00:00:00Z', '2026-07-05T00:00:00Z', '', 0, 3),
-      ('both', 'done', '2026-07-09T00:00:00Z', '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z', 3, 3);
+      ('old-received', '水暖', 'done', '2026-06-10T00:00:00Z', '2026-06-20T00:00:00Z', '2026-07-03T00:00:00Z', 400, 3, '', 0, 1),
+      ('received', '电路', 'doing', '2026-07-04T00:00:00Z', '2026-07-05T00:00:00Z', '', 0, 3, '曾退回', 1, 3),
+      ('both', '电路', 'done', '2026-07-09T00:00:00Z', '2026-07-10T00:00:00Z', '2026-07-10T02:00:00Z', 3, 3, '', 0, 1);
     INSERT INTO attendance_records (staff_id, work_date, status) VALUES
       (3, '2026-07-02', 'normal'), (3, '2026-07-03', 'late');
   `);
@@ -61,6 +63,10 @@ test('人员报告按接单和完成双口径统计，考勤只数现有记录',
   assert.equal(report.completed.onTimeRate, 100);
   assert.equal(report.attendance.actualDays, 2);
   assert.equal(report.attendance.late, 1);
+  assert.deepEqual(report.categories, [{ category: '电路', total: 2 }]);
+  assert.equal(report.current.returned, 1);
+  assert.equal(report.recurrence.total, 1);
+  assert.equal(report.feedback.multiple, 1);
 });
 
 test('主管个人动作只计本人，团队成果递归下级且排除树外', async () => {

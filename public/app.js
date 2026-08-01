@@ -1338,87 +1338,8 @@ function rejectRegistration(id) {
 }
 
 function showReport(){
-  // 弹出选择面板
-  var now = new Date();
-  var todayStr = now.toISOString().slice(0, 10);
-  var weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-  var monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-
-  $('#drawer-title').textContent = '📋 生成工单报告';
-  $('#drawer-sub').textContent = '选择报告周期';
-  $('#drawer-body').innerHTML = `
-    <div class="drawer-section">
-      <h4>选择报告周期</h4>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-        <button class="btn" onclick="generateReport('${todayStr}','${todayStr}')">📅 今日</button>
-        <button class="btn" onclick="generateReport('${weekAgo}','${todayStr}')">📅 本周（近7天）</button>
-        <button class="btn" onclick="generateReport('${monthStart}','${todayStr}')">📅 本月</button>
-      </div>
-      <h4>自定义时间段</h4>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-        <input type="date" id="report-from" value="${monthStart}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px">
-        <span>至</span>
-        <input type="date" id="report-to" value="${todayStr}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px">
-        <button class="btn" onclick="generateReport($('#report-from').value,$('#report-to').value)">生成</button>
-      </div>
-    </div>`;
-  $('#drawerMask').classList.add('open'); $('#drawer').classList.add('open');
-}
-
-function generateReport(from, to) {
-  if (!from || !to) { toast('请选择日期范围'); return; }
-  fetch(API_BASE + '/api/report?from=' + from + '&to=' + to + '&community_id=' + encodeURIComponent(currentCommunity)).then(r => r.json()).then(d => {
-    if (!d.success) { toast('生成报告失败'); return; }
-    $('#drawer-title').textContent = '📋 工单报告';
-    $('#drawer-sub').textContent = d.from + ' ~ ' + d.to;
-    $('#drawer-body').innerHTML = `
-      <div class="drawer-section">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <button class="btn sm ghost" onclick="showReport()">← 重新选择周期</button>
-          <button class="btn sm" onclick="copyReport()">📋 复制</button>
-          <button class="btn sm" onclick="downloadReportWord()">📄 下载Word</button>
-          <button class="btn sm" onclick="printReport()">🖨 下载PDF</button>
-        </div>
-        <pre style="white-space:pre-wrap;font-size:13px;line-height:1.8;font-family:inherit">${d.report.replace(/</g, '&lt;')}</pre>
-      </div>`;
-    window._lastReport = d.report;
-  }).catch(() => { toast('网络错误'); });
-}
-function copyReport(){
-  if(!window._lastReport)return;
-  navigator.clipboard.writeText(window._lastReport).then(()=>toast('已复制到剪贴板')).catch(()=>{
-    var ta=document.createElement('textarea');ta.value=window._lastReport;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('已复制');
-  });
-}
-
-function downloadReportWord() {
-  if (!window._lastReport) return;
-  var content = window._lastReport.replace(/\n/g, '<br>');
-  var html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>工单报告</title>
-<style>body{font-family:"Microsoft YaHei",sans-serif;font-size:14px;line-height:2;padding:40px;}</style>
-</head><body>${content}</body></html>`;
-  var blob = new Blob(['\ufeff' + html], { type: 'application/msword' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = '工单报告_' + new Date().toISOString().slice(0, 10) + '.doc';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  toast('Word 文件已下载');
-}
-
-function printReport() {
-  if (!window._lastReport) return;
-  var win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>工单报告</title>
-<style>body{font-family:"Microsoft YaHei",sans-serif;font-size:14px;line-height:2;padding:40px;white-space:pre-wrap;}
-@media print{body{padding:20px;}}</style>
-</head><body>${window._lastReport.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</body></html>`);
-  win.document.close();
-  setTimeout(function() { win.print(); }, 300);
+  navTo('management');
+  if (window.ManagementWorkspace) window.ManagementWorkspace.activate('reports');
 }
 
 window.onload=async function(){

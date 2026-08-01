@@ -19,26 +19,47 @@
     var completed = report.completed || {};
     var current = report.current || {};
     var attendance = report.attendance || {};
+    var recurrence = report.recurrence || {};
+    var feedback = report.feedback || {};
+    var categories = report.categories || [];
     return [
       '人员工作报告',
-      '人员：' + (staff.name || '-') + (staff.position ? '（' + staff.position + '）' : ''),
+      '报告人员：' + (staff.name || '-') + (staff.position ? '（' + staff.position + '）' : ''),
       '日期：' + (filters.from || range.from || '-') + ' 至 ' + (filters.to || range.to || '-'),
       '小区：' + (filters.community_name || filters.community_id || '全部小区'),
-      '工单口径：接单按 assigned_at（缺失时使用 created）；完工按完成时间统计',
+      '接单口径：按 assigned_at 统计，缺失时使用 created',
+      '完成口径：按完成时间统计，不要求工单在本期接收',
       '接收工单：' + value(received.total, ' 单'),
       '完成工单：' + value(completed.total, ' 单') + '；平均用时 ' + value(completed.averageHours, ' 小时') + '；按时率 ' + value(completed.onTimeRate, '%'),
-      '当前工单：处理中 ' + value(current.doing, ' 单') + '；待处理 ' + value(current.pending, ' 单'),
+      '工单状态：处理中 ' + value(current.doing, ' 单') + '；搁置 ' + value(current.pending, ' 单') + '；待派单 ' + value(current.waiting, ' 单') + '；期间退回 ' + value(current.returned, ' 单'),
+      '异常关注：复发 ' + value(recurrence.total, ' 单') + '；多人反馈 ' + value(feedback.multiple, ' 单'),
+      '分类分布：' + (categories.length ? categories.map(function (item) { return item.category + ' ' + item.total + ' 单'; }).join('；') : '无'),
       '考勤：实际 ' + value(attendance.actualDays, ' 天') + '；正常 ' + value(attendance.normal, ' 天') + '；迟到 ' + value(attendance.late, ' 天') + '；早退 ' + value(attendance.early, ' 天') + '；请假 ' + value(attendance.leave, ' 天') + '；缺勤 ' + value(attendance.absent, ' 天') + '；缺卡 ' + value(attendance.missing, ' 天'),
       '生成时间：' + new Date().toLocaleString('zh-CN', { hour12: false }),
     ].join('\n');
   }
 
   function reportHtml(report, filters) {
-    var lines = reportText(report, filters).split('\n');
+    var staff = report.staff || {}, received = report.received || {};
+    var completed = report.completed || {}, current = report.current || {};
+    var attendance = report.attendance || {}, categories = report.categories || [];
+    var recurrence = report.recurrence || {}, feedback = report.feedback || {};
     return '<article class="staff-report-document">' +
-      '<h2>' + escapeHtml(lines.shift()) + '</h2>' +
-      lines.map(function (line) { return '<p>' + escapeHtml(line) + '</p>'; }).join('') +
-      '</article>';
+      '<div class="staff-report-head"><div><span>人员工作报告</span><h2>' + escapeHtml(staff.name || '-') + '</h2><p>' +
+      escapeHtml((staff.position || '员工') + ' · ' + (filters.from || '-') + ' 至 ' + (filters.to || '-')) +
+      '</p></div><strong>' + escapeHtml(filters.community_name || filters.community_id || '全部小区') + '</strong></div>' +
+      '<div class="staff-report-metrics">' +
+      [['期间接单', received.total, '单'], ['期间完成', completed.total, '单'],
+        ['平均时长', completed.averageHours, '小时'], ['SLA 按时率', completed.onTimeRate, '%'],
+        ['处理中', current.doing, '单'], ['搁置中', current.pending, '单'],
+        ['期间退回', current.returned, '单'], ['复发 / 多人反馈', value(recurrence.total) + ' / ' + value(feedback.multiple), '单']]
+        .map(function (item) { return '<div><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(value(item[1])) + '</strong><small>' + escapeHtml(item[2]) + '</small></div>'; }).join('') +
+      '</div><div class="staff-report-sections"><section><h3>分类分布</h3>' +
+      (categories.length ? categories.map(function (item) { return '<p><span>' + escapeHtml(item.category) + '</span><strong>' + escapeHtml(item.total) + ' 单</strong></p>'; }).join('') : '<p>暂无接单</p>') +
+      '</section><section><h3>实际考勤</h3><p>出勤记录 <strong>' + value(attendance.actualDays, ' 天') +
+      '</strong></p><p>正常 / 迟到 / 早退 <strong>' + value(attendance.normal) + ' / ' + value(attendance.late) + ' / ' + value(attendance.early) +
+      '</strong></p><p>请假 / 缺勤 / 缺卡 <strong>' + value(attendance.leave) + ' / ' + value(attendance.absent) + ' / ' + value(attendance.missing) +
+      '</strong></p></section></div><div class="staff-report-basis"><p>接单口径：按 assigned_at 统计，缺失时使用 created。</p><p>完成口径：按完成时间统计，不要求工单在本期接收。</p><p>生成时间：' + escapeHtml(new Date().toLocaleString('zh-CN', { hour12: false })) + '</p></div></article>';
   }
 
   function copy(report, filters) {
@@ -93,6 +114,7 @@
   function load(container, staffId, filters) {
     container.innerHTML = '<div class="management-state">报告生成中…</div>';
     return root.WorkforceAPI.staffReport(staffId, filters || {}).then(function (response) {
+      if (!response || response.ok === false) throw new Error(response && response.error || '报告生成失败');
       return render(container, response.data || response, filters || {});
     }).catch(function (error) {
       container.innerHTML = '<div class="management-state">' + escapeHtml(error.message || '报告生成失败') + '</div>';

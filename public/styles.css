@@ -1155,3 +1155,34 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
 .calendar-agenda-event.conflict { border-color:#fca5a5; background:#fef2f2; }
 .calendar-available { padding:12px; border-radius:8px; color:#166534; background:#f0fdf4; font-size:12px; }
 @media (max-width:767px) { .calendar-day-grid { display:none; } .management-calendar { padding:0; border:0; background:transparent; } }
+
+/* ========== 人员报告与旧资料导入 ========== */
+.staff-report-toolbar { padding:14px; border:1px solid var(--hairline); border-radius:12px; background:var(--card); }
+.staff-report-output { min-height:220px; padding:20px; }
+.staff-report-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding-bottom:18px; border-bottom:1px solid var(--hairline); }
+.staff-report-head span,.staff-report-head p { color:var(--text-2); font-size:12px; }
+.staff-report-head h2,.staff-report-head p { margin:4px 0; }
+.staff-report-head > strong { padding:7px 10px; border-radius:999px; color:#0b4f8a; background:#eff6ff; font-size:12px; }
+.staff-report-metrics { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; margin:18px 0; }
+.staff-report-metrics > div { display:grid; grid-template-columns:1fr auto; align-items:end; gap:4px; padding:13px; border-radius:10px; background:var(--bg); }
+.staff-report-metrics span { grid-column:1 / -1; color:var(--text-2); font-size:12px; }
+.staff-report-metrics strong { color:#0b4f8a; font-size:22px; }
+.staff-report-metrics small { color:var(--text-2); }
+.staff-report-sections { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.staff-report-sections section { padding:15px; border:1px solid var(--hairline); border-radius:10px; }
+.staff-report-sections h3 { margin:0 0 10px; font-size:14px; }
+.staff-report-sections p { display:flex; justify-content:space-between; gap:12px; margin:7px 0; color:var(--text-2); font-size:12px; }
+.staff-report-basis { margin-top:15px; padding:12px; border-radius:8px; background:#f8fafc; color:var(--text-2); font-size:11px; }
+.staff-report-basis p { margin:4px 0; }
+.staff-report-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+.management-help { color:var(--text-2); font-size:12px; line-height:1.6; }
+.profile-import-source { width:100%; min-height:180px; resize:vertical; border:1px solid var(--hairline-strong); border-radius:8px; padding:10px; font:12px/1.5 ui-monospace,monospace; }
+.profile-import-result { display:grid; gap:10px; margin:14px 0; }
+.profile-import-match { padding:12px; border:1px solid var(--hairline); border-radius:10px; }
+.profile-import-fields { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
+.profile-import-fields label { display:inline-flex; align-items:center; gap:5px; margin:0; padding:5px 8px; border-radius:7px; background:var(--bg); font-size:11px; }
+@media (max-width:768px) {
+  .staff-report-metrics { grid-template-columns:repeat(2,minmax(110px,1fr)); }
+  .staff-report-sections { grid-template-columns:1fr; }
+  .staff-report-head { flex-direction:column; }
+}

@@ -38,7 +38,7 @@ function fail(res, error) {
       code: error.code,
     });
   }
-  return res.status(500).json({ error: '内部服务器错误', code: 'INTERNAL_ERROR' });
+  return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
 }
 
 function ownProfile(profiles, userId) {

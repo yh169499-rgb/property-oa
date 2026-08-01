@@ -161,9 +161,38 @@ function reportForStaffIds(db, staffIds, filters = {}) {
     ? '0'
     : `t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${placeholders}))`;
   const baseParams = [...ids, ...community.params];
+  const columns = ticketColumns(db);
 
   const received = one(db, `
     SELECT COUNT(*) total
+      FROM tickets t
+     WHERE ${staffPredicate}${community.sql}
+       AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
+       AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?`,
+  [...baseParams, range.from, range.toExclusive]);
+
+  const categoryExpression = columns.has('cat')
+    ? "COALESCE(NULLIF(t.cat, ''), '其他')" : "'其他'";
+  const categories = rows(db, `
+    SELECT ${categoryExpression} category, COUNT(*) total
+      FROM tickets t
+     WHERE ${staffPredicate}${community.sql}
+       AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
+       AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?
+     GROUP BY ${categoryExpression}
+     ORDER BY total DESC, category`,
+  [...baseParams, range.from, range.toExclusive]).map((item) => ({
+    category: item.category,
+    total: Number(item.total || 0),
+  }));
+  const recurringCondition = columns.has('is_recurring') ? 'COALESCE(t.is_recurring, 0) = 1' : '0';
+  const feedbackCondition = columns.has('feedback_count') ? 'COALESCE(t.feedback_count, 1) > 1' : '0';
+  const returnedCondition = columns.has('reject_reason') ? "COALESCE(t.reject_reason, '') <> ''" : '0';
+  const periodSignals = one(db, `
+    SELECT
+      SUM(CASE WHEN ${recurringCondition} THEN 1 ELSE 0 END) recurring,
+      SUM(CASE WHEN ${feedbackCondition} THEN 1 ELSE 0 END) feedback,
+      SUM(CASE WHEN ${returnedCondition} THEN 1 ELSE 0 END) returned
       FROM tickets t
      WHERE ${staffPredicate}${community.sql}
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
@@ -184,7 +213,8 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const current = one(db, `
     SELECT
       SUM(CASE WHEN t.status = 'doing' THEN 1 ELSE 0 END) doing,
-      SUM(CASE WHEN t.status IN ('pending', 'wait') THEN 1 ELSE 0 END) pending
+      SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) pending,
+      SUM(CASE WHEN t.status = 'wait' THEN 1 ELSE 0 END) waiting
       FROM tickets t WHERE ${staffPredicate}${community.sql}`,
   baseParams);
   const attendanceRows = noStaff ? [] : rows(db, `
@@ -209,7 +239,15 @@ function reportForStaffIds(db, staffIds, filters = {}) {
       averageHours: metrics.averageHours,
       onTimeRate: metrics.onTimeRate,
     },
-    current: { doing: Number(current.doing || 0), pending: Number(current.pending || 0) },
+    current: {
+      doing: Number(current.doing || 0),
+      pending: Number(current.pending || 0),
+      waiting: Number(current.waiting || 0),
+      returned: Number(periodSignals.returned || 0),
+    },
+    recurrence: { total: Number(periodSignals.recurring || 0) },
+    feedback: { multiple: Number(periodSignals.feedback || 0) },
+    categories,
     attendance,
   };
 }
