@@ -27,12 +27,31 @@
     return encodeURIComponent(normalized);
   }
 
+  function pad2(value) { return String(value).padStart(2, '0'); }
+  function localDateKey(date) {
+    var value = date instanceof Date ? date : new Date(date);
+    return value.getFullYear() + '-' + pad2(value.getMonth() + 1) + '-' + pad2(value.getDate());
+  }
+  function sameDay(first, second) {
+    return first.getFullYear() === second.getFullYear()
+      && first.getMonth() === second.getMonth()
+      && first.getDate() === second.getDate();
+  }
+
   return {
     isNarrowViewport: function (width) {
       return Number(width) <= 767;
     },
     periodLabel: function (period) {
       return PERIOD_LABELS[period] || period || '';
+    },
+    selectCalendarView: function (width) {
+      return Number(width) <= 767 ? 'agenda' : 'day-grid';
+    },
+    localDateKey: localDateKey,
+    sameDay: sameDay,
+    fmtHM: function (date) {
+      return pad2(date.getHours()) + ':' + pad2(date.getMinutes());
     },
     withQuery: withQuery,
     requiredPathSegment: requiredPathSegment
