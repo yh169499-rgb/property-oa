@@ -824,7 +824,7 @@ let reminderInterval = 0; // 默认关闭推送
 let reminderTimer = null;
 
 // 句子秒懂直接发消息 API 配置
-const JZMM_MSG_TOKEN = process.env.JZMM_MSG_TOKEN || 'd12195ec829f4bc7a84849e79f1c0bc7';
+const JZMM_MSG_TOKEN = process.env.JZMM_MSG_TOKEN || '';
 const JZMM_IM_BOT_ID = process.env.JZMM_IM_BOT_ID || '6a5a1834766986bb5adc5761';
 const JZMM_ALERT_ROOM_ID = process.env.JZMM_ALERT_ROOM_ID || 'R:10856729056671822';
 const JZMM_MANAGER_CONTACT_ID = process.env.JZMM_MANAGER_CONTACT_ID || '7881302262050947';

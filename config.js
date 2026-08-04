@@ -22,7 +22,8 @@ module.exports = {
   UPLOAD_DIR: path.join(__dirname, 'uploads'),
 
   // JWT
-  JWT_SECRET: process.env.JWT_SECRET || 'property-oa-secret-2026',
+  // 生产环境必须通过 JWT_SECRET 注入；仅保留无敏感信息的本地开发占位值。
+  JWT_SECRET: process.env.JWT_SECRET || 'local-development-only',
   JWT_EXPIRES: '7d',
   JWT_EXPIRES_LONG: '30d',
 
@@ -34,7 +35,7 @@ module.exports = {
   JZMM_EVENT_ID: process.env.JZMM_EVENT_ID || 'a277efc6-025f-41cd-8888-43e3a8e8e28f',
   JZMM_SESSION_ID: process.env.JZMM_SESSION_ID || '6a5a19ebce406a6aee929fe0',
   JZMM_ALERT_SESSION_ID: process.env.JZMM_ALERT_SESSION_ID || process.env.JZMM_SESSION_ID || '6a5a19ebce406a6aee929fe0',
-  JZMM_MSG_TOKEN: process.env.JZMM_MSG_TOKEN || 'd12195ec829f4bc7a84849e79f1c0bc7',
+  JZMM_MSG_TOKEN: process.env.JZMM_MSG_TOKEN || '',
   JZMM_IM_BOT_ID: process.env.JZMM_IM_BOT_ID || '6a5a1834766986bb5adc5761',
   JZMM_ALERT_ROOM_ID: process.env.JZMM_ALERT_ROOM_ID || 'R:10856729056671822',
   JZMM_MANAGER_CONTACT_ID: process.env.JZMM_MANAGER_CONTACT_ID || '7881302262050947',
