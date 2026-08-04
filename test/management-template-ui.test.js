@@ -14,3 +14,9 @@ test('settings workspace exposes shift template CRUD controls', () => {
   assert.match(source, /DELETE.*\/api\/shift-templates|\/api\/shift-templates\/'.*DELETE/s);
   assert.match(source, /SHIFT_TEMPLATE_IN_USE/);
 });
+
+test('attendance workspace exposes a delete action for existing records', () => {
+  assert.match(source, /删除记录/);
+  assert.match(source, /\/api\/attendance\//);
+  assert.match(source, /method:\s*'DELETE'/);
+});

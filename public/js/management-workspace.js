@@ -556,7 +556,7 @@
     var summary = node('div', 'manager-today-grid');
     var detail = node('div', 'management-list card');
     target.appendChild(summary); target.appendChild(detail);
-    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；此处只读展示已有考勤记录。'));
+    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；可删除错误的考勤记录。'));
     async function refresh() {
       empty(summary); empty(detail);
       try {
@@ -575,6 +575,21 @@
           var row = node('div', 'management-list-row');
           row.appendChild(node('strong', '', person.name));
           row.appendChild(node('span', '', person.attendance ? person.attendance.status : '暂无记录'));
+          if (person.attendance) {
+            var remove = node('button', 'btn danger sm', '删除记录');
+            remove.addEventListener('click', async function () {
+              if (!window.confirm('确认删除 ' + person.name + ' 在 ' + date.value + ' 的考勤记录？')) return;
+              remove.disabled = true;
+              try {
+                await request('/api/attendance/' + person.attendance.id, { method: 'DELETE' });
+                await refresh();
+              } catch (error) {
+                showMessage(detail, error.message || '考勤删除失败', true);
+                remove.disabled = false;
+              }
+            });
+            row.appendChild(remove);
+          }
           detail.appendChild(row);
         });
       } catch (error) { showMessage(detail, error.message, true); }
