@@ -112,8 +112,10 @@ function buildDayCalendar(db, {
   const selectedIds = selected.map((profile) => Number(profile.id));
   const shifts = selectedIds.length ? queryAll(
     db,
-    `SELECT * FROM shift_assignments
-     WHERE work_date = ? AND staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
+    `SELECT a.*, t.name AS template_name, t.color AS template_color
+       FROM shift_assignments a
+       LEFT JOIN shift_templates t ON t.id = a.template_id
+      WHERE a.work_date = ? AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
     [date, ...selectedIds]
   ) : [];
   const attendance = selectedIds.length ? queryAll(
@@ -146,6 +148,9 @@ function buildDayCalendar(db, {
       shift: shift ? {
         id: Number(shift.id),
         assignmentType: shift.assignment_type,
+        templateId: shift.template_id === null ? null : Number(shift.template_id),
+        templateName: shift.template_name || '',
+        templateColor: shift.template_color || '',
         startAt: shift.start_at,
         endAt: shift.end_at,
         leaveType: shift.leave_type,

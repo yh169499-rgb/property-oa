@@ -175,3 +175,36 @@ test('ordinary user cannot write shift templates or assignments', async (t) => {
     assert.equal(response.status, 403);
   }
 });
+
+test('admin can delete unused templates but referenced templates are protected', async (t) => {
+  const db = await fixture();
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const headers = { ...authHeader({ id: 1, role: 'admin' }) };
+
+  const unused = await fetch(`${server.url}/api/shift-templates/20`, {
+    method: 'DELETE', headers,
+  });
+  assert.equal(unused.status, 200);
+  assert.equal(db.exec('SELECT id FROM shift_templates WHERE id = 20').length, 0);
+
+  createAssignment(db, {
+    staffId: 10, workDate: '2026-07-30', assignmentType: 'work', templateId: 21,
+  }, 1);
+  const referenced = await fetch(`${server.url}/api/shift-templates/21`, {
+    method: 'DELETE', headers,
+  });
+  assert.equal(referenced.status, 409);
+  assert.equal((await referenced.json()).code, 'SHIFT_TEMPLATE_IN_USE');
+  assert.equal(db.exec('SELECT id FROM shift_templates WHERE id = 21').length, 1);
+});
+
+test('ordinary user cannot delete shift templates', async (t) => {
+  const db = await fixture();
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const response = await fetch(`${server.url}/api/shift-templates/20`, {
+    method: 'DELETE', headers: authHeader({ id: 2, role: 'worker' }),
+  });
+  assert.equal(response.status, 403);
+});
