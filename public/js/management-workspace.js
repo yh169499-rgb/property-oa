@@ -92,6 +92,13 @@
     var container = root();
     if (!container || container.dataset.ready) return;
     container.dataset.ready = 'true';
+    var hero = node('section', 'management-hero');
+    var heroCopy = node('div');
+    heroCopy.appendChild(node('span', 'management-eyebrow', '运营控制中心'));
+    heroCopy.appendChild(node('h2', '', '管理工作台'));
+    heroCopy.appendChild(node('p', '', '统一管理组织、排班、考勤、审核、报告与系统设置。'));
+    hero.appendChild(heroCopy);
+    container.appendChild(hero);
     var tabs = node('div', 'management-tabs');
     MANAGEMENT_TABS.forEach(function (tab) {
       var button = node('button', 'management-tab' + (tab === activeTab ? ' active' : ''), TAB_LABELS[tab]);
