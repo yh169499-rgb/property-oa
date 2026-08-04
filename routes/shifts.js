@@ -1,0 +1,167 @@
+const express = require('express');
+const router = express.Router();
+const database = require('../db');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
+const {
+  resolveShiftWindow,
+  validateAssignment,
+  createAssignment,
+  createBatchAssignments,
+  updateAssignment,
+  listAssignments,
+} = require('../services/shifts');
+
+function sendError(res, error) {
+  res.status(error.status || 400).json({
+    error: error.message || '请求失败',
+    code: error.code || 'INVALID_REQUEST',
+    ...(error.details ? { details: error.details } : {}),
+  });
+}
+
+function one(sql, params) {
+  const stmt = database.getDB().prepare(sql);
+  stmt.bind(params || []);
+  const row = stmt.step() ? stmt.getAsObject() : null;
+  stmt.free();
+  return row;
+}
+
+function all(sql, params) {
+  const stmt = database.getDB().prepare(sql);
+  stmt.bind(params || []);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+function patchValue(body, camelKey, snakeKey, fallback) {
+  if (Object.prototype.hasOwnProperty.call(body, camelKey)) return body[camelKey];
+  if (Object.prototype.hasOwnProperty.call(body, snakeKey)) return body[snakeKey];
+  return fallback;
+}
+
+function templateInput(body, current = {}) {
+  const value = {
+    name: body.name ?? current.name,
+    startTime: body.startTime ?? body.start_time ?? current.start_time,
+    endTime: body.endTime ?? body.end_time ?? current.end_time,
+    color: body.color ?? current.color ?? '',
+    graceMinutes: body.graceMinutes ?? body.grace_minutes ?? current.grace_minutes ?? 5,
+  };
+  try {
+    resolveShiftWindow('2000-01-01', value.startTime, value.endTime);
+  } catch {
+    value.invalidTime = true;
+  }
+  if (!value.name || value.invalidTime
+      || !Number.isInteger(Number(value.graceMinutes)) || Number(value.graceMinutes) < 0) {
+    const error = new Error('班次模板参数无效');
+    error.code = 'INVALID_SHIFT_TEMPLATE';
+    error.status = 400;
+    throw error;
+  }
+  return value;
+}
+
+router.get('/shift-templates', requireAuth, (req, res) => {
+  res.json({ data: all('SELECT * FROM shift_templates ORDER BY id') });
+});
+
+router.post('/shift-templates', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const value = templateInput(req.body);
+    database.run(
+      `INSERT INTO shift_templates
+       (name, start_time, end_time, color, grace_minutes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [value.name, value.startTime, value.endTime, value.color,
+        Number(value.graceMinutes), req.user.id]
+    );
+    database.saveDB();
+    res.status(201).json({ data: one('SELECT * FROM shift_templates WHERE id = last_insert_rowid()') });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.patch('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const current = one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]);
+    if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
+    const value = templateInput(req.body, current);
+    database.run(
+      `UPDATE shift_templates SET name = ?, start_time = ?, end_time = ?,
+       color = ?, grace_minutes = ? WHERE id = ?`,
+      [value.name, value.startTime, value.endTime, value.color,
+        Number(value.graceMinutes), req.params.id]
+    );
+    database.saveDB();
+    res.json({ data: one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.get('/shifts', requireAuth, (req, res) => {
+  try {
+    res.json({ data: listAssignments(database.getDB(), req.query) });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/shifts', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const row = createAssignment(database.getDB(), req.body, req.user.id);
+    database.saveDB();
+    res.status(201).json({ data: row });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/shifts/batch', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const rows = createBatchAssignments(database.getDB(), req.body, req.user.id);
+    database.saveDB();
+    res.status(201).json({ data: rows });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.patch('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const current = one('SELECT * FROM shift_assignments WHERE id = ?', [req.params.id]);
+    if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
+    const value = validateAssignment({
+      staffId: patchValue(req.body, 'staffId', 'staff_id', current.staff_id),
+      workDate: patchValue(req.body, 'workDate', 'work_date', current.work_date),
+      assignmentType: patchValue(
+        req.body, 'assignmentType', 'assignment_type', current.assignment_type
+      ),
+      templateId: patchValue(req.body, 'templateId', 'template_id', current.template_id),
+      startAt: patchValue(req.body, 'startAt', 'start_at', current.start_at),
+      endAt: patchValue(req.body, 'endAt', 'end_at', current.end_at),
+      leaveType: patchValue(req.body, 'leaveType', 'leave_type', current.leave_type),
+      note: req.body.note ?? current.note,
+    });
+    const updated = updateAssignment(database.getDB(), current.id, value, req.user.id);
+    database.saveDB();
+    res.json({ data: updated });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.delete('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
+  const current = one('SELECT id FROM shift_assignments WHERE id = ?', [req.params.id]);
+  if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
+  database.run('DELETE FROM shift_assignments WHERE id = ?', [req.params.id]);
+  database.saveDB();
+  res.json({ success: true });
+});
+
+module.exports = router;

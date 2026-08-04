@@ -1,0 +1,34 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const publicDir = path.join(__dirname, '..', 'public');
+const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+const workspace = fs.readFileSync(
+  path.join(publicDir, 'js', 'management-workspace.js'),
+  'utf8'
+);
+
+test('legacy admin and schedule pages are not navigation targets', () => {
+  assert.doesNotMatch(html, /id="page-admin"/);
+  assert.doesNotMatch(html, /id="page-schedule"/);
+  assert.doesNotMatch(html, /showPage\(['"]schedule/);
+  assert.doesNotMatch(app, /#page-(?:admin|schedule)/);
+});
+
+test('management tabs create their own registration and settings mounts', () => {
+  assert.match(workspace, /mount\.id = 'pending-reg-list'/);
+  assert.match(workspace, /count\.id = 'pending-count'/);
+  assert.match(workspace, /reminder-interval/);
+  assert.match(workspace, /sla-interval/);
+  assert.doesNotMatch(workspace, /appendChild\(legacy/);
+  assert.doesNotMatch(workspace, /legacy-management-settings/);
+});
+
+test('schedule date and staff changes reload filtered assignments', () => {
+  assert.match(workspace, /date\.addEventListener\('change', refresh\)/);
+  assert.match(workspace, /staff\.addEventListener\('change', refresh\)/);
+  assert.match(workspace, /staff_id=/);
+});

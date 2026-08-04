@@ -4,8 +4,27 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const router = express.Router();
-const { queryAll, queryOne, run, saveDB } = require('../db');
+const { queryAll, queryOne, run, saveDB, getDB } = require('../db');
 const config = require('../config');
+const { descendantIds } = require('../services/organization');
+const { getStaffReport, completionExpression } = require('../services/reporting');
+
+const REPORT_BUSINESS_ERRORS = new Set([
+  'PROFILE_NOT_FOUND',
+  'REPORT_SCOPE_FORBIDDEN',
+  'INVALID_DATE_RANGE',
+  'INVALID_STAFF_ID',
+]);
+
+function reportError(res, error) {
+  if (REPORT_BUSINESS_ERRORS.has(error.code)) {
+    return res.status(error.status || 400).json({
+      error: error.message || '请求失败',
+      code: error.code,
+    });
+  }
+  return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
+}
 
 // ============ 句子秒懂 Token ============
 let cachedAccessToken = null;
@@ -128,14 +147,46 @@ router.get('/sla/alert', async (req, res) => {
 
 // GET /api/report
 router.get('/report', (req, res) => {
+  if (req.query.staff_id !== undefined && req.query.staff_id !== '') {
+    try {
+      if (!req.user) {
+        return res.status(401).json({
+          error: '未登录或 token 已过期',
+          code: 'AUTH_REQUIRED',
+        });
+      }
+      const profiles = queryAll('SELECT id, user_id, manager_id FROM staff_profiles');
+      const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
+      if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
+      const target = Number(req.query.staff_id);
+      const allowed = req.user.role === 'admin'
+        || target === Number(own.id)
+        || (req.user.role === 'lead'
+          && descendantIds(profiles, own.id).map(Number).includes(target));
+      if (!allowed) {
+        return res.status(403).json({ error: '无权查看该人员', code: 'REPORT_SCOPE_FORBIDDEN' });
+      }
+      const data = getStaffReport(require('../db').getDB(), target, {
+        from: req.query.from,
+        to: req.query.to,
+        communityId: req.query.community_id,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return reportError(res, error);
+    }
+  }
   const from = req.query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
   const to = req.query.to || new Date().toISOString();
   const communityId = req.query.community_id;
-  let all = communityId ? queryAll("SELECT * FROM tickets WHERE community_id = ?", [communityId]) : queryAll("SELECT * FROM tickets");
+  const completion = completionExpression(getDB());
+  let all = communityId
+    ? queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t WHERE community_id = ?`, [communityId])
+    : queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t`);
   const fromDate = new Date(from), toDate = new Date(to);
   const inRange = all.filter(r => new Date(r.created) >= fromDate && new Date(r.created) <= toDate);
-  const done = inRange.filter(r => r.status === 'done' && r.finished);
-  const durations = done.map(r => (new Date(r.finished) - new Date(r.created)) / 3600000).filter(h => h > 0);
+  const done = inRange.filter(r => r.status === 'done' && r.report_finished);
+  const durations = done.map(r => (new Date(r.report_finished) - new Date(r.created)) / 3600000).filter(h => h > 0);
   const avgHours = durations.length ? +(durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1) : 0;
   const report = `工单报告 ${from.slice(0,10)} ~ ${to.slice(0,10)}\n总计 ${inRange.length} 张，已完成 ${done.length}，平均 ${avgHours}h`;
   res.json({ success: true, from: from.slice(0,10), to: to.slice(0,10), report, stats: { total: inRange.length, done: done.length, avgHours } });

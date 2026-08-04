@@ -128,20 +128,31 @@ function staffColor(name) {
    ============================================================ */
 function initNav() {
   $$('.nav button').forEach(b => {
-    b.onclick = () => {
-      $$('.nav button').forEach(x => x.classList.remove('active'));
-      b.classList.add('active');
-      $$('.page').forEach(p => p.classList.remove('active'));
-      $('#page-' + b.dataset.page).classList.add('active');
-      if (b.dataset.page === 'dashboard') setTimeout(function() {
-        // 销毁旧图表实例避免display:none时尺寸为0的问题
-        Object.keys(charts).forEach(function(k) { try { charts[k].dispose(); } catch(e) {} });
-        charts = {};
-        renderDashboard();
-      }, 50);
-      if (b.dataset.page === 'schedule') setTimeout(renderSchedule, 30);
-    };
+    b.onclick = () => showPage(b.dataset.page);
   });
+}
+
+function showPage(page, navPage) {
+  var target = $('#page-' + page);
+  if (!target) return false;
+  $$('.nav button').forEach(x => x.classList.remove('active'));
+  var activeNav = $$('.nav button').find(b => b.dataset.page === (navPage || page));
+  if (activeNav) activeNav.classList.add('active');
+  $$('.page').forEach(p => p.classList.remove('active'));
+  target.classList.add('active');
+  if (page === 'dashboard') setTimeout(function() {
+    // 销毁旧图表实例避免display:none时尺寸为0的问题
+    Object.keys(charts).forEach(function(k) { try { charts[k].dispose(); } catch(e) {} });
+    charts = {};
+    renderDashboard();
+  }, 50);
+  if (page === 'management' && window.ManagementWorkspace) {
+    setTimeout(window.ManagementWorkspace.init, 0);
+  }
+  if (page === 'my' && window.MyPage && typeof window.MyPage.init === 'function') {
+    setTimeout(function() { window.MyPage.init('month'); }, 0);
+  }
+  return true;
 }
 
 function navTo(page) {
@@ -198,25 +209,13 @@ function roleWorkerName() {
 function applyRoleView() {
   var isWorker = currentRole.startsWith('worker_');
   var isKeeper = currentRole.startsWith('pm_keeper_');
-  // 师傅/管家视图：隐藏管理平台和看板
+  // 师傅/管家视图：隐藏管理工作台和看板
   $$('.nav button').forEach(b => {
-    if (b.dataset.page === 'admin') b.style.display = (isWorker || isKeeper) ? 'none' : '';
+    if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
     if (b.dataset.page === 'dashboard') b.style.display = (isWorker || isKeeper) ? 'none' : '';
   });
   // 重新加载小区列表（按角色权限过滤）
   reloadCommunities();
-  // 重新初始化日程选择器（根据角色限制可见范围）
-  initSchedule();
-  // 更新日程页面标题和导航按钮文字
-  var schedTitle = document.querySelector('#page-schedule .page-title');
-  var schedNavBtn = $$('.nav button').find(b => b.dataset.page === 'schedule');
-  if (isWorker || isKeeper) {
-    if (schedTitle) schedTitle.textContent = '我的';
-    if (schedNavBtn) schedNavBtn.textContent = '👤 我的';
-  } else {
-    if (schedTitle) schedTitle.textContent = '师傅日程 · 排班与冲突检测';
-    if (schedNavBtn) schedNavBtn.textContent = '📅 师傅日程';
-  }
   // 切换到师傅视图时默认显示工单页
   if (isWorker) { navTo('repair'); }
   else if (isKeeper) { navTo('complaint'); }
@@ -817,7 +816,7 @@ function setupEnhancedUI() {
   if (!$('#kpi-help')) kpis.insertAdjacentHTML('beforeend', '<div class="kpi teal"><div class="label">帮助/其他</div><div class="value" id="kpi-help">—</div><div class="trend">生活帮助/咨询/协调/其他</div></div><div class="kpi orange"><div class="label">紧急待处理</div><div class="value" id="kpi-urgent">—</div><div class="trend">按紧急度与等待时间排序</div></div>');
   var grid = dash.querySelector('.chart-grid');
   if (!$('#chart-event-frequency')) grid.insertAdjacentHTML('beforeend', '<div class="chart-card chart-full"><h3>事件发生频率（全部工单）</h3><div class="chart-box" id="chart-event-frequency"></div></div><div class="chart-card performance-card"><h3>师傅 / 管家处理明细与表现</h3><div class="table-wrap"><table class="performance-table"><thead><tr><th>人员</th><th>处理过什么</th><th>总工单</th><th>已完成</th><th>处理中</th><th>平均时长</th><th>按时率</th><th>表现</th></tr></thead><tbody id="tbody-performance"></tbody></table></div></div>');
-  if (!$('#page-help')) $('#page-admin').insertAdjacentHTML('beforebegin', `<section class="page" id="page-help"><div class="page-title">帮助 / 其他工单</div><div class="page-sub">生活帮助、咨询建议、邻里协调及其他事项</div><div class="card"><div class="priority-legend"><b>优先级：</b><span><i class="priority-dot urgent"></i>紧急</span><span><i class="priority-dot high"></i>高</span><span><i class="priority-dot normal"></i>普通</span><span><i class="priority-dot low"></i>低</span><span>默认同级按等待时间从长到短</span></div><div class="toolbar"><select id="filter-status-help"></select><select id="filter-cat-help"></select><select id="filter-priority-help"></select><select id="sort-help"><option value="newest" selected>最新创建</option><option value="oldest">等待最久</option><option value="priority">紧急度优先</option></select><span class="spacer"></span><span class="count" id="count-help"></span></div><div class="table-wrap"><table><thead><tr><th>优先级</th><th>工单号</th><th>位置</th><th>状态</th><th>负责人</th><th>创建时间</th><th>已等待/处理时长</th></tr></thead><tbody id="tbody-help"></tbody></table></div></div></section>`);
+  if (!$('#page-help')) $('#page-management').insertAdjacentHTML('beforebegin', `<section class="page" id="page-help"><div class="page-title">帮助 / 其他工单</div><div class="page-sub">生活帮助、咨询建议、邻里协调及其他事项</div><div class="card"><div class="priority-legend"><b>优先级：</b><span><i class="priority-dot urgent"></i>紧急</span><span><i class="priority-dot high"></i>高</span><span><i class="priority-dot normal"></i>普通</span><span><i class="priority-dot low"></i>低</span><span>默认同级按等待时间从长到短</span></div><div class="toolbar"><select id="filter-status-help"></select><select id="filter-cat-help"></select><select id="filter-priority-help"></select><select id="sort-help"><option value="newest" selected>最新创建</option><option value="oldest">等待最久</option><option value="priority">紧急度优先</option></select><span class="spacer"></span><span class="count" id="count-help"></span></div><div class="table-wrap"><table><thead><tr><th>优先级</th><th>工单号</th><th>位置</th><th>状态</th><th>负责人</th><th>创建时间</th><th>已等待/处理时长</th></tr></thead><tbody id="tbody-help"></tbody></table></div></div></section>`);
   ['repair','complaint'].forEach(type => {
     var page = $('#page-' + type), toolbar = page.querySelector('.toolbar');
     if (!$('#filter-priority-' + type)) toolbar.querySelector('.spacer').insertAdjacentHTML('beforebegin', `<select id="filter-priority-${type}"></select><select id="sort-${type}"><option value="newest" selected>最新创建</option><option value="oldest">等待最久</option><option value="priority">紧急度优先</option></select>`);
@@ -988,6 +987,7 @@ function checkAssignConflicts(workerName, newTicket, estHours){
   return results;
 }
 function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
+function confirmDone(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可确认待审核工单');return;}t.status='done';t.finished=new Date().toISOString();pushStep(t,'主管确认完成',roleObj().name);save();apiPatch(t.id,{status:'done',finished:t.finished});afterAction(id,'工单已确认完成');}
 function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回给原负责人，不允许转单');}
 function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
 function afterAction(id,msg){toast(msg);enhanceState();renderAll();renderDashboard();if(id)openDrawer(id);}
@@ -1057,7 +1057,8 @@ function urgeTicket(id) {
   t.urged.push({ who: roleObj().name, time: new Date().toISOString() });
   pushStep(t, '⚡ 催办', roleObj().name);
   save();
-  syncMetadata(t);
+  var meta = JSON.stringify({ notes: t.notes || [], urged: t.urged || [], suspendReason: t.suspendReason || '', suspendEstimate: t.suspendEstimate || '', steps: t.steps || [] });
+  apiPatch(t.id, { metadata: meta, _action: 'urge' });
   toast('已催办「' + t.id + '」，处理人将收到提醒');
   openDrawer(id);
 }
@@ -1065,7 +1066,7 @@ function urgeTicket(id) {
 function staffMetrics(name){var all=state.tickets.filter(t=>t.worker===name),done=all.filter(t=>t.status==='done'),active=all.filter(t=>t.status==='doing'||t.status==='confirm'),d=done.map(t=>durHours(t.created,t.finished)).filter(x=>x!=null),avg=d.length?(d.reduce((a,b)=>a+b,0)/d.length):null,on=done.filter(isOnTime).length,cats=[...new Set(all.map(t=>t.cat))];return{all,done,active,avg,onRate:done.length?Math.round(on/done.length*100):0,cats};}
 function performanceScore(m){if(!m.done.length)return 60;return Math.max(0,Math.min(100,Math.round(m.onRate*.7+Math.max(0,30-(m.avg||0)))));}
 function renderPerformance(){var body=$('#tbody-performance');if(!body)return;var staffList=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家');body.innerHTML=staffList.map(s=>{var m=staffMetrics(s.name),score=performanceScore(m),cls=score>=85?'good':score<70?'warn':'';return `<tr style="cursor:pointer" onclick="openStaffProfile('${s.id}')"><td>${avatar(s.name,staffColor(s.name))}<b>${esc(s.name)}</b><br><small>${esc(s.role)} · ${esc(s.skill)}</small></td><td class="type-list">${m.cats.length?m.cats.map(c=>`<span class="tag cat">${esc(c)}</span>`).join(' '):'暂无工单'}</td><td>${m.all.length}</td><td>${m.done.length}</td><td>${m.active.length}</td><td>${m.avg==null?'—':m.avg.toFixed(1)+'h'}</td><td>${m.done.length?m.onRate+'%':'—'}</td><td><span class="performance-score ${cls}">${score}</span><small>/100</small></td></tr>`}).join('');}
-function renderStaff(){var tbody=$('#tbody-staff');var staffList=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家');tbody.innerHTML=staffList.map(s=>{var m=staffMetrics(s.name),st=s.status==='on'?'在岗待命':s.status==='busy'?'正在处理':'请假',dot=s.status==='on'?'on':s.status==='busy'?'busy':'off';return `<tr style="cursor:pointer" onclick="openStaffProfile('${s.id}')"><td>${avatar(s.name,staffColor(s.name))}${esc(s.name)}</td><td>${esc(s.role)}</td><td>${esc(s.skill)}</td><td class="mono">${esc(s.phone)}</td><td><span class="staff-status"><span class="status-dot ${dot}"></span>${st}</span></td><td><b>${m.done.length}</b> / 共${m.all.length}</td><td><button class="btn sm ghost" onclick="event.stopPropagation();openStaffModal('${s.id}')">编辑</button> <button class="btn sm danger" onclick="event.stopPropagation();deleteStaff('${s.id}')">删除</button></td></tr>`}).join('');}
+function renderStaff(){var tbody=$('#tbody-staff');if(!tbody)return;var staffList=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家');tbody.innerHTML=staffList.map(s=>{var m=staffMetrics(s.name),st=s.status==='on'?'在岗待命':s.status==='busy'?'正在处理':'请假',dot=s.status==='on'?'on':s.status==='busy'?'busy':'off';return `<tr style="cursor:pointer" onclick="openStaffProfile('${s.id}')"><td>${avatar(s.name,staffColor(s.name))}${esc(s.name)}</td><td>${esc(s.role)}</td><td>${esc(s.skill)}</td><td class="mono">${esc(s.phone)}</td><td><span class="staff-status"><span class="status-dot ${dot}"></span>${st}</span></td><td><b>${m.done.length}</b> / 共${m.all.length}</td><td><button class="btn sm ghost" onclick="event.stopPropagation();openStaffModal('${s.id}')">编辑</button> <button class="btn sm danger" onclick="event.stopPropagation();deleteStaff('${s.id}')">删除</button></td></tr>`}).join('');}
 
 function openStaffProfile(id){
   var s=state.staff.find(x=>x.id===id);if(!s)return;
@@ -1120,7 +1121,33 @@ function openStaffProfile(id){
   $('#drawerMask').classList.add('open');$('#drawer').classList.add('open');
 }
 
-function renderDashboard(){var ts=state.tickets,done=ts.filter(t=>t.status==='done');$('#kpi-total').innerHTML=ts.length+' <small>张</small>';$('#kpi-repair').innerHTML=ts.filter(t=>t.type==='repair').length+' <small>张</small>';$('#kpi-complaint').innerHTML=ts.filter(t=>t.type==='complaint').length+' <small>张</small>';$('#kpi-help').innerHTML=ts.filter(t=>t.type==='help').length+' <small>张</small>';$('#kpi-urgent').innerHTML=ts.filter(t=>t.priority==='urgent'&&t.status!=='done').length+' <small>张</small>';var d=done.map(t=>durHours(t.created,t.finished)).filter(x=>x!=null);$('#kpi-avg').innerHTML=(d.length?(d.reduce((a,b)=>a+b,0)/d.length).toFixed(1):'—')+' <small>小时</small>';$('#kpi-rate').innerHTML=(done.length?Math.round(done.filter(isOnTime).length/done.length*100):0)+' <small>%</small>';drawCharts();renderPerformance();}
+async function renderDashboard(){
+  var ids=['kpi-total','kpi-repair','kpi-complaint','kpi-help','kpi-urgent','kpi-avg','kpi-rate','dashboard-manager-actions','dashboard-team-attendance','dashboard-attendance-exceptions'];
+  var stateEl=$('#dashboard-api-state');
+  ids.forEach(function(id){var el=$('#'+id);if(el)el.textContent='—';});
+  if(stateEl){stateEl.textContent='正在加载本月统计…';stateEl.classList.remove('error');}
+  try{
+    var result=window.WorkforceAPI&&window.WorkforceAPI.dashboardStats
+      ? await window.WorkforceAPI.dashboardStats(currentCommunity)
+      : await API.get('/api/dashboard/stats?community_id='+encodeURIComponent(currentCommunity));
+    if(!result||!result.ok||!result.data)throw new Error(result&&result.error||'统计服务暂不可用');
+    var data=result.data,byType=data.byType||{};
+    function value(id,value,suffix){var el=$('#'+id);if(el)el.textContent=(value===null||value===undefined?'—':value)+(suffix||'');}
+    value('kpi-total',data.monthTotal,' 张');
+    value('kpi-repair',byType.repair||0,' 张');
+    value('kpi-complaint',byType.complaint||0,' 张');
+    value('kpi-help',byType.help||0,' 张');
+    value('kpi-urgent',data.urgentPending||0,' 张');
+    value('kpi-avg',Number(data.averageHours||0).toFixed(1),' 小时');
+    value('kpi-rate',Number(data.onTimeRate||0).toFixed(1),'%');
+    value('dashboard-manager-actions',data.todayManagerActions||0,' 次');
+    value('dashboard-team-attendance',data.teamAttendance&&data.teamAttendance.actual||0,' 人次');
+    value('dashboard-attendance-exceptions',data.teamAttendance&&data.teamAttendance.exceptions,' 人次');
+    if(stateEl)stateEl.textContent='统计区间：'+(data.range&&data.range.from?fmtTime(data.range.from):'本月')+' 至今';
+  }catch(error){
+    if(stateEl){stateEl.textContent=error.message||'月度统计加载失败';stateEl.classList.add('error');}
+  }
+}
 function drawCharts(){var blue='#1677ff',teal='#13c2c2',orange='#fa8c16',purple='#722ed1',green='#52c41a';function localDateStr(d){var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;}var today=new Date(),days=[],keys=[];for(var i=29;i>=0;i--){var d=new Date(today);d.setHours(0,0,0,0);d.setDate(d.getDate()-i);keys.push(localDateStr(d));days.push((d.getMonth()+1)+'/'+d.getDate());}var series=['repair','complaint','help'].map(type=>keys.map(k=>state.tickets.filter(t=>t.type===type&&localDateStr(new Date(t.created))===k).length));getChart('chart-trend').setOption({tooltip:{trigger:'axis'},legend:{data:['报修','投诉','帮助/其他']},grid:{left:40,right:20,top:40,bottom:30},xAxis:{type:'category',data:days},yAxis:{type:'value',minInterval:1},series:[{name:'报修',type:'line',smooth:true,data:series[0],itemStyle:{color:blue}},{name:'投诉',type:'line',smooth:true,data:series[1],itemStyle:{color:orange}},{name:'帮助/其他',type:'line',smooth:true,data:series[2],itemStyle:{color:teal}}]});var people=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家'),metrics=people.map(s=>staffMetrics(s.name));getChart('chart-worker-count').setOption({tooltip:{trigger:'axis'},grid:{left:40,right:20,top:20,bottom:60},xAxis:{type:'category',data:people.map(s=>s.name),axisLabel:{rotate:45,fontSize:11}},yAxis:{type:'value',minInterval:1},series:[{type:'bar',data:metrics.map(m=>m.done.length),itemStyle:{color:teal,borderRadius:[5,5,0,0]},label:{show:true,position:'top'}}]});getChart('chart-worker-dur').setOption({tooltip:{trigger:'axis',formatter:'{b}: {c} 小时'},grid:{left:60,right:20,top:30,bottom:60},xAxis:{type:'category',data:people.map(s=>s.name),axisLabel:{rotate:45,fontSize:11}},yAxis:{type:'value',name:'小时',nameTextStyle:{padding:[0,30,0,0]}},series:[{type:'bar',data:metrics.map(m=>m.avg==null?0:+m.avg.toFixed(1)),itemStyle:{color:purple,borderRadius:[5,5,0,0]},label:{show:true,position:'top',formatter:'{c}h'}}]});var cats={};state.tickets.forEach(t=>cats[t.cat]=(cats[t.cat]||0)+1);getChart('chart-cat').setOption({tooltip:{trigger:'item',formatter:'{b}: {c}张 ({d}%)'},legend:{bottom:0,textStyle:{fontSize:11}},color:[blue,orange,teal],series:[{type:'pie',radius:['30%','55%'],center:['50%','45%'],data:[{name:'报修',value:state.tickets.filter(t=>t.type==='repair').length},{name:'投诉',value:state.tickets.filter(t=>t.type==='complaint').length},{name:'帮助/其他',value:state.tickets.filter(t=>t.type==='help').length}],label:{formatter:'{b}\n{c}张',fontSize:11,lineHeight:14,overflow:'none'},labelLine:{length:15,length2:10}}]});var statuses={wait:0,doing:0,confirm:0,done:0};state.tickets.forEach(t=>statuses[t.status]++);getChart('chart-status').setOption({tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},legend:{bottom:0,textStyle:{fontSize:11}},color:[orange,blue,purple,green],series:[{type:'pie',radius:['28%','48%'],center:['50%','46%'],data:Object.entries(statuses).map(([k,value])=>({name:STATUS_LABEL[k],value})),label:{formatter:'{b} {c}',fontSize:11,overflow:'none'},labelLine:{length:15,length2:10}}]});var events=Object.entries(cats).sort((a,b)=>b[1]-a[1]);getChart('chart-event-frequency').setOption({tooltip:{trigger:'axis'},grid:{left:90,right:30,top:15,bottom:25},xAxis:{type:'value',minInterval:1},yAxis:{type:'category',inverse:true,data:events.map(x=>x[0])},series:[{type:'bar',data:events.map(x=>x[1]),itemStyle:{color:blue,borderRadius:[0,5,5,0]},label:{show:true,position:'right'}}]});}
 function renderAll(){['repair','complaint','help'].forEach(renderTickets);renderDone();renderStaff();updateNavBadges();if($('#page-dashboard').classList.contains('active'))renderDashboard();}
 
@@ -1311,94 +1338,15 @@ function rejectRegistration(id) {
 }
 
 function showReport(){
-  // 弹出选择面板
-  var now = new Date();
-  var todayStr = now.toISOString().slice(0, 10);
-  var weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-  var monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-
-  $('#drawer-title').textContent = '📋 生成工单报告';
-  $('#drawer-sub').textContent = '选择报告周期';
-  $('#drawer-body').innerHTML = `
-    <div class="drawer-section">
-      <h4>选择报告周期</h4>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-        <button class="btn" onclick="generateReport('${todayStr}','${todayStr}')">📅 今日</button>
-        <button class="btn" onclick="generateReport('${weekAgo}','${todayStr}')">📅 本周（近7天）</button>
-        <button class="btn" onclick="generateReport('${monthStart}','${todayStr}')">📅 本月</button>
-      </div>
-      <h4>自定义时间段</h4>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-        <input type="date" id="report-from" value="${monthStart}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px">
-        <span>至</span>
-        <input type="date" id="report-to" value="${todayStr}" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px">
-        <button class="btn" onclick="generateReport($('#report-from').value,$('#report-to').value)">生成</button>
-      </div>
-    </div>`;
-  $('#drawerMask').classList.add('open'); $('#drawer').classList.add('open');
-}
-
-function generateReport(from, to) {
-  if (!from || !to) { toast('请选择日期范围'); return; }
-  fetch(API_BASE + '/api/report?from=' + from + '&to=' + to + '&community_id=' + encodeURIComponent(currentCommunity)).then(r => r.json()).then(d => {
-    if (!d.success) { toast('生成报告失败'); return; }
-    $('#drawer-title').textContent = '📋 工单报告';
-    $('#drawer-sub').textContent = d.from + ' ~ ' + d.to;
-    $('#drawer-body').innerHTML = `
-      <div class="drawer-section">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <button class="btn sm ghost" onclick="showReport()">← 重新选择周期</button>
-          <button class="btn sm" onclick="copyReport()">📋 复制</button>
-          <button class="btn sm" onclick="downloadReportWord()">📄 下载Word</button>
-          <button class="btn sm" onclick="printReport()">🖨 下载PDF</button>
-        </div>
-        <pre style="white-space:pre-wrap;font-size:13px;line-height:1.8;font-family:inherit">${d.report.replace(/</g, '&lt;')}</pre>
-      </div>`;
-    window._lastReport = d.report;
-  }).catch(() => { toast('网络错误'); });
-}
-function copyReport(){
-  if(!window._lastReport)return;
-  navigator.clipboard.writeText(window._lastReport).then(()=>toast('已复制到剪贴板')).catch(()=>{
-    var ta=document.createElement('textarea');ta.value=window._lastReport;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('已复制');
-  });
-}
-
-function downloadReportWord() {
-  if (!window._lastReport) return;
-  var content = window._lastReport.replace(/\n/g, '<br>');
-  var html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>工单报告</title>
-<style>body{font-family:"Microsoft YaHei",sans-serif;font-size:14px;line-height:2;padding:40px;}</style>
-</head><body>${content}</body></html>`;
-  var blob = new Blob(['\ufeff' + html], { type: 'application/msword' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = '工单报告_' + new Date().toISOString().slice(0, 10) + '.doc';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  toast('Word 文件已下载');
-}
-
-function printReport() {
-  if (!window._lastReport) return;
-  var win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>工单报告</title>
-<style>body{font-family:"Microsoft YaHei",sans-serif;font-size:14px;line-height:2;padding:40px;white-space:pre-wrap;}
-@media print{body{padding:20px;}}</style>
-</head><body>${window._lastReport.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</body></html>`);
-  win.document.close();
-  setTimeout(function() { win.print(); }, 300);
+  navTo('management');
+  if (window.ManagementWorkspace) window.ManagementWorkspace.activate('reports');
 }
 
 window.onload=async function(){
   // 禁用导航直到渲染完成
   var nav = document.querySelector('.nav');
   if (nav) { nav.style.pointerEvents = 'none'; nav.style.opacity = '0.5'; }
-  await load();enhanceState();setupEnhancedUI();initCommunitySelect();initNav();initRole();['repair','complaint','help'].forEach(initFilters);initDoneFilters();initSchedule();loadReminderInterval();renderAll();renderDashboard();applyRoleView();$('#drawerClose').onclick=closeDrawer;$('#drawerMask').onclick=closeDrawer;startAutoSync();checkLogin();
+  await load();enhanceState();setupEnhancedUI();initCommunitySelect();initNav();initRole();['repair','complaint','help'].forEach(initFilters);initDoneFilters();loadReminderInterval();renderAll();renderDashboard();applyRoleView();$('#drawerClose').onclick=closeDrawer;$('#drawerMask').onclick=closeDrawer;startAutoSync();checkLogin();
   // 渲染完毕，启用导航
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };

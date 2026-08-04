@@ -1,5 +1,7 @@
 # 智慧物业 OA · 工单协同管理系统
 
+> 人员工作台升级：旧档案使用管理员专属的 `import-preview` / `import-confirm` 接口先预览后按勾选字段导入，规范化 JSON 的 SHA-256 `import_key` 保证确认幂等。Task 9 人员报告支持日期、小区筛选以及复制、打印、Word 导出。可用 `DB_PATH=/absolute/path/to/data.db node scripts/verify-workforce-migration.js` 对数据库副本执行迁移核验；脚本不改源库并打印五项结果。Task 7 签到/补卡界面本轮暂未启用。
+
 > AI 驱动的物业工单全生命周期管理系统
 
 **GitHub**：https://github.com/seowheqing/property-oa
