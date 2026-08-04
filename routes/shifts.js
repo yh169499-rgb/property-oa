@@ -104,6 +104,25 @@ router.patch('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
+router.delete('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
+  const current = one('SELECT id FROM shift_templates WHERE id = ?', [req.params.id]);
+  if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
+  const references = one(
+    'SELECT COUNT(*) AS count FROM shift_assignments WHERE template_id = ?',
+    [req.params.id]
+  );
+  if (Number(references && references.count) > 0) {
+    return res.status(409).json({
+      error: '该模板正在被排班使用，不能删除',
+      code: 'SHIFT_TEMPLATE_IN_USE',
+      details: { references: Number(references.count) },
+    });
+  }
+  database.run('DELETE FROM shift_templates WHERE id = ?', [req.params.id]);
+  database.saveDB();
+  return res.json({ success: true });
+});
+
 router.get('/shifts', requireAuth, (req, res) => {
   try {
     res.json({ data: listAssignments(database.getDB(), req.query) });

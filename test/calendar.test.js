@@ -116,6 +116,7 @@ test('aggregates people, shifts, attendance, tickets and same-staff conflicts', 
   });
   assert.equal(result.people.length, 5);
   assert.equal(result.people.find((person) => person.id === 11).shift.assignmentType, 'work');
+  assert.equal(result.people.find((person) => person.id === 11).shift.templateName, '');
   assert.equal(result.people.find((person) => person.id === 11).attendance.status, 'normal');
   assert.equal(result.people.find((person) => person.id === 12).shift.assignmentType, 'leave');
   assert.equal(result.events[0].ticketId, 'WX1001');
@@ -223,6 +224,7 @@ test('ordinary user is forced to own staff profile despite requested filters', a
     body.events.map((event) => event.ticketId),
     ['UTC-IN', 'AVG-NOW', 'WX1001', 'WX1002']
   );
+  assert.equal(body.people[0].shift.templateName, '');
 });
 
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {

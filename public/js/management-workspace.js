@@ -92,6 +92,13 @@
     var container = root();
     if (!container || container.dataset.ready) return;
     container.dataset.ready = 'true';
+    var hero = node('section', 'management-hero');
+    var heroCopy = node('div');
+    heroCopy.appendChild(node('span', 'management-eyebrow', '运营控制中心'));
+    heroCopy.appendChild(node('h2', '', '管理工作台'));
+    heroCopy.appendChild(node('p', '', '统一管理组织、排班、考勤、审核、报告与系统设置。'));
+    hero.appendChild(heroCopy);
+    container.appendChild(hero);
     var tabs = node('div', 'management-tabs');
     MANAGEMENT_TABS.forEach(function (tab) {
       var button = node('button', 'management-tab' + (tab === activeTab ? ' active' : ''), TAB_LABELS[tab]);
@@ -549,7 +556,7 @@
     var summary = node('div', 'manager-today-grid');
     var detail = node('div', 'management-list card');
     target.appendChild(summary); target.appendChild(detail);
-    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；此处只读展示已有考勤记录。'));
+    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；可删除错误的考勤记录。'));
     async function refresh() {
       empty(summary); empty(detail);
       try {
@@ -568,6 +575,21 @@
           var row = node('div', 'management-list-row');
           row.appendChild(node('strong', '', person.name));
           row.appendChild(node('span', '', person.attendance ? person.attendance.status : '暂无记录'));
+          if (person.attendance) {
+            var remove = node('button', 'btn danger sm', '删除记录');
+            remove.addEventListener('click', async function () {
+              if (!window.confirm('确认删除 ' + person.name + ' 在 ' + date.value + ' 的考勤记录？')) return;
+              remove.disabled = true;
+              try {
+                await request('/api/attendance/' + person.attendance.id, { method: 'DELETE' });
+                await refresh();
+              } catch (error) {
+                showMessage(detail, error.message || '考勤删除失败', true);
+                remove.disabled = false;
+              }
+            });
+            row.appendChild(remove);
+          }
           detail.appendChild(row);
         });
       } catch (error) { showMessage(detail, error.message, true); }
@@ -717,9 +739,110 @@
       finally { preview.disabled = false; }
     });
   }
+
+  function openShiftTemplateEditor(template, onSaved) {
+    var editing = Boolean(template);
+    var dialog = modal(editing ? '编辑班次模板' : '新增班次模板');
+    var name = node('input'); name.type = 'text'; name.maxLength = 40; name.value = template ? template.name || '' : '';
+    var start = node('input'); start.type = 'time'; start.value = template ? template.start_time || '' : '08:00';
+    var end = node('input'); end.type = 'time'; end.value = template ? template.end_time || '' : '18:00';
+    var color = node('input'); color.type = 'color'; color.value = template && /^#[0-9a-f]{6}$/i.test(template.color || '') ? template.color : '#2f6fed';
+    var grace = node('input'); grace.type = 'number'; grace.min = '0'; grace.step = '1'; grace.value = template && template.grace_minutes != null ? template.grace_minutes : 5;
+    [[ '名称', name ], [ '上班时间', start ], [ '下班时间', end ], [ '颜色', color ], [ '迟到宽限（分钟）', grace ]]
+      .forEach(function (item) { dialog.box.appendChild(field(item[0], item[1])); });
+    var save = node('button', 'btn', editing ? '保存模板' : '新增模板');
+    save.addEventListener('click', async function () {
+      var payload = {
+        name: name.value.trim(), startTime: start.value, endTime: end.value,
+        color: color.value, graceMinutes: Number(grace.value)
+      };
+      if (!payload.name || !payload.startTime || !payload.endTime || !Number.isInteger(payload.graceMinutes) || payload.graceMinutes < 0) {
+        showMessage(dialog.box, '请填写完整的模板信息', true); return;
+      }
+      save.disabled = true;
+      try {
+        await request(editing ? '/api/shift-templates/' + template.id : '/api/shift-templates', {
+          method: editing ? 'PATCH' : 'POST', body: JSON.stringify(payload)
+        });
+        dialog.mask.remove();
+        if (onSaved) await onSaved();
+      } catch (error) {
+        showMessage(dialog.box, error.message || '模板保存失败', true);
+        save.disabled = false;
+      }
+    });
+    dialog.box.appendChild(save);
+  }
+
+  async function renderShiftTemplates(target) {
+    var section = node('section', 'card management-template-card');
+    var head = node('div', 'management-section-head');
+    var title = node('div');
+    title.appendChild(node('h3', '', '班次模板'));
+    title.appendChild(node('p', 'management-help', '统一定义上下班时间、跨夜班和迟到宽限。'));
+    head.appendChild(title);
+    var actions = node('div', 'management-actions');
+    var add = node('button', 'btn sm', '新增模板');
+    actions.appendChild(add);
+    var refresh = node('button', 'btn gray sm', '刷新模板');
+    actions.appendChild(refresh);
+    head.appendChild(actions);
+    section.appendChild(head);
+    var list = node('div', 'management-template-list');
+    section.appendChild(list);
+    target.appendChild(section);
+
+    async function refreshList() {
+      empty(list); list.appendChild(node('div', 'management-state', '加载中…'));
+      try {
+        var templates = await request('/api/shift-templates');
+        empty(list);
+        if (!templates || !templates.length) {
+          list.appendChild(node('div', 'management-state', '暂无班次模板，请先新增模板。'));
+          return;
+        }
+        templates.forEach(function (template) {
+          var row = node('div', 'management-template-row');
+          var swatch = node('span', 'management-template-swatch'); swatch.style.backgroundColor = template.color || '#2f6fed';
+          row.appendChild(swatch);
+          var info = node('div', 'management-template-info');
+          info.appendChild(node('strong', '', template.name || '未命名模板'));
+          var overnight = template.end_time <= template.start_time ? ' · 跨夜' : '';
+          info.appendChild(node('span', '', (template.start_time || '--:--') + '—' + (template.end_time || '--:--') + overnight + ' · 宽限 ' + Number(template.grace_minutes || 0) + ' 分钟'));
+          row.appendChild(info);
+          var rowActions = node('div', 'management-actions');
+          var edit = node('button', 'btn gray sm', '编辑模板');
+          edit.addEventListener('click', function () { openShiftTemplateEditor(template, refreshList); });
+          rowActions.appendChild(edit);
+          var remove = node('button', 'btn danger sm', '删除模板');
+          remove.addEventListener('click', async function () {
+            if (!window.confirm('确认删除模板“' + (template.name || '') + '”？')) return;
+            remove.disabled = true;
+            try {
+              await request('/api/shift-templates/' + template.id, { method: 'DELETE' });
+              await refreshList();
+            } catch (error) {
+              showMessage(section, error.code === 'SHIFT_TEMPLATE_IN_USE' ? '该模板正在被排班使用，不能删除' : (error.message || '模板删除失败'), true);
+              remove.disabled = false;
+            }
+          });
+          rowActions.appendChild(remove);
+          row.appendChild(rowActions);
+          list.appendChild(row);
+        });
+      } catch (error) {
+        empty(list); showMessage(list, error.message || '模板加载失败', true);
+      }
+    }
+    add.addEventListener('click', function () { openShiftTemplateEditor(null, refreshList); });
+    refresh.addEventListener('click', refreshList);
+    await refreshList();
+  }
+
   function renderSettings() {
     var target = panel('settings'); empty(target);
     target.appendChild(node('h3', '', '系统设置'));
+    renderShiftTemplates(target);
     var links = node('div', 'management-settings-grid');
     var community = node('button', 'card management-setting', '小区管理');
     community.addEventListener('click', function () { if (typeof window.openCommunityModal === 'function') window.openCommunityModal(); });
