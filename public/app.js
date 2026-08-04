@@ -1588,7 +1588,7 @@ function doLogin(){
   fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pwd,rememberMe:!!$('#login-remember').checked})}).then(r=>r.json()).then(d=>{
     if(d.success){
       localStorage.setItem('login_user',JSON.stringify(d.user));
-      if(d.token) localStorage.setItem('auth_token',d.token);
+      if(d.token) API.setToken(d.token);
       enterApp(d.user);
     } else {
       $('#login-error').textContent=d.error||'登录失败';
