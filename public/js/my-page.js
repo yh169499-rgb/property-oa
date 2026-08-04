@@ -5,7 +5,7 @@
 }(typeof window !== 'undefined' ? window : null, function () {
   'use strict';
 
-  var state = { period: 'month', profile: null, attendance: [], busy: false };
+  var state = { period: 'month', profile: null, stats: {}, attendance: [], calendarDate: '', calendar: null, busy: false };
   var STATUS_LABELS = {
     normal: '正常', late: '迟到', early: '早退', absent: '缺勤',
     leave: '请假', overtime: '加班', rest: '休息'
@@ -23,16 +23,24 @@
     );
   }
 
-  function buildMyPageModel(profile, stats, attendance, period) {
+  function buildMyPageModel(profile, stats, attendance, period, calendar) {
     profile = profile || {};
     stats = stats || {};
     attendance = Array.isArray(attendance) ? attendance : [];
+    calendar = calendar || {};
     period = ['day', 'month', 'year'].includes(period) ? period : 'month';
     var manager = isManagerProfile(profile, stats);
     var team = stats.team || stats.teamResults || null;
     var personal = manager ? (stats.personalActions || { total: 0, byAction: {} }) : null;
     var own = manager ? {} : stats;
     var attendanceStats = own.attendance || {};
+
+    var ownCalendar = (calendar.people || []).find(function (person) {
+      return Number(person.id) === Number(profile.id);
+    }) || (calendar.people || [])[0] || { shift: null, attendance: null };
+    var scheduleEvents = (calendar.events || []).filter(function (event) {
+      return event.staffId == null || Number(event.staffId) === Number(profile.id);
+    });
 
     return {
       period: period,
@@ -80,7 +88,18 @@
           checkIn: item.check_in_at || item.check_in || '',
           checkOut: item.check_out_at || item.check_out || ''
         };
-      })
+      }),
+      schedule: {
+        date: calendar.date || '',
+        shift: ownCalendar.shift || null,
+        attendance: ownCalendar.attendance || null,
+        events: scheduleEvents,
+        hasConflict: (calendar.conflicts || []).some(function (conflict) {
+          return scheduleEvents.some(function (event) { return (conflict.ticketIds || []).includes(event.ticketId); });
+        }),
+        emptyShiftLabel: '今天未安排班次',
+        emptyEventsLabel: '暂无工单时间块'
+      }
     };
   }
 
@@ -166,6 +185,56 @@
     grid.appendChild(summary);
     rootNode.appendChild(grid);
 
+    var scheduleCard = element('section', 'card my-schedule-card');
+    var scheduleHead = element('div', 'my-section-head');
+    var scheduleTitle = element('div');
+    scheduleTitle.appendChild(element('h3', '', '我的日程'));
+    scheduleTitle.appendChild(element('p', '', model.schedule.date || '今日'));
+    scheduleHead.appendChild(scheduleTitle);
+    var dateControls = element('div', 'schedule-date-controls');
+    [['prev', '‹'], ['today', '今天'], ['next', '›']].forEach(function (entry) {
+      var control = element('button', 'btn gray sm', entry[1]);
+      control.type = 'button';
+      control.addEventListener('click', function () {
+        if (entry[0] === 'today') return loadCalendarDate(dateKey(new Date()));
+        var base = new Date((model.schedule.date || dateKey(new Date())) + 'T00:00:00');
+        base.setDate(base.getDate() + (entry[0] === 'next' ? 1 : -1));
+        loadCalendarDate(dateKey(base));
+      });
+      dateControls.appendChild(control);
+    });
+    scheduleHead.appendChild(dateControls);
+    scheduleCard.appendChild(scheduleHead);
+    var scheduleBody = element('div', 'schedule-agenda');
+    var shift = model.schedule.shift;
+    var shiftBlock = element('div', 'schedule-block schedule-shift');
+    shiftBlock.appendChild(element('strong', '', shift
+      ? (shift.templateName || (shift.assignmentType === 'leave' ? '请假' : shift.assignmentType === 'rest' ? '休息' : '上班'))
+      : model.schedule.emptyShiftLabel));
+    shiftBlock.appendChild(element('span', '', shift && shift.startAt && shift.endAt
+      ? shift.startAt.slice(11, 16) + '—' + shift.endAt.slice(11, 16)
+      : (shift && shift.leaveType ? shift.leaveType : '')));
+    scheduleBody.appendChild(shiftBlock);
+    var attendanceBlock = element('div', 'schedule-block schedule-attendance');
+    attendanceBlock.appendChild(element('strong', '', '考勤 · ' + (model.schedule.attendance
+      ? (STATUS_LABELS[model.schedule.attendance.status] || model.schedule.attendance.status)
+      : '暂无记录')));
+    attendanceBlock.appendChild(element('span', '', model.schedule.attendance && model.schedule.attendance.checkInAt
+      ? '上班 ' + model.schedule.attendance.checkInAt.slice(11, 16) : ''));
+    scheduleBody.appendChild(attendanceBlock);
+    var eventGroup = element('div', 'schedule-events');
+    if (!model.schedule.events.length) eventGroup.appendChild(element('div', 'my-empty', model.schedule.emptyEventsLabel));
+    model.schedule.events.forEach(function (event) {
+      var item = element('div', 'schedule-block schedule-ticket');
+      item.appendChild(element('strong', '', event.ticketId + ' · ' + (event.category || '工单')));
+      item.appendChild(element('span', '', (event.startAt || '').slice(11, 16) + '—' + (event.endAt || '').slice(11, 16) + ' · ' + (event.location || event.description || '')));
+      eventGroup.appendChild(item);
+    });
+    scheduleBody.appendChild(eventGroup);
+    if (model.schedule.hasConflict) scheduleBody.appendChild(element('div', 'management-warning', '当前日程存在工单时间重叠，请联系主管调整。'));
+    scheduleCard.appendChild(scheduleBody);
+    rootNode.appendChild(scheduleCard);
+
     var attendanceCard = element('section', 'card my-attendance-panel');
     var attendanceHead = element('div', 'my-section-head');
     var title = element('div');
@@ -202,6 +271,11 @@
   function monthKey() {
     var now = new Date();
     return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+
+  function dateKey(value) {
+    return value.getFullYear() + '-' + String(value.getMonth() + 1).padStart(2, '0')
+      + '-' + String(value.getDate()).padStart(2, '0');
   }
 
   function managerPeriodQuery(period) {
@@ -241,14 +315,28 @@
         : '/api/me/stats?period=' + encodeURIComponent(state.period);
       var results = await Promise.all([
         request(statsPath),
-        request('/api/me/attendance?month=' + encodeURIComponent(monthKey()))
+        request('/api/me/attendance?month=' + encodeURIComponent(monthKey())),
+        request('/api/calendar/day?date=' + encodeURIComponent(state.calendarDate || dateKey(new Date())))
       ]);
       var stats = results[0].ok ? results[0].data : {};
+      state.stats = stats;
       state.attendance = results[1].ok && Array.isArray(results[1].data) ? results[1].data : [];
-      render(buildMyPageModel(state.profile, stats, state.attendance, state.period));
+      state.calendar = results[2].ok ? results[2].data : {};
+      state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
+      render(buildMyPageModel(state.profile, stats, state.attendance, state.period, state.calendar));
     } finally {
       state.busy = false;
       if (rootNode) rootNode.setAttribute('aria-busy', 'false');
+    }
+  }
+
+  async function loadCalendarDate(date) {
+    if (!date || state.busy) return;
+    state.calendarDate = date;
+    var result = await request('/api/calendar/day?date=' + encodeURIComponent(date));
+    if (result.ok) {
+      state.calendar = result.data || {};
+      render(buildMyPageModel(state.profile, state.stats, state.attendance, state.period, state.calendar));
     }
   }
 
