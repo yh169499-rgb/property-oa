@@ -9,7 +9,8 @@
     "dev": "node index-new.js",
     "migrate": "node migrate-passwords.js",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
-    "test:workforce": "node --test --test-concurrency=1 test/*workforce*.test.js test/organization.test.js test/shifts.test.js test/attendance.test.js test/calendar.test.js test/reporting.test.js"
+    "test:workforce": "node --test --test-concurrency=1 test/*workforce*.test.js test/organization.test.js test/shifts.test.js test/attendance.test.js test/calendar.test.js test/reporting.test.js",
+    "seed:workforce-demo": "SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
