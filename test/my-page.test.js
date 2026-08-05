@@ -49,3 +49,12 @@ test('主管个人中心显示本期本人处理工单和团队结果', () => {
   assert.equal(model.managerResults.completed, 2);
   assert.equal(model.teamResults.received, 8);
 });
+
+test('主管统计接口暂时无数据时，个人中心仍可渲染零值', () => {
+  const model = buildMyPageModel({ id: 1, name: '主管', position: '主管' }, {}, [], 'month', {
+    date: '2026-08-05', people: [], events: [], conflicts: [],
+  });
+  assert.equal(model.isManager, true);
+  assert.equal(model.managerResults.received, 0);
+  assert.equal(model.teamResults.staffCount, 0);
+});

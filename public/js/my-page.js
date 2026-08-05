@@ -30,7 +30,7 @@
     calendar = calendar || {};
     period = ['day', 'month', 'year'].includes(period) ? period : 'month';
     var manager = isManagerProfile(profile, stats);
-    var team = stats.team || stats.teamResults || null;
+    var team = stats.team || stats.teamResults || {};
     var personal = manager ? (stats.personalActions || { total: 0, byAction: {} }) : null;
     var managerResults = manager ? (stats.personalResults || {}) : null;
     var own = manager ? {} : stats;
@@ -65,7 +65,7 @@
         averageHours: number(managerResults.completed && managerResults.completed.averageHours),
         onTimeRate: number(managerResults.completed && managerResults.completed.onTimeRate)
       } : null,
-      teamResults: team ? {
+      teamResults: manager ? {
         staffCount: Array.isArray(team.staffIds) ? team.staffIds.length : number(team.staffCount),
         received: number(team.received && team.received.total),
         completed: number(team.completed && team.completed.total),

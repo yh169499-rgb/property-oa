@@ -109,7 +109,7 @@ function dashboardScope(req, communityId) {
     throw error;
   }
   const staffIds = [Number(own.id), ...descendantIds(profiles, own.id).map(Number)];
-  if (communityId) {
+  if (communityId && !isGlobalManagerRole(req.user.role)) {
     const placeholders = staffIds.map(() => '?').join(',');
     const hasTeamTicket = all(
       `SELECT 1
