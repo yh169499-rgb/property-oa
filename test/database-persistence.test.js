@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   restoreRemoteSnapshot,
+  persistInitialSnapshot,
   getPersistenceStatus,
 } = require('../db');
 
@@ -31,4 +32,25 @@ test('未配置 Supabase 时同步状态保持本地模式', () => {
   const status = getPersistenceStatus();
   assert.equal(status.remoteEnabled, false);
   assert.equal(status.pendingUpload, false);
+});
+
+test('非强制远程同步失败时不阻断启动', async () => {
+  const errors = [];
+  await assert.doesNotReject(() => persistInitialSnapshot(
+    async () => { throw new Error('Bucket not found'); },
+    false,
+    error => errors.push(error.message),
+  ));
+  assert.deepEqual(errors, ['Bucket not found']);
+});
+
+test('强制远程同步失败时阻断启动', async () => {
+  await assert.rejects(
+    persistInitialSnapshot(
+      async () => { throw new Error('Bucket not found'); },
+      true,
+      () => {},
+    ),
+    /Bucket not found/
+  );
 });
