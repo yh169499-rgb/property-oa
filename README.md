@@ -195,6 +195,14 @@ node scripts/migrate-sqlite-to-supabase.js --source=/absolute/path/to/data.db --
 
 迁移后可运行 `npm run verify:supabase`，比较本地副本与远程快照的 SHA-256、表集合和各表记录数。
 
+需要生成完整流程演示账号时，在 Render Shell 或一次性本地命令中临时设置密码（不要写入 GitHub 或长期环境变量）：
+
+```bash
+DEMO_PASSWORD='仅用于演示的临时密码' SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js
+```
+
+脚本会幂等创建 `13800000011`（主管）、`13800000012`（师傅）和 `13800000013`（管家），并写入人员层级、班次模板、近 7 天排班考勤和工单演示数据。
+
 ---
 
 ## 技术栈

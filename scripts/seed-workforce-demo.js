@@ -1,4 +1,5 @@
 const database = require('../db');
+const bcrypt = require('bcryptjs');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 const { resolveShiftWindow } = require('../services/shifts');
 
@@ -88,12 +89,29 @@ function seedDemo(db, now = new Date()) {
   ensureWorkforceSchema(db);
   const inserted = { profiles: 0, templates: 0, assignments: 0, attendance: 0, tickets: 0 };
   const users = {};
-  Object.entries(DEMO_PHONES).forEach(([key, phone]) => {
+  const demoUsers = {
+    lead: { phone: DEMO_PHONES.lead, name: '测试主管', role: 'lead' },
+    worker: { phone: DEMO_PHONES.worker, name: '测试师傅', role: 'worker' },
+    keeper: { phone: DEMO_PHONES.keeper, name: '测试管家', role: 'keeper' },
+  };
+  Object.entries(demoUsers).forEach(([key, value]) => {
+    const phone = value.phone;
     const user = one(db, 'SELECT id, name, role FROM users WHERE phone = ?', [phone]);
-    if (user) users[key] = user;
+    if (user) {
+      users[key] = user;
+      return;
+    }
+    if (!process.env.DEMO_PASSWORD) return;
+    db.run('INSERT INTO users (phone, password, name, role) VALUES (?, ?, ?, ?)', [
+      value.phone,
+      bcrypt.hashSync(process.env.DEMO_PASSWORD, 10),
+      value.name,
+      value.role,
+    ]);
+    users[key] = one(db, 'SELECT id, name, role FROM users WHERE phone = ?', [phone]);
   });
   if (!users.lead || !users.worker || !users.keeper) {
-    throw new Error('请先创建测试账号 13800000011、13800000012、13800000013，再运行模拟数据种子');
+    throw new Error('请设置 DEMO_PASSWORD 后再创建测试账号 13800000011、13800000012、13800000013');
   }
 
   const staff = {};
