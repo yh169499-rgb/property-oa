@@ -65,3 +65,11 @@ test('主管统计接口暂时无数据时，个人中心仍可渲染零值', ()
   assert.equal(model.managerResults.received, 0);
   assert.equal(model.teamResults.staffCount, 0);
 });
+
+test('个人考勤记录保留 ID，主管页面可对已有记录显示删除入口', () => {
+  const model = buildMyPageModel({ id: 1, name: '主管', position: '主管' }, {}, [
+    { id: 42, work_date: '2026-08-05', status: 'late' },
+  ], 'month', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+  assert.equal(model.calendar[0].id, 42);
+  assert.equal(model.isManager, true);
+});

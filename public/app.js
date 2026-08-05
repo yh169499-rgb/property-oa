@@ -1128,9 +1128,49 @@ function openStaffProfile(id){
   $('#drawerMask').classList.add('open');$('#drawer').classList.add('open');
 }
 
+function renderDashboardAttendanceDetails(records) {
+  var mount = $('#dashboard-attendance-details');
+  if (!mount) return;
+  mount.innerHTML = '';
+  var title = document.createElement('h3');
+  title.textContent = '今日考勤记录';
+  mount.appendChild(title);
+  records = Array.isArray(records) ? records : [];
+  if (!records.length) {
+    var empty = document.createElement('div');
+    empty.className = 'dashboard-attendance-empty';
+    empty.textContent = '今日暂无考勤记录';
+    mount.appendChild(empty);
+    return;
+  }
+  var labels = { normal: '正常', late: '迟到', early: '早退', early_leave: '早退', absent: '缺勤', missing: '缺卡', missing_punch: '缺卡', leave: '请假', rest: '休息' };
+  records.forEach(function (record) {
+    var row = document.createElement('div');
+    row.className = 'dashboard-attendance-row';
+    var summary = document.createElement('span');
+    summary.textContent = (record.name || ('人员 #' + record.staff_id)) + ' · ' + (labels[record.status] || record.status || '未记录');
+    row.appendChild(summary);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn danger sm';
+    remove.textContent = '删除';
+    remove.addEventListener('click', async function () {
+      if (!window.confirm('确认删除 ' + (record.name || '该人员') + ' 今日的考勤记录？')) return;
+      remove.disabled = true;
+      var result = await API.del('/api/attendance/' + encodeURIComponent(record.id));
+      if (result && result.ok) return renderDashboard();
+      remove.disabled = false;
+    });
+    row.appendChild(remove);
+    mount.appendChild(row);
+  });
+}
+
 async function renderDashboard(){
   var ids=['kpi-total','kpi-repair','kpi-complaint','kpi-help','kpi-urgent','kpi-avg','kpi-rate','dashboard-manager-actions','dashboard-team-attendance','dashboard-attendance-exceptions'];
   var stateEl=$('#dashboard-api-state');
+  var attendanceDetails = $('#dashboard-attendance-details');
+  if (attendanceDetails) attendanceDetails.innerHTML = '';
   ids.forEach(function(id){var el=$('#'+id);if(el)el.textContent='—';});
   if(stateEl){stateEl.textContent='正在加载本月统计…';stateEl.classList.remove('error');}
   try{
@@ -1149,7 +1189,8 @@ async function renderDashboard(){
     value('kpi-rate',Number(data.onTimeRate||0).toFixed(1),'%');
     value('dashboard-manager-actions',data.todayManagerActions||0,' 次');
     value('dashboard-team-attendance',data.teamAttendance&&data.teamAttendance.actual||0,' 人次');
-    value('dashboard-attendance-exceptions',data.teamAttendance&&data.teamAttendance.exceptions,' 人次');
+    value('dashboard-attendance-exceptions',data.teamAttendance&&data.teamAttendance.exceptions||0,' 人次');
+    renderDashboardAttendanceDetails(data.teamAttendance&&data.teamAttendance.records);
     if(stateEl)stateEl.textContent='统计区间：系统开始记录至今（起始 '+(data.range&&data.range.from?fmtTime(data.range.from):'—')+'）';
   }catch(error){
     if(stateEl){stateEl.textContent=error.message||'月度统计加载失败';stateEl.classList.add('error');}

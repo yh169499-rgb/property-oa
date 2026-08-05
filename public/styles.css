@@ -1125,6 +1125,11 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
 .period-switch button.active { color:#0b4f8a; background:#fff; }
 .my-page-grid { display:grid; grid-template-columns:minmax(280px,.9fr) minmax(320px,1.3fr); gap:16px; margin-bottom:16px; }
 .my-profile-panel,.my-summary-panel,.my-attendance-panel { padding:20px; }
+.dashboard-attendance-details { margin:14px 0 16px; padding:16px 18px; }
+.dashboard-attendance-details h3 { margin:0 0 8px; }
+.dashboard-attendance-empty { color:var(--text-2); font-size:13px; }
+.dashboard-attendance-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid var(--hairline); font-size:13px; }
+.attendance-delete { margin-top:6px; align-self:flex-start; }
 .my-profile-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .my-field { display:grid; gap:6px; }
 .my-field-label,.my-field-readonly { color:var(--text-2); font-size:12px; }
