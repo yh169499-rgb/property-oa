@@ -32,14 +32,14 @@ function all(sql, params = []) {
   return rows;
 }
 
-function fail(res, error) {
+function fail(res, error, options = {}) {
   if (BUSINESS_ERROR_CODES.has(error.code)) {
     return res.status(error.status || 400).json({
       error: error.message || '请求失败',
       code: error.code,
     });
   }
-  return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
+  return res.status(500).json({ error: options.genericMessage || '服务器内部错误', code: 'INTERNAL_ERROR' });
 }
 
 router.get('/persistence/status', requireAuth, requireAdmin, (req, res) => {
@@ -162,7 +162,7 @@ router.get('/calendar/day', requireAuth, (req, res) => {
       viewerUserId: req.user.id,
     }));
   } catch (error) {
-    fail(res, error);
+    fail(res, error, { genericMessage: '内部服务器错误' });
   }
 });
 
