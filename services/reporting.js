@@ -357,6 +357,17 @@ function getDashboardStats(db, filters = {}) {
     SELECT COUNT(*) actual FROM attendance_records
      WHERE work_date = ?${attendanceStaff.sql}`,
   [shanghaiDateFromInstant(today.from), ...attendanceStaff.params]);
+  const attendanceRecords = rows(db, `
+    SELECT ar.id, ar.staff_id, sp.name, ar.work_date, ar.status,
+           ar.check_in_at, ar.check_out_at
+      FROM attendance_records ar
+      LEFT JOIN staff_profiles sp ON sp.id = ar.staff_id
+     WHERE ar.work_date = ?${attendanceStaff.sql}
+     ORDER BY ar.staff_id, ar.id`,
+  [shanghaiDateFromInstant(today.from), ...attendanceStaff.params]);
+  const attendanceExceptions = attendanceRecords.filter((record) => (
+    !['normal', 'rest', 'leave'].includes(String(record.status || '').toLowerCase())
+  )).length;
   return {
     range,
     monthTotal: monthly.length,
@@ -365,7 +376,11 @@ function getDashboardStats(db, filters = {}) {
     averageHours: metrics.averageHours,
     onTimeRate: metrics.onTimeRate,
     todayManagerActions: Number(managerActions.total || 0),
-    teamAttendance: { actual: Number(attendance.actual || 0) },
+    teamAttendance: {
+      actual: Number(attendance.actual || 0),
+      exceptions: attendanceExceptions,
+      records: attendanceRecords,
+    },
   };
 }
 

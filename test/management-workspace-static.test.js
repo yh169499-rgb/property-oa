@@ -40,3 +40,9 @@ test('management page keeps the blue hero as its only title and reports react to
   assert.match(workspace, /from\.addEventListener\('change', generateReport\)/);
   assert.match(workspace, /to\.addEventListener\('change', generateReport\)/);
 });
+
+test('主管首页提供当天考勤明细删除入口', () => {
+  assert.match(html, /dashboard-attendance-details/);
+  assert.match(app, /dashboard-attendance-details/);
+  assert.match(app, /API\.del\('\/api\/attendance\//);
+});

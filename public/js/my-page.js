@@ -88,6 +88,7 @@
       },
       calendar: attendance.map(function (item) {
         return {
+          id: item.id,
           date: item.work_date || '',
           day: String(item.work_date || '').slice(-2),
           status: item.status || 'normal',
@@ -263,6 +264,12 @@
         var times = [day.checkIn && '上班 ' + day.checkIn.slice(11, 16), day.checkOut && '下班 ' + day.checkOut.slice(11, 16)]
           .filter(Boolean).join(' · ');
         cell.appendChild(element('small', '', times || '暂无打卡时间'));
+        if (model.isManager && day.id) {
+          var remove = element('button', 'btn danger sm attendance-delete', '删除');
+          remove.type = 'button';
+          remove.addEventListener('click', function () { removeAttendance(day.id, day.date, remove); });
+          cell.appendChild(remove);
+        }
         calendar.appendChild(cell);
       });
     }
@@ -273,7 +280,16 @@
   async function request(path, options) {
     if (typeof API !== 'undefined' && !options) return API.get(path);
     if (typeof API !== 'undefined' && options && options.method === 'PATCH') return API.patch(path, options.body);
+    if (typeof API !== 'undefined' && options && options.method === 'DELETE') return API.del(path);
     return { ok: false, error: '服务暂不可用' };
+  }
+
+  async function removeAttendance(id, date, button) {
+    if (!window.confirm('确认删除 ' + date + ' 的考勤记录？')) return;
+    button.disabled = true;
+    var result = await request('/api/attendance/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (result && result.ok) return load(state.period);
+    button.disabled = false;
   }
 
   function monthKey() {

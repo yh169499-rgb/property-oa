@@ -12,6 +12,7 @@ async function fixture() {
     CREATE TABLE tickets (
       id TEXT PRIMARY KEY, type TEXT DEFAULT 'repair', cat TEXT DEFAULT '',
       status TEXT DEFAULT 'wait', priority TEXT DEFAULT 'normal',
+      worker TEXT DEFAULT '',
       created TEXT NOT NULL, finished TEXT DEFAULT '', estimated_hours REAL DEFAULT 0,
       community_id TEXT DEFAULT 'default', reject_reason TEXT DEFAULT '',
       is_recurring INTEGER DEFAULT 0, feedback_count INTEGER DEFAULT 1
@@ -69,6 +70,19 @@ test('人员报告按接单和完成双口径统计，考勤只数现有记录',
   assert.equal(report.feedback.multiple, 1);
 });
 
+test('人员报告兼容只有 worker 名称的历史工单', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, worker, created, assigned_at)
+    VALUES ('legacy-worker', 'repair', 'doing', '师傅', '2026-07-15T00:00:00Z', '2026-07-15T01:00:00Z')
+  `);
+  const { getStaffReport } = require('../services/reporting');
+  const report = getStaffReport(db, 3, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(report.received.total, 1);
+  assert.equal(report.current.doing, 1);
+  assert.deepEqual(report.categories, [{ category: '其他', total: 1 }]);
+});
+
 test('主管个人动作只计本人，团队成果递归下级且排除树外', async () => {
   const db = await fixture();
   db.run(`
@@ -103,6 +117,48 @@ test('看板本月总量只使用本月创建的工单', async () => {
   assert.equal(stats.monthTotal, 2);
   assert.equal(stats.byType.repair, 1);
   assert.equal(stats.byType.complaint, 1);
+});
+
+test('主管首页累计统计从系统最早工单开始计算', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, created, assignee_user_id) VALUES
+      ('oldest', 'repair', 'done', '2025-01-02T00:00:00Z', 3),
+      ('current', 'complaint', 'wait', '2026-07-15T00:00:00Z', 3)
+  `);
+  const { getDashboardStats } = require('../services/reporting');
+  const stats = getDashboardStats(db, {
+    now: '2026-08-05T00:00:00+08:00', range: 'all',
+  });
+  assert.equal(stats.monthTotal, 2);
+  assert.equal(stats.range.scope, 'all');
+  assert.equal(stats.range.from, '2025-01-01T16:00:00.000Z');
+});
+
+test('主管看板兼容历史无 assignee_user_id 的待派单工单', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, created, worker) VALUES
+      ('legacy-unassigned', 'repair', 'wait', '2026-07-15T00:00:00Z', '')
+  `);
+  const { getDashboardStats } = require('../services/reporting');
+  const stats = getDashboardStats(db, {
+    now: '2026-08-05T00:00:00+08:00', range: 'all', staffIds: [1, 2, 3],
+  });
+  assert.equal(stats.monthTotal, 1);
+  assert.equal(stats.byType.repair, 1);
+});
+
+test('主管首页返回当天考勤明细供删除入口使用', async () => {
+  const db = await fixture();
+  db.run("INSERT INTO attendance_records (id, staff_id, work_date, status) VALUES (88, 2, '2026-08-05', 'late')");
+  const { getDashboardStats } = require('../services/reporting');
+  const stats = getDashboardStats(db, {
+    now: '2026-08-05T12:00:00+08:00', range: 'all', staffIds: [1, 2, 3],
+  });
+  assert.equal(stats.teamAttendance.records[0].id, 88);
+  assert.equal(stats.teamAttendance.records[0].status, 'late');
+  assert.equal(stats.teamAttendance.exceptions, 1);
 });
 
 test('报告路由要求登录并限制本人或递归团队范围', async (t) => {
