@@ -8,6 +8,13 @@ const LS_ROLE = 'juzi_oa_role_v1';
 const LS_COMMUNITY = 'juzi_oa_community_v1';
 const API_BASE = ''; // 同域，留空即可；部署到 Render 后改为实际 URL
 
+function authHeaders(json) {
+  var headers = json ? { 'Content-Type': 'application/json' } : {};
+  var token = localStorage.getItem('auth_token');
+  if (token) headers.Authorization = 'Bearer ' + token;
+  return headers;
+}
+
 /* ---------- 状态映射 ---------- */
 const STATUS_LABEL = { wait: '待派单', doing: '处理中', pending: '搁置中', confirm: '待确认', done: '已完成' };
 const STATUS_CLASS = { wait: 'wait', doing: 'doing', pending: 'pending', confirm: 'confirm', done: 'done' };
@@ -530,7 +537,7 @@ function saveStaff() {
     var userRole = data.role === '维修工' ? 'worker' : data.role === '物业管家' ? 'keeper' : data.role === '主管' ? 'admin' : 'worker';
     fetch(API_BASE + '/api/users', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ phone: phone, password: password, name: name, role: userRole })
     }).then(r => r.json()).then(d => {
       if (d.success) toast('登录账号已创建');
@@ -636,7 +643,7 @@ function renderCommunityList() {
 
 async function getInviteCode(communityId) {
   try {
-    var resp = await fetch(API_BASE + '/api/communities/' + communityId + '/invite-code', { method: 'POST' });
+    var resp = await fetch(API_BASE + '/api/communities/' + communityId + '/invite-code', { method: 'POST', headers: authHeaders() });
     var json = await resp.json();
     if (json.code) {
       var c = state.communities.find(function(x) { return x.id === communityId; });
@@ -682,7 +689,7 @@ async function savePermissions(communityId) {
   try {
     var resp = await fetch(API_BASE + '/api/communities/' + communityId, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ allowedStaff: allowedStaff })
     });
     var json = await resp.json();
@@ -705,7 +712,7 @@ async function addCommunity() {
   try {
     var resp = await fetch(API_BASE + '/api/communities', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ name: name, address: addr, allowedStaff: allowedStaff })
     });
     var json = await resp.json();
@@ -726,7 +733,7 @@ async function deleteCommunity(id) {
   var c = state.communities.find(function(x) { return x.id === id; });
   if (!confirm('确定删除「' + (c ? c.name : id) + '」？\n该小区下的工单将移入默认小区。')) return;
   try {
-    await fetch(API_BASE + '/api/communities/' + id, { method: 'DELETE' });
+    await fetch(API_BASE + '/api/communities/' + id, { method: 'DELETE', headers: authHeaders() });
     state.communities = state.communities.filter(function(x) { return x.id !== id; });
     if (currentCommunity === id) {
       currentCommunity = 'default';
@@ -1128,8 +1135,8 @@ async function renderDashboard(){
   if(stateEl){stateEl.textContent='正在加载本月统计…';stateEl.classList.remove('error');}
   try{
     var result=window.WorkforceAPI&&window.WorkforceAPI.dashboardStats
-      ? await window.WorkforceAPI.dashboardStats(currentCommunity)
-      : await API.get('/api/dashboard/stats?community_id='+encodeURIComponent(currentCommunity));
+      ? await window.WorkforceAPI.dashboardStats(currentCommunity, 'all')
+      : await API.get('/api/dashboard/stats?community_id='+encodeURIComponent(currentCommunity)+'&range=all');
     if(!result||!result.ok||!result.data)throw new Error(result&&result.error||'统计服务暂不可用');
     var data=result.data,byType=data.byType||{};
     function value(id,value,suffix){var el=$('#'+id);if(el)el.textContent=(value===null||value===undefined?'—':value)+(suffix||'');}
@@ -1143,7 +1150,7 @@ async function renderDashboard(){
     value('dashboard-manager-actions',data.todayManagerActions||0,' 次');
     value('dashboard-team-attendance',data.teamAttendance&&data.teamAttendance.actual||0,' 人次');
     value('dashboard-attendance-exceptions',data.teamAttendance&&data.teamAttendance.exceptions,' 人次');
-    if(stateEl)stateEl.textContent='统计区间：'+(data.range&&data.range.from?fmtTime(data.range.from):'本月')+' 至今';
+    if(stateEl)stateEl.textContent='统计区间：系统开始记录至今（起始 '+(data.range&&data.range.from?fmtTime(data.range.from):'—')+'）';
   }catch(error){
     if(stateEl){stateEl.textContent=error.message||'月度统计加载失败';stateEl.classList.add('error');}
   }
@@ -1279,7 +1286,7 @@ function loadPendingRegistrations() {
   var listEl = $('#pending-reg-list');
   var countEl = $('#pending-count');
   if (!listEl) return;
-  fetch(API_BASE + '/api/pending-registrations').then(function(r) { return r.json(); }).then(function(json) {
+  fetch(API_BASE + '/api/pending-registrations', { headers: authHeaders() }).then(function(r) { return r.json(); }).then(function(json) {
     var data = json.data || [];
     if (countEl) countEl.textContent = data.length ? '(' + data.length + '条待审核)' : '';
     if (!data.length) {
@@ -1308,7 +1315,7 @@ function loadPendingRegistrations() {
 }
 
 function approveRegistration(id) {
-  fetch(API_BASE + '/api/pending-registrations/' + id + '/approve', { method: 'POST' })
+  fetch(API_BASE + '/api/pending-registrations/' + id + '/approve', { method: 'POST', headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.success) {
@@ -1329,7 +1336,7 @@ function approveRegistration(id) {
 
 function rejectRegistration(id) {
   if (!confirm('确定拒绝该注册申请？')) return;
-  fetch(API_BASE + '/api/pending-registrations/' + id + '/reject', { method: 'POST' })
+  fetch(API_BASE + '/api/pending-registrations/' + id + '/reject', { method: 'POST', headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.success) { toast('已拒绝'); loadPendingRegistrations(); }

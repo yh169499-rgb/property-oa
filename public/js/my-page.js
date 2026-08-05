@@ -332,6 +332,11 @@
       state.calendar = results[2].ok ? results[2].data : {};
       state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
       render(buildMyPageModel(state.profile, stats, state.attendance, state.period, state.calendar));
+    } catch (error) {
+      if (rootNode) {
+        rootNode.replaceChildren(element('div', 'card my-empty',
+          '主管个人中心加载异常：' + (error && error.message ? error.message : '请刷新重试')));
+      }
     } finally {
       state.busy = false;
       if (rootNode) rootNode.setAttribute('aria-busy', 'false');

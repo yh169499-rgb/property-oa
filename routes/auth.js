@@ -5,7 +5,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
 const { queryOne, queryAll, run, saveDB } = require('../db');
-const { generateToken } = require('../middleware/auth');
+const { generateToken, requireAuth, requireAdmin } = require('../middleware/auth');
 
 // POST /api/login
 router.post('/login', async (req, res) => {
@@ -53,13 +53,13 @@ router.post('/register', async (req, res) => {
 });
 
 // GET /api/pending-registrations
-router.get('/pending-registrations', (req, res) => {
+router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
   const rows = queryAll("SELECT * FROM pending_registrations WHERE status = 'pending' ORDER BY created DESC");
   res.json({ data: rows });
 });
 
 // POST /api/pending-registrations/:id/approve
-router.post('/pending-registrations/:id/approve', (req, res) => {
+router.post('/pending-registrations/:id/approve', requireAuth, requireAdmin, (req, res) => {
   const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ?', [req.params.id]);
   if (!reg) return res.status(404).json({ error: '记录不存在' });
   if (reg.status !== 'pending') return res.status(400).json({ error: '该申请已处理' });
@@ -76,7 +76,7 @@ router.post('/pending-registrations/:id/approve', (req, res) => {
 });
 
 // POST /api/pending-registrations/:id/reject
-router.post('/pending-registrations/:id/reject', (req, res) => {
+router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, (req, res) => {
   const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ?', [req.params.id]);
   if (!reg) return res.status(404).json({ error: '记录不存在' });
   run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ?", [req.params.id]);
@@ -85,7 +85,7 @@ router.post('/pending-registrations/:id/reject', (req, res) => {
 });
 
 // POST /api/users（主管创建）
-router.post('/users', async (req, res) => {
+router.post('/users', requireAuth, requireAdmin, async (req, res) => {
   const { phone, password, name, role } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
   try {
@@ -100,13 +100,13 @@ router.post('/users', async (req, res) => {
 });
 
 // GET /api/users
-router.get('/users', (req, res) => {
+router.get('/users', requireAuth, requireAdmin, (req, res) => {
   const users = queryAll('SELECT id, phone, name, role FROM users');
   res.json({ data: users });
 });
 
 // DELETE /api/users/:id
-router.delete('/users/:id', (req, res) => {
+router.delete('/users/:id', requireAuth, requireAdmin, (req, res) => {
   run('DELETE FROM users WHERE id = ?', [req.params.id]);
   saveDB();
   res.json({ success: true });

@@ -275,7 +275,7 @@ test('calendar endpoint hides unexpected database errors', async (t) => {
   );
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), {
-    error: '内部服务器错误',
+    error: '服务器内部错误',
     code: 'INTERNAL_ERROR',
   });
 });

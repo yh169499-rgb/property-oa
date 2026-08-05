@@ -53,6 +53,16 @@ function shanghaiMonthRange(nowIso = new Date().toISOString()) {
   };
 }
 
+function allTimeRange(db, nowIso = new Date().toISOString()) {
+  const first = one(db, "SELECT MIN(created) created FROM tickets WHERE NULLIF(created, '') IS NOT NULL");
+  const now = new Date(nowIso);
+  const fallback = shanghaiDateFromInstant(now.toISOString());
+  const firstDate = first.created && Number.isFinite(Date.parse(first.created))
+    ? shanghaiDateFromInstant(new Date(first.created).toISOString()) : fallback;
+  const endDate = shanghaiDateFromInstant(now.toISOString());
+  return { ...inclusiveDateRange(firstDate, endDate), scope: 'all' };
+}
+
 function inclusiveDateRange(from, to) {
   const start = dateParts(from, '开始日期');
   const end = dateParts(to, '结束日期');
@@ -295,7 +305,9 @@ function getManagerReport(db, staffId, filters = {}) {
 }
 
 function getDashboardStats(db, filters = {}) {
-  const range = shanghaiMonthRange(filters.now);
+  const range = filters.range === 'all'
+    ? allTimeRange(db, filters.now)
+    : shanghaiMonthRange(filters.now);
   const community = communityClause(filters);
   const ticketStaff = ticketStaffClause(filters);
   const monthly = rows(db, `
@@ -345,6 +357,7 @@ function getDashboardStats(db, filters = {}) {
 module.exports = {
   shanghaiDayRange,
   shanghaiMonthRange,
+  allTimeRange,
   inclusiveDateRange,
   completionExpression,
   getDashboardStats,

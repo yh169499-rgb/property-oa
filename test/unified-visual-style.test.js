@@ -13,4 +13,7 @@ test('schedule and workspace use the unified blue card visual language', () => {
   assert.match(styles, /\.schedule-agenda/);
   assert.match(styles, /max-width:\s*768px/);
   assert.match(workspace, /management-hero/);
+  assert.match(styles, /#page-repair::before/);
+  assert.match(styles, /#page-complaint::before/);
+  assert.match(styles, /#page-done::before/);
 });

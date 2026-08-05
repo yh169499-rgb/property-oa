@@ -105,6 +105,22 @@ test('看板本月总量只使用本月创建的工单', async () => {
   assert.equal(stats.byType.complaint, 1);
 });
 
+test('主管首页累计统计从系统最早工单开始计算', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, created, assignee_user_id) VALUES
+      ('oldest', 'repair', 'done', '2025-01-02T00:00:00Z', 3),
+      ('current', 'complaint', 'wait', '2026-07-15T00:00:00Z', 3)
+  `);
+  const { getDashboardStats } = require('../services/reporting');
+  const stats = getDashboardStats(db, {
+    now: '2026-08-05T00:00:00+08:00', range: 'all',
+  });
+  assert.equal(stats.monthTotal, 2);
+  assert.equal(stats.range.scope, 'all');
+  assert.equal(stats.range.from, '2025-01-01T16:00:00.000Z');
+});
+
 test('报告路由要求登录并限制本人或递归团队范围', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
