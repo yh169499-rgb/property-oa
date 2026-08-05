@@ -21,5 +21,7 @@ services:
         value: tbloxkuixNZIp76r
       - key: DB_PATH
         value: /var/data/data.db
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
       - key: JWT_SECRET
         generateValue: true
