@@ -143,11 +143,23 @@ function ticketStaffClause(filters, alias = 't') {
   if (!Object.hasOwn(filters, 'staffIds')) return { sql: '', params: [] };
   const ids = [...new Set((filters.staffIds || []).map(Number).filter(Number.isInteger))];
   if (ids.length === 0) return { sql: ' AND 0', params: [] };
+  const placeholders = ids.map(() => '?').join(',');
   return {
-    sql: ` AND ${alias}.assignee_user_id IN (
-      SELECT user_id FROM staff_profiles WHERE id IN (${ids.map(() => '?').join(',')})
+    // 新工单使用 assignee_user_id；历史工单可能只有 worker 名称，
+    // 待派单工单通常没有负责人，但主管仍应在首页看到它们。
+    sql: ` AND (
+      ${alias}.assignee_user_id IN (
+        SELECT user_id FROM staff_profiles WHERE id IN (${placeholders})
+      )
+      OR NULLIF(${alias}.assignee_user_id, '') IS NULL
+      OR (
+        NULLIF(${alias}.worker, '') IS NOT NULL
+        AND ${alias}.worker IN (
+          SELECT name FROM staff_profiles WHERE id IN (${placeholders})
+        )
+      )
     )`,
-    params: ids,
+    params: [...ids, ...ids],
   };
 }
 
