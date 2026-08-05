@@ -21,6 +21,14 @@ module.exports = {
   DB_PATH: process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(__dirname, 'data.db'),
   UPLOAD_DIR: process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(__dirname, 'uploads'),
 
+  // Supabase Storage 持久化（仅服务端使用 service role key）
+  SUPABASE_URL: process.env.SUPABASE_URL || '',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  SUPABASE_STORAGE_BUCKET: process.env.SUPABASE_STORAGE_BUCKET || 'property-oa-data',
+  SUPABASE_DB_OBJECT: process.env.SUPABASE_DB_OBJECT || 'production/data.db',
+  SUPABASE_BACKUP_PREFIX: process.env.SUPABASE_BACKUP_PREFIX || 'backups',
+  SUPABASE_SYNC_REQUIRED: String(process.env.SUPABASE_SYNC_REQUIRED || '').toLowerCase() === 'true',
+
   // JWT
   // 生产环境必须通过 JWT_SECRET 注入；仅保留无敏感信息的本地开发占位值。
   JWT_SECRET: process.env.JWT_SECRET || 'local-development-only',

@@ -1,6 +1,7 @@
 const express = require('express');
 const database = require('../db');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { getPersistenceStatus } = require('../db');
 const { descendantIds } = require('../services/organization');
 const { buildDayCalendar } = require('../services/calendar');
 const {
@@ -40,6 +41,10 @@ function fail(res, error) {
   }
   return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
 }
+
+router.get('/persistence/status', requireAuth, requireAdmin, (req, res) => {
+  res.json({ data: getPersistenceStatus() });
+});
 
 function ownProfile(profiles, userId) {
   return profiles.find((profile) => Number(profile.user_id) === Number(userId));
