@@ -155,6 +155,20 @@ server/
 | JZMM_BOT_ID | 秒懂机器人 ID |
 | JZMM_EVENT_ID | 秒懂事件 ID |
 | JZMM_SESSION_ID | 默认会话 ID |
+| DB_PATH | 数据库文件路径；Render 生产环境固定为 `/var/data/data.db` |
+
+### Render 数据持久化
+
+Render Web Service 的默认文件系统是临时的，重新部署或实例重启后会丢失运行时写入的 `data.db`。本项目的 `render.yaml` 已声明 1GB Persistent Disk，并将 `DB_PATH` 指向 `/var/data/data.db`。
+
+如果现有 Render 服务是从 Web Service 页面手动创建的，请在服务的 **Settings → Disks** 中新增磁盘：
+
+- Name：`property-oa-data`
+- Mount Path：`/var/data`
+- Size：至少 `1 GB`
+- Environment Variables：`DB_PATH=/var/data/data.db`
+
+保存后重新部署一次。磁盘挂载前已经丢失的临时数据库无法自动恢复；挂载完成后，账号、工单、排班、考勤和模板会跨部署保留。
 
 ---
 
