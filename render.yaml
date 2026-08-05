@@ -5,6 +5,11 @@ services:
     buildCommand: npm install
     startCommand: node index-new.js
     healthCheckPath: /api/staff/status
+    # Render 默认文件系统是临时的；数据库必须写入持久化磁盘。
+    disk:
+      name: property-oa-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: FEISHU_APP_ID
         sync: false
@@ -14,5 +19,7 @@ services:
         value: PdZ0bstWWasvZFsWa3gc5PHznMb
       - key: FEISHU_TABLE_ID
         value: tbloxkuixNZIp76r
+      - key: DB_PATH
+        value: /var/data/data.db
       - key: JWT_SECRET
         generateValue: true
