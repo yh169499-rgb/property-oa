@@ -70,6 +70,19 @@ test('人员报告按接单和完成双口径统计，考勤只数现有记录',
   assert.equal(report.feedback.multiple, 1);
 });
 
+test('人员报告兼容只有 worker 名称的历史工单', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, worker, created, assigned_at)
+    VALUES ('legacy-worker', 'repair', 'doing', '师傅', '2026-07-15T00:00:00Z', '2026-07-15T01:00:00Z')
+  `);
+  const { getStaffReport } = require('../services/reporting');
+  const report = getStaffReport(db, 3, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(report.received.total, 1);
+  assert.equal(report.current.doing, 1);
+  assert.deepEqual(report.categories, [{ category: '其他', total: 1 }]);
+});
+
 test('主管个人动作只计本人，团队成果递归下级且排除树外', async () => {
   const db = await fixture();
   db.run(`
