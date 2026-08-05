@@ -470,76 +470,82 @@
     });
     toolbar.appendChild(add);
     var batch = node('button', 'btn gray sm', '批量排班');
-    batch.addEventListener('click', function () {
-      var dialog = modal('批量排班');
-      var people = node('select'); people.multiple = true; people.size = Math.min(8, Math.max(3, profiles.length));
-      profiles.forEach(function (profile) {
-        var option = node('option', '', profile.name); option.value = profile.id; people.appendChild(option);
-      });
-      var from = node('input'); from.type = 'date'; from.value = date.value;
-      var to = node('input'); to.type = 'date'; to.value = date.value;
-      var batchType = select([
-        { value: 'work', label: '上班' }, { value: 'rest', label: '休息' }, { value: 'leave', label: '请假' }
-      ], type.value);
-      var batchTemplate = select([{ value: '', label: '不使用模板' }].concat((results[0] || []).map(function (item) {
-        return { value: item.id, label: item.name };
-      })), template.value);
-      var batchLeaveType = select([
-        { value: '事假', label: '事假' }, { value: '病假', label: '病假' },
-        { value: '年假', label: '年假' }, { value: '其他', label: '其他' }
-      ], '事假');
-      var batchTemplateField = field('模板', batchTemplate);
-      var batchLeaveField = field('请假类型', batchLeaveType);
-      function syncBatchFields() {
-        batchTemplateField.hidden = batchType.value !== 'work';
-        batchLeaveField.hidden = batchType.value !== 'leave';
-      }
-      batchType.addEventListener('change', syncBatchFields);
-      [field('人员（可多选）', people), field('开始日期', from), field('结束日期', to),
-        field('类型', batchType), batchTemplateField, batchLeaveField]
-        .forEach(function (item) { dialog.box.appendChild(item); });
-      syncBatchFields();
-      var submit = node('button', 'btn', '保存批量排班');
-      submit.addEventListener('click', async function () {
-        var staffIds = Array.from(people.selectedOptions).map(function (item) { return Number(item.value); });
-        if (!staffIds.length) return showMessage(dialog.box, '请至少选择一名人员', true);
-        if (batchType.value === 'work' && !batchTemplate.value) {
-          return showMessage(dialog.box, '上班排班请选择班次模板', true);
+    batch.addEventListener('click', async function () {
+      try {
+        var latestTemplates = await request('/api/shift-templates');
+        latestTemplates = latestTemplates || [];
+        var dialog = modal('批量排班');
+        var people = node('select'); people.multiple = true; people.size = Math.min(8, Math.max(3, profiles.length));
+        profiles.forEach(function (profile) {
+          var option = node('option', '', profile.name); option.value = profile.id; people.appendChild(option);
+        });
+        var from = node('input'); from.type = 'date'; from.value = date.value;
+        var to = node('input'); to.type = 'date'; to.value = date.value;
+        var batchType = select([
+          { value: 'work', label: '上班' }, { value: 'rest', label: '休息' }, { value: 'leave', label: '请假' }
+        ], type.value);
+        var batchTemplate = select([{ value: '', label: '不使用模板' }].concat(latestTemplates.map(function (item) {
+          return { value: item.id, label: item.name };
+        })), template.value);
+        var batchLeaveType = select([
+          { value: '事假', label: '事假' }, { value: '病假', label: '病假' },
+          { value: '年假', label: '年假' }, { value: '其他', label: '其他' }
+        ], '事假');
+        var batchTemplateField = field('模板', batchTemplate);
+        var batchLeaveField = field('请假类型', batchLeaveType);
+        function syncBatchFields() {
+          batchTemplateField.hidden = batchType.value !== 'work';
+          batchLeaveField.hidden = batchType.value !== 'leave';
         }
-        var dates = [];
-        var cursor = new Date(from.value + 'T00:00:00+08:00');
-        var end = new Date(to.value + 'T00:00:00+08:00');
-        if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(end.getTime()) || cursor > end) {
-          return showMessage(dialog.box, '日期范围无效', true);
-        }
-        while (cursor <= end && dates.length <= 62) {
-          dates.push(window.WorkforceUtils.localDateKey(cursor));
-          cursor = new Date(cursor.getTime() + 86400000);
-        }
-        if (dates.length > 62) return showMessage(dialog.box, '单次最多安排 62 天', true);
-        var payload = {
-          staffIds: staffIds, dates: dates, assignmentType: batchType.value,
-          templateId: batchType.value === 'work' && batchTemplate.value
-            ? Number(batchTemplate.value) : null,
-          leaveType: batchType.value === 'leave' ? batchLeaveType.value : null,
-          overwrite: false
-        };
-        submit.disabled = true;
-        try {
-          try {
-            await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
-          } catch (error) {
-            if (error.code !== 'SHIFT_ALREADY_EXISTS' || !window.confirm('发现已有排班，是否覆盖冲突日期？')) throw error;
-            payload.overwrite = true;
-            await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
+        batchType.addEventListener('change', syncBatchFields);
+        [field('人员（可多选）', people), field('开始日期', from), field('结束日期', to),
+          field('类型', batchType), batchTemplateField, batchLeaveField]
+          .forEach(function (item) { dialog.box.appendChild(item); });
+        syncBatchFields();
+        var submit = node('button', 'btn', '保存批量排班');
+        submit.addEventListener('click', async function () {
+          var staffIds = Array.from(people.selectedOptions).map(function (item) { return Number(item.value); });
+          if (!staffIds.length) return showMessage(dialog.box, '请至少选择一名人员', true);
+          if (batchType.value === 'work' && !batchTemplate.value) {
+            return showMessage(dialog.box, '上班排班请选择班次模板', true);
           }
-          dialog.mask.remove();
-          await refresh();
-        } catch (error) {
-          showMessage(dialog.box, error.message, true); submit.disabled = false;
-        }
-      });
-      dialog.box.appendChild(submit);
+          var dates = [];
+          var cursor = new Date(from.value + 'T00:00:00+08:00');
+          var end = new Date(to.value + 'T00:00:00+08:00');
+          if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(end.getTime()) || cursor > end) {
+            return showMessage(dialog.box, '日期范围无效', true);
+          }
+          while (cursor <= end && dates.length <= 62) {
+            dates.push(window.WorkforceUtils.localDateKey(cursor));
+            cursor = new Date(cursor.getTime() + 86400000);
+          }
+          if (dates.length > 62) return showMessage(dialog.box, '单次最多安排 62 天', true);
+          var payload = {
+            staffIds: staffIds, dates: dates, assignmentType: batchType.value,
+            templateId: batchType.value === 'work' && batchTemplate.value
+              ? Number(batchTemplate.value) : null,
+            leaveType: batchType.value === 'leave' ? batchLeaveType.value : null,
+            overwrite: false
+          };
+          submit.disabled = true;
+          try {
+            try {
+              await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
+            } catch (error) {
+              if (error.code !== 'SHIFT_ALREADY_EXISTS' || !window.confirm('发现已有排班，是否覆盖冲突日期？')) throw error;
+              payload.overwrite = true;
+              await request('/api/shifts/batch', { method: 'POST', body: JSON.stringify(payload) });
+            }
+            dialog.mask.remove();
+            await refresh();
+          } catch (error) {
+            showMessage(dialog.box, error.message, true); submit.disabled = false;
+          }
+        });
+        dialog.box.appendChild(submit);
+      } catch (error) {
+        showMessage(target, error.message || '班次模板加载失败', true);
+      }
     });
     toolbar.appendChild(batch);
     target.appendChild(toolbar);
