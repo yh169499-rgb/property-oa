@@ -159,7 +159,7 @@ server/
 
 ### Render 数据持久化
 
-Render Web Service 的默认文件系统是临时的，重新部署或实例重启后会丢失运行时写入的 `data.db`。本项目的 `render.yaml` 已声明 1GB Persistent Disk，并将 `DB_PATH` 指向 `/var/data/data.db`。
+Render Web Service 的默认文件系统是临时的，重新部署或实例重启后会丢失运行时写入的 `data.db` 和附件。本项目的 `render.yaml` 已声明 1GB Persistent Disk，并将 `DB_PATH` 指向 `/var/data/data.db`、`UPLOAD_DIR` 指向 `/var/data/uploads`。
 
 如果现有 Render 服务是从 Web Service 页面手动创建的，请在服务的 **Settings → Disks** 中新增磁盘：
 
@@ -167,8 +167,9 @@ Render Web Service 的默认文件系统是临时的，重新部署或实例重�
 - Mount Path：`/var/data`
 - Size：至少 `1 GB`
 - Environment Variables：`DB_PATH=/var/data/data.db`
+- Environment Variables：`UPLOAD_DIR=/var/data/uploads`
 
-保存后重新部署一次。磁盘挂载前已经丢失的临时数据库无法自动恢复；挂载完成后，账号、工单、排班、考勤和模板会跨部署保留。
+保存后重新部署一次。磁盘挂载前已经丢失的临时数据库无法自动恢复；挂载完成后，账号、工单、排班、考勤、模板和工单附件会跨部署保留。
 
 ---
 

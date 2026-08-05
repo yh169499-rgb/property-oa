@@ -19,7 +19,7 @@ module.exports = {
   PORT: process.env.PORT || 3001,
   NOTIFY_WEBHOOK: process.env.NOTIFY_WEBHOOK || '',
   DB_PATH: process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(__dirname, 'data.db'),
-  UPLOAD_DIR: path.join(__dirname, 'uploads'),
+  UPLOAD_DIR: process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.join(__dirname, 'uploads'),
 
   // JWT
   // 生产环境必须通过 JWT_SECRET 注入；仅保留无敏感信息的本地开发占位值。
