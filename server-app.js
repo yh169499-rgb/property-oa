@@ -3,7 +3,8 @@ const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
-const { verifyToken } = require('./middleware/auth');
+const { verifyToken, requireAuth, requireAdmin } = require('./middleware/auth');
+const { getPersistenceStatus } = require('./services/persistence-status');
 
 const authRoutes = require('./routes/auth');
 const ticketRoutes = require('./routes/tickets');
@@ -42,6 +43,9 @@ function createServerApp() {
   app.use('/api', shiftRoutes);
   app.use('/api', attendanceRoutes);
   app.use('/api', workforceReportRoutes);
+  app.get('/api/persistence/status', requireAuth, requireAdmin, (req, res) => {
+    res.json({ data: getPersistenceStatus() });
+  });
 
   return app;
 }

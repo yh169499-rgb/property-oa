@@ -171,6 +171,38 @@ Render Web Service 的默认文件系统是临时的，重新部署或实例重�
 
 保存后重新部署一次。磁盘挂载前已经丢失的临时数据库无法自动恢复；挂载完成后，账号、工单、排班、考勤、模板和工单附件会跨部署保留。
 
+### Supabase 免费独立存储（推荐）
+
+如果不升级 Render 实例，可使用 Supabase Free 保存 SQLite 数据库快照。创建 Supabase 项目和私有 Storage bucket `property-oa-data` 后，在 Render 环境变量中设置：
+
+```text
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<仅服务端保存，不要放到前端>
+SUPABASE_STORAGE_BUCKET=property-oa-data
+SUPABASE_DB_OBJECT=production/data.db
+SUPABASE_BACKUP_PREFIX=backups
+SUPABASE_SYNC_REQUIRED=false
+```
+
+首次迁移前先下载当前数据库副本并显式确认覆盖：
+
+```bash
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
+node scripts/migrate-sqlite-to-supabase.js --source=/absolute/path/to/data.db --confirm
+```
+
+迁移完成并确认远程对象存在后，将 `SUPABASE_SYNC_REQUIRED` 改为 `true`，这样生产服务找不到远程快照时会拒绝启动，避免再次悄悄创建空数据库。可通过主管账号访问 `/api/persistence/status` 查看最后同步时间和错误。
+
+迁移后可运行 `npm run verify:supabase`，比较本地副本与远程快照的 SHA-256、表集合和各表记录数。
+
+需要生成完整流程演示账号时，在 Render Shell 或一次性本地命令中临时设置密码（不要写入 GitHub 或长期环境变量）：
+
+```bash
+DEMO_PASSWORD='仅用于演示的临时密码' SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js
+```
+
+脚本会幂等创建 `13800000011`（主管）、`13800000012`（师傅）和 `13800000013`（管家），并写入人员层级、班次模板、近 7 天排班考勤和工单演示数据。
+
 ---
 
 ## 技术栈

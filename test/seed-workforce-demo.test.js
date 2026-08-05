@@ -50,3 +50,24 @@ test('demo seed is idempotent and creates connected workforce data', async () =>
   assert.equal(second.inserted.tickets, 0);
   assert.doesNotMatch(JSON.stringify({ first, second }), /password|jwt/i);
 });
+
+test('显式 DEMO_PASSWORD 时可创建缺失的演示账号', async () => {
+  const db = await fixture();
+  db.run('DELETE FROM users');
+  const previous = process.env.DEMO_PASSWORD;
+  process.env.DEMO_PASSWORD = 'demo-only-password';
+  try {
+    seedDemo(db, new Date('2026-08-04T04:00:00.000Z'));
+    const users = db.exec('SELECT phone, password, role FROM users ORDER BY phone')[0].values;
+    assert.equal(users.length, 3);
+    assert.deepEqual(users.map(row => [row[0], row[2]]), [
+      ['13800000011', 'lead'],
+      ['13800000012', 'worker'],
+      ['13800000013', 'keeper'],
+    ]);
+    assert.notEqual(users[0][1], 'demo-only-password');
+  } finally {
+    if (previous === undefined) delete process.env.DEMO_PASSWORD;
+    else process.env.DEMO_PASSWORD = previous;
+  }
+});

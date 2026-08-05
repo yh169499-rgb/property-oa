@@ -2,6 +2,7 @@
  * 数据库初始化 & 工具函数
  */
 const fs = require('fs');
+const path = require('path');
 const initSqlJs = require('sql.js');
 const config = require('./config');
 const { ensureWorkforceSchema } = require('./workforce-schema');
@@ -9,11 +10,50 @@ const {
   migrateUsersToProfiles,
   backfillTicketAssignees,
 } = require('./services/workforce-migration');
+const {
+  getSupabaseStorageConfig,
+  ensureBucket,
+  downloadDatabase,
+  uploadDatabase,
+  atomicWriteFile,
+  createUploadQueue,
+} = require('./services/supabase-storage');
+const {
+  configurePersistence,
+  markUploadPending,
+  markUploadSuccess,
+  markUploadError,
+  getPersistenceStatus,
+} = require('./services/persistence-status');
 
 let db;
 let persistToDisk = true;
+let remoteConfig = getSupabaseStorageConfig(config);
+let uploadQueue = createUploadQueue(async bytes => uploadDatabase(remoteConfig, bytes));
+
+async function restoreRemoteSnapshot(storageConfig, localPath, download = downloadDatabase) {
+  if (!storageConfig) return null;
+  const remoteBytes = await download(storageConfig);
+  if (!remoteBytes) {
+    if (storageConfig.syncRequired) throw new Error('remote database snapshot is required');
+    return null;
+  }
+  atomicWriteFile(localPath, remoteBytes);
+  return remoteBytes;
+}
 
 async function initDB() {
+  remoteConfig = getSupabaseStorageConfig(config);
+  configurePersistence(Boolean(remoteConfig));
+  if (remoteConfig) {
+    try {
+      await ensureBucket(remoteConfig);
+      await restoreRemoteSnapshot(remoteConfig, config.DB_PATH);
+    } catch (error) {
+      markUploadError(error);
+      if (remoteConfig.syncRequired) throw error;
+    }
+  }
   const SQL = await initSqlJs();
   if (fs.existsSync(config.DB_PATH)) {
     const buffer = fs.readFileSync(config.DB_PATH);
@@ -139,15 +179,37 @@ async function initDB() {
     db.run("INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', ?)", [nowIso]);
   }
 
-  saveDB();
+  await persistInitialSnapshot(saveDB, Boolean(remoteConfig?.syncRequired));
   return db;
+}
+
+async function persistInitialSnapshot(persist = saveDB, syncRequired = false, onError = markUploadError) {
+  try {
+    await persist();
+  } catch (error) {
+    onError(error);
+    if (syncRequired) throw error;
+    console.warn('⚠️ 远程数据库首次同步失败，本地服务继续启动:', error.message);
+  }
 }
 
 function saveDB() {
   if (!persistToDisk) return;
   const data = db.export();
   const buffer = Buffer.from(data);
+  fs.mkdirSync(path.dirname(config.DB_PATH), { recursive: true });
   fs.writeFileSync(config.DB_PATH, buffer);
+  if (remoteConfig) {
+    markUploadPending();
+    const task = uploadQueue.enqueue(buffer);
+    task.then(markUploadSuccess).catch(markUploadError);
+    return task;
+  }
+  return Promise.resolve();
+}
+
+function flushPersistence() {
+  return uploadQueue.flush();
 }
 
 function queryAll(sql, params) {
@@ -186,4 +248,16 @@ function setDBForTests(value) {
   };
 }
 
-module.exports = { initDB, saveDB, queryAll, queryOne, run, getDB, setDBForTests };
+module.exports = {
+  initDB,
+  saveDB,
+  persistInitialSnapshot,
+  flushPersistence,
+  restoreRemoteSnapshot,
+  getPersistenceStatus,
+  queryAll,
+  queryOne,
+  run,
+  getDB,
+  setDBForTests,
+};
