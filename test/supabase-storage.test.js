@@ -7,6 +7,7 @@ const path = require('node:path');
 const {
   getSupabaseStorageConfig,
   ensureBucket,
+  uploadObject,
   atomicWriteFile,
   createUploadQueue,
 } = require('../services/supabase-storage');
@@ -69,4 +70,31 @@ test('首次同步时自动创建私有 bucket', async () => {
   assert.equal(calls.length, 2);
   assert.equal(calls[1].options.method, 'POST');
   assert.match(calls[1].options.body, /"public":false/);
+});
+
+test('新版 Secret key 只通过 apikey 发送，避免被 Storage 当作 JWT 解析', async () => {
+  let request;
+  const config = getSupabaseStorageConfig({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_test',
+  });
+  await uploadObject(config, 'backups/test.data.db', Buffer.from('snapshot'), async (url, options) => {
+    request = { url, options };
+    return { ok: true, status: 200, async text() { return ''; } };
+  });
+  assert.equal(request.options.headers.apikey, 'sb_secret_test');
+  assert.equal(request.options.headers.Authorization, undefined);
+});
+
+test('旧版 service_role 继续通过 Bearer 发送', async () => {
+  let request;
+  const config = getSupabaseStorageConfig({
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'legacy-service-role',
+  });
+  await uploadObject(config, 'backups/test.data.db', Buffer.from('snapshot'), async (url, options) => {
+    request = { url, options };
+    return { ok: true, status: 200, async text() { return ''; } };
+  });
+  assert.equal(request.options.headers.Authorization, 'Bearer legacy-service-role');
 });
