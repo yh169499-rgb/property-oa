@@ -17,8 +17,10 @@
     },
     checkIn: function () { return API.post('/api/attendance/check-in', {}); },
     checkOut: function () { return API.post('/api/attendance/check-out', {}); },
-    dashboardStats: function (communityId) {
-      return API.get(utils.withQuery('/api/dashboard/stats', { community_id: communityId }));
+    dashboardStats: function (communityId, range) {
+      return API.get(utils.withQuery('/api/dashboard/stats', {
+        community_id: communityId, range: range || 'all'
+      }));
     },
     staffReport: function (staffId, query) {
       var path = '/api/reports/staff/' + utils.requiredPathSegment(staffId, 'staffId');

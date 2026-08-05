@@ -200,6 +200,7 @@ router.get('/dashboard/stats', requireAuth, (req, res) => {
     const staffIds = dashboardScope(req, req.query.community_id);
     res.json({ data: getDashboardStats(database.getDB(), {
       communityId: req.query.community_id,
+      range: req.query.range,
       staffIds,
     }) });
   } catch (error) {

@@ -131,16 +131,16 @@
     <!-- ============ 看板 ============ -->
     <section class="page active" id="page-dashboard">
       <div class="page-title" style="display:flex;align-items:center;gap:12px">主管首页 <button class="btn sm" onclick="showReport()">📋 生成报告</button></div>
-      <div class="page-sub">本月团队运行概览，统计口径来自主管权限范围内的服务端数据。</div>
+      <div class="page-sub">累计团队运行概览，统计口径来自主管权限范围内的服务端数据。</div>
 
       <div class="kpi-grid">
-        <div class="kpi" style="cursor:pointer" onclick="navTo('dashboard')"><div class="label">本月工单总量</div><div class="value" id="kpi-total">—</div><div class="trend">报修 + 投诉</div></div>
-        <div class="kpi teal" style="cursor:pointer" onclick="navTo('repair')"><div class="label">本月报修</div><div class="value" id="kpi-repair">—</div><div class="trend">本月新建报修工单</div></div>
-        <div class="kpi purple" style="cursor:pointer" onclick="navTo('complaint')"><div class="label">本月投诉</div><div class="value" id="kpi-complaint">—</div><div class="trend">本月新建投诉工单</div></div>
-        <div class="kpi cyan" style="cursor:pointer" onclick="navTo('help')"><div class="label">本月帮助</div><div class="value" id="kpi-help">—</div><div class="trend">本月新建帮助工单</div></div>
+        <div class="kpi" style="cursor:pointer" onclick="navTo('dashboard')"><div class="label">累计工单总量</div><div class="value" id="kpi-total">—</div><div class="trend">报修 + 投诉 + 帮助</div></div>
+        <div class="kpi teal" style="cursor:pointer" onclick="navTo('repair')"><div class="label">累计报修</div><div class="value" id="kpi-repair">—</div><div class="trend">系统开始记录至今</div></div>
+        <div class="kpi purple" style="cursor:pointer" onclick="navTo('complaint')"><div class="label">累计投诉</div><div class="value" id="kpi-complaint">—</div><div class="trend">系统开始记录至今</div></div>
+        <div class="kpi cyan" style="cursor:pointer" onclick="navTo('help')"><div class="label">累计帮助</div><div class="value" id="kpi-help">—</div><div class="trend">系统开始记录至今</div></div>
         <div class="kpi red"><div class="label">当前紧急待处理</div><div class="value" id="kpi-urgent">—</div><div class="trend">尚未完成的紧急工单</div></div>
-        <div class="kpi orange"><div class="label">本月平均处理时长</div><div class="value" id="kpi-avg">—</div><div class="trend">本月完成工单</div></div>
-        <div class="kpi green"><div class="label">本月按时完成率</div><div class="value" id="kpi-rate">—</div><div class="trend">按工单 SLA 口径</div></div>
+        <div class="kpi orange"><div class="label">累计平均处理时长</div><div class="value" id="kpi-avg">—</div><div class="trend">累计完成工单</div></div>
+        <div class="kpi green"><div class="label">累计按时完成率</div><div class="value" id="kpi-rate">—</div><div class="trend">按工单 SLA 口径</div></div>
       </div>
 
       <div class="manager-today-grid">
