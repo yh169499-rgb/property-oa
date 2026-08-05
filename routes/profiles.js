@@ -12,6 +12,7 @@ const {
   normalizedImportPayload,
   previewProfileImport,
 } = require('../services/workforce-migration');
+const { positionForRole } = require('../services/roles');
 
 const router = express.Router();
 const SELF_FIELDS = new Set(['phone', 'birth_month']);
@@ -49,6 +50,18 @@ function profileById(id) {
 
 function ownProfile(userId) {
   return queryOne('SELECT * FROM staff_profiles WHERE user_id = ?', [userId]);
+}
+
+function ensureOwnProfile(user) {
+  const existing = ownProfile(user.id);
+  if (existing) return existing;
+  const now = new Date().toISOString();
+  run(`INSERT OR IGNORE INTO staff_profiles
+    (user_id, name, phone, position, employment_status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+  [user.id, user.name || '', user.phone || '', positionForRole(user.role), now, now]);
+  saveDB();
+  return ownProfile(user.id);
 }
 
 function validateFields(body, allowed) {
@@ -223,7 +236,7 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, (req, r
 
 router.get('/me', requireAuth, (req, res) => {
   try {
-    const profile = ownProfile(req.user.id);
+    const profile = ensureOwnProfile(req.user);
     if (!profile) throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     res.json({ data: profile });
   } catch (error) {
@@ -233,7 +246,7 @@ router.get('/me', requireAuth, (req, res) => {
 
 router.patch('/me', requireAuth, (req, res) => {
   try {
-    const profile = ownProfile(req.user.id);
+    const profile = ensureOwnProfile(req.user);
     if (!profile) throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     res.json({ data: updateOwnProfile(profile, req.user.id, req.body) });
   } catch (error) {

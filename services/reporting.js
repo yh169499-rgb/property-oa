@@ -271,7 +271,8 @@ function getStaffReport(db, staffId, filters = {}) {
 }
 
 function getManagerReport(db, staffId, filters = {}) {
-  const manager = getStaffReport(db, staffId, filters).staff;
+  const ownReport = getStaffReport(db, staffId, filters);
+  const manager = ownReport.staff;
   const profiles = rows(db, 'SELECT id, manager_id FROM staff_profiles');
   const teamIds = descendantIds(profiles, manager.id).map(Number);
   const range = rangeFor(filters);
@@ -288,6 +289,7 @@ function getManagerReport(db, staffId, filters = {}) {
       total: actions.reduce((sum, item) => sum + Number(item.count), 0),
       byAction: Object.fromEntries(actions.map((item) => [item.action, Number(item.count)])),
     },
+    personalResults: ownReport,
     team: { staffIds: teamIds, ...reportForStaffIds(db, teamIds, filters) },
   };
 }

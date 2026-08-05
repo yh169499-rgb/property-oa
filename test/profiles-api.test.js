@@ -17,6 +17,7 @@ async function fixture(t) {
   `);
   ensureWorkforceSchema(db);
   migrateUsersToProfiles(db, '2026-07-30T00:00:00.000Z');
+  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (99, '13800000099', 'x', '缺失档案主管', 'admin')");
   db.run(`
     UPDATE staff_profiles SET manager_id = CASE user_id
       WHEN 2 THEN 1 WHEN 3 THEN 2 ELSE NULL END
@@ -49,6 +50,17 @@ test('GET /api/me 未登录返回 401，登录后返回本人档案', async (t) 
   assert.equal(result.response.status, 200);
   assert.equal(result.body.data.user_id, 3);
   assert.equal(result.body.data.name, '师傅');
+});
+
+test('主管账号缺少档案时，GET /api/me 自动补建主管档案', async (t) => {
+  const { db, server } = await fixture(t);
+  const result = await request(server, '/api/me', {
+    headers: authHeader({ id: 99, phone: '13800000099', name: '缺失档案主管', role: 'admin' }),
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.data.user_id, 99);
+  assert.equal(result.body.data.position, '主管');
+  assert.equal(db.exec('SELECT COUNT(*) FROM staff_profiles WHERE user_id = 99')[0].values[0][0], 1);
 });
 
 test('本人 PATCH 只允许 phone 和 birth_month，并原子同步登录手机号', async (t) => {

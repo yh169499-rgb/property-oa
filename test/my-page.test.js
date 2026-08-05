@@ -37,3 +37,15 @@ test('shows explicit empty schedule states', () => {
   assert.equal(model.schedule.emptyShiftLabel, '今天未安排班次');
   assert.equal(model.schedule.emptyEventsLabel, '暂无工单时间块');
 });
+
+test('主管个人中心显示本期本人处理工单和团队结果', () => {
+  const model = buildMyPageModel({ id: 1, name: '主管', position: '主管', join_date: '2026-01-01' }, {
+    personalActions: { total: 3 },
+    personalResults: { received: { total: 4 }, completed: { total: 2, onTimeRate: 50 } },
+    team: { staffIds: [2], received: { total: 8 }, completed: { total: 7 }, attendance: { actualDays: 5 } },
+  }, [], 'month', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+  assert.equal(model.isManager, true);
+  assert.equal(model.managerResults.received, 4);
+  assert.equal(model.managerResults.completed, 2);
+  assert.equal(model.teamResults.received, 8);
+});

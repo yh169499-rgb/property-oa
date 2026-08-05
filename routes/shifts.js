@@ -69,7 +69,7 @@ router.get('/shift-templates', requireAuth, (req, res) => {
   res.json({ data: all('SELECT * FROM shift_templates ORDER BY id') });
 });
 
-router.post('/shift-templates', requireAuth, requireAdmin, (req, res) => {
+router.post('/shift-templates', requireAuth, (req, res) => {
   try {
     const value = templateInput(req.body);
     database.run(
@@ -86,7 +86,7 @@ router.post('/shift-templates', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-router.patch('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
+router.patch('/shift-templates/:id', requireAuth, (req, res) => {
   try {
     const current = one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
@@ -104,7 +104,7 @@ router.patch('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-router.delete('/shift-templates/:id', requireAuth, requireAdmin, (req, res) => {
+router.delete('/shift-templates/:id', requireAuth, (req, res) => {
   const current = one('SELECT id FROM shift_templates WHERE id = ?', [req.params.id]);
   if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
   const references = one(

@@ -9,6 +9,7 @@ const {
   getStaffReport,
   getManagerReport,
 } = require('../services/reporting');
+const { isManagerRole, isGlobalManagerRole, positionForRole } = require('../services/roles');
 
 const router = express.Router();
 const BUSINESS_ERROR_CODES = new Set([
@@ -45,9 +46,28 @@ function ownProfile(profiles, userId) {
   return profiles.find((profile) => Number(profile.user_id) === Number(userId));
 }
 
+function ensureOwnProfile(user) {
+  let profiles = all('SELECT * FROM staff_profiles');
+  let own = ownProfile(profiles, user.id);
+  if (own) return own;
+  const now = new Date().toISOString();
+  database.run(`INSERT OR IGNORE INTO staff_profiles
+    (user_id, name, phone, position, employment_status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+  [user.id, user.name || '', user.phone || '', positionForRole(user.role), now, now]);
+  database.saveDB();
+  profiles = all('SELECT * FROM staff_profiles');
+  own = ownProfile(profiles, user.id);
+  return own;
+}
+
 function assertStaffScope(req, requestedId, options = {}) {
-  const profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
-  const own = ownProfile(profiles, req.user.id);
+  let profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
+  let own = ownProfile(profiles, req.user.id);
+  if (!own) {
+    own = ensureOwnProfile(req.user);
+    profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
+  }
   if (!own) {
     const error = new Error('人员档案不存在');
     error.status = 404;
@@ -55,11 +75,11 @@ function assertStaffScope(req, requestedId, options = {}) {
     throw error;
   }
   const target = Number(requestedId);
-  const allowed = req.user.role === 'admin'
+  const allowed = isGlobalManagerRole(req.user.role)
     || target === Number(own.id)
-    || (req.user.role === 'lead'
+    || (isManagerRole(req.user.role)
       && descendantIds(profiles, own.id).map(Number).includes(target));
-  if (!allowed || (options.managerOnly && !['admin', 'lead'].includes(req.user.role))) {
+  if (!allowed || (options.managerOnly && !isManagerRole(req.user.role))) {
     const error = new Error('无权查看该人员或团队');
     error.status = 403;
     error.code = 'REPORT_SCOPE_FORBIDDEN';
@@ -76,8 +96,12 @@ function tableExists(name) {
 }
 
 function dashboardScope(req, communityId) {
-  const profiles = all('SELECT id, user_id, name, manager_id FROM staff_profiles');
-  const own = ownProfile(profiles, req.user.id);
+  let profiles = all('SELECT id, user_id, name, manager_id FROM staff_profiles');
+  let own = ownProfile(profiles, req.user.id);
+  if (!own) {
+    own = ensureOwnProfile(req.user);
+    profiles = all('SELECT id, user_id, name, manager_id FROM staff_profiles');
+  }
   if (!own) {
     const error = new Error('人员档案不存在');
     error.status = 404;
@@ -117,12 +141,16 @@ function dashboardScope(req, communityId) {
 
 router.get('/calendar/day', requireAuth, (req, res) => {
   try {
-    const profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
-    const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
+    let profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
+    let own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
+    if (!own) {
+      own = ensureOwnProfile(req.user);
+      profiles = all('SELECT id, user_id, manager_id FROM staff_profiles');
+    }
     let staffId = req.query.staff_id;
     let managerId = req.query.manager_id;
 
-    if (!['admin', 'lead'].includes(req.user.role)) {
+    if (!isManagerRole(req.user.role)) {
       if (!own) {
         const error = new Error('人员档案不存在');
         error.status = 404;
@@ -131,7 +159,7 @@ router.get('/calendar/day', requireAuth, (req, res) => {
       }
       staffId = own.id;
       managerId = undefined;
-    } else if (req.user.role === 'lead') {
+    } else if (isManagerRole(req.user.role) && !isGlobalManagerRole(req.user.role)) {
       if (!own) {
         const error = new Error('人员档案不存在');
         error.status = 404;
@@ -163,7 +191,7 @@ router.get('/calendar/day', requireAuth, (req, res) => {
 
 router.get('/dashboard/stats', requireAuth, (req, res) => {
   try {
-    if (!['admin', 'lead'].includes(req.user.role)) {
+    if (!isManagerRole(req.user.role)) {
       const error = new Error('需要主管权限');
       error.status = 403;
       error.code = 'REPORT_SCOPE_FORBIDDEN';
@@ -208,7 +236,7 @@ router.get('/reports/manager/:staff_id', requireAuth, (req, res) => {
 router.get('/me/stats', requireAuth, (req, res) => {
   try {
     const profiles = all('SELECT id, user_id FROM staff_profiles');
-    const own = ownProfile(profiles, req.user.id);
+    const own = ownProfile(profiles, req.user.id) || ensureOwnProfile(req.user);
     if (!own) {
       const error = new Error('人员档案不存在');
       error.status = 404;
@@ -237,7 +265,7 @@ router.get('/me/stats', requireAuth, (req, res) => {
 router.get('/me/attendance', requireAuth, (req, res) => {
   try {
     const profiles = all('SELECT id, user_id FROM staff_profiles');
-    const own = ownProfile(profiles, req.user.id);
+    const own = ownProfile(profiles, req.user.id) || ensureOwnProfile(req.user);
     if (!own) {
       const error = new Error('人员档案不存在');
       error.status = 404;

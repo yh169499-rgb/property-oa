@@ -159,7 +159,7 @@ test('PATCH conflict preserves both original assignments and rejects invalid tem
   assert.equal((await badTemplate.json()).code, 'INVALID_SHIFT_TEMPLATE');
 });
 
-test('ordinary user cannot write shift templates or assignments', async (t) => {
+test('ordinary user can maintain templates but cannot create assignments', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
   t.after(() => server.close());
@@ -172,7 +172,7 @@ test('ordinary user cannot write shift templates or assignments', async (t) => {
       headers: { 'Content-Type': 'application/json', ...authHeader({ id: 2, role: 'worker' }) },
       body: JSON.stringify(body),
     });
-    assert.equal(response.status, 403);
+    assert.equal(response.status, path === '/api/shift-templates' ? 201 : 403);
   }
 });
 
@@ -199,12 +199,12 @@ test('admin can delete unused templates but referenced templates are protected',
   assert.equal(db.exec('SELECT id FROM shift_templates WHERE id = 21').length, 1);
 });
 
-test('ordinary user cannot delete shift templates', async (t) => {
+test('ordinary user can delete unused shift templates', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/shift-templates/20`, {
     method: 'DELETE', headers: authHeader({ id: 2, role: 'worker' }),
   });
-  assert.equal(response.status, 403);
+  assert.equal(response.status, 200);
 });

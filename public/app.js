@@ -1668,7 +1668,7 @@ function doRegister() {
 function enterApp(user){
   $('#login-page').style.display='none';
   $('#app-main').style.display='block';
-  if(user.role==='admin'||user.role==='lead'){
+  if(['admin','lead','manager','supervisor','主管','经理'].indexOf(user.role) >= 0){
     currentRole='eng_lead';
   } else if(user.role==='worker'){
     currentRole='worker_'+user.name;
@@ -1684,7 +1684,7 @@ function enterApp(user){
   }
   // 显示当前用户名
   var roleLabel=document.querySelector('.role-switch label');
-  if(roleLabel){roleLabel.style.display='inline';roleLabel.textContent=user.name+' · '+(user.role==='admin'?'主管':user.role==='worker'?'维修工':'管家');}
+  if(roleLabel){roleLabel.style.display='inline';roleLabel.textContent=user.name+' · '+(['admin','lead','manager','supervisor','主管','经理'].indexOf(user.role) >= 0 ? '主管' : user.role==='worker'?'维修工':'管家');}
   // 重新加载数据（小区列表 + 工单），然后渲染
   (async function(){
     await reloadCommunities();

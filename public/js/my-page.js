@@ -32,6 +32,7 @@
     var manager = isManagerProfile(profile, stats);
     var team = stats.team || stats.teamResults || null;
     var personal = manager ? (stats.personalActions || { total: 0, byAction: {} }) : null;
+    var managerResults = manager ? (stats.personalResults || {}) : null;
     var own = manager ? {} : stats;
     var attendanceStats = own.attendance || {};
 
@@ -58,6 +59,12 @@
       readonlyFields: ['join_date', 'position', 'manager'],
       isManager: manager,
       personalActions: personal,
+      managerResults: managerResults ? {
+        received: number(managerResults.received && managerResults.received.total),
+        completed: number(managerResults.completed && managerResults.completed.total),
+        averageHours: number(managerResults.completed && managerResults.completed.averageHours),
+        onTimeRate: number(managerResults.completed && managerResults.completed.onTimeRate)
+      } : null,
       teamResults: team ? {
         staffCount: Array.isArray(team.staffIds) ? team.staffIds.length : number(team.staffCount),
         received: number(team.received && team.received.total),
@@ -169,6 +176,7 @@
     summary.appendChild(element('h3', '', model.isManager ? '工作成果' : model.periodLabel + '个人成果'));
     var metrics = element('div', 'my-metrics');
     if (model.isManager) {
+      metrics.appendChild(metric('本期处理工单', model.managerResults.received + ' / ' + model.managerResults.completed + ' 张'));
       metrics.appendChild(metric('个人主管动作', number(model.personalActions && model.personalActions.total) + ' 次'));
       metrics.appendChild(metric('团队人数', model.teamResults.staffCount + ' 人'));
       metrics.appendChild(metric('团队接单', model.teamResults.received + ' 张'));

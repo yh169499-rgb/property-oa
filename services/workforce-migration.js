@@ -88,7 +88,7 @@ function migrateUsersToProfiles(db, nowIso) {
         name,
         phone,
         CASE
-          WHEN role IN ('admin', 'lead') THEN '主管'
+          WHEN role IN ('admin', 'lead', 'manager', 'supervisor', '主管', '经理') THEN '主管'
           WHEN role = 'worker' THEN '维修师傅'
           WHEN role = 'keeper' THEN '物业管家'
           ELSE '员工'

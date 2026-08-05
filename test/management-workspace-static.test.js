@@ -32,3 +32,11 @@ test('schedule date and staff changes reload filtered assignments', () => {
   assert.match(workspace, /staff\.addEventListener\('change', refresh\)/);
   assert.match(workspace, /staff_id=/);
 });
+
+test('management page keeps the blue hero as its only title and reports react to filters', () => {
+  assert.doesNotMatch(html, /id="page-management"[\s\S]*?<div class="page-title">管理工作台<\/div>/);
+  assert.match(workspace, /staff\.addEventListener\('change', generateReport\)/);
+  assert.match(workspace, /community\.addEventListener\('change', generateReport\)/);
+  assert.match(workspace, /from\.addEventListener\('change', generateReport\)/);
+  assert.match(workspace, /to\.addEventListener\('change', generateReport\)/);
+});

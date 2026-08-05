@@ -3,6 +3,7 @@
  */
 const jwt = require('jsonwebtoken');
 const config = require('../config');
+const { isManagerRole } = require('../services/roles');
 
 function generateToken(user, rememberMe) {
   return jwt.sign(
@@ -37,7 +38,7 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'lead')) {
+  if (!req.user || !isManagerRole(req.user.role)) {
     return res.status(403).json({ error: '需要主管权限' });
   }
   next();

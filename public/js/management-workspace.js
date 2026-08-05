@@ -645,13 +645,13 @@
       if (period.value === 'month') { from.value = monthStart; to.value = today; }
       from.disabled = period.value !== 'custom'; to.disabled = period.value !== 'custom';
     }
-    period.addEventListener('change', applyPeriod); applyPeriod();
+    period.addEventListener('change', function () { applyPeriod(); generateReport(); }); applyPeriod();
     var toolbar = node('div', 'management-toolbar staff-report-toolbar');
     [field('人员', staff), field('周期', period), field('开始', from), field('结束', to), field('小区范围', community)]
       .forEach(function (item) { toolbar.appendChild(item); });
     var output = node('div', 'card staff-report-output');
     var generate = node('button', 'btn', '生成报告');
-    generate.addEventListener('click', function () {
+    function generateReport() {
       if (!staff.value) return showMessage(target, '暂无可生成报告的人员', true);
       if (!from.value || !to.value || from.value > to.value) return showMessage(target, '日期范围无效', true);
       window.StaffReport.load(output, Number(staff.value), {
@@ -659,10 +659,15 @@
         community_id: community.value,
         community_name: community.options[community.selectedIndex].textContent
       }).catch(function () {});
-    });
+    }
+    generate.addEventListener('click', generateReport);
+    staff.addEventListener('change', generateReport);
+    community.addEventListener('change', generateReport);
+    from.addEventListener('change', generateReport);
+    to.addEventListener('change', generateReport);
     toolbar.appendChild(generate);
     target.appendChild(toolbar); target.appendChild(output);
-    if (staff.value) generate.click();
+    if (staff.value) generateReport();
   }
 
   function legacyProfiles() {
