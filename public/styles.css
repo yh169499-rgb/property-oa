@@ -1186,6 +1186,11 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
 .calendar-agenda-head { display:flex; justify-content:space-between; gap:12px; }
 .calendar-agenda-head span,.calendar-agenda-meta { color:var(--text-2); font-size:12px; }
 .calendar-agenda-meta { margin:6px 0 10px; }
+.calendar-attendance-delete { margin-left:10px; border:1px solid #fecaca; border-radius:999px; padding:3px 8px; color:#991b1b; background:#fff1f2; font-size:11px; cursor:pointer; }
+.calendar-attendance-delete:disabled { opacity:.55; cursor:wait; }
+.calendar-conflict-label { margin:6px 0; color:#b91c1c; font-size:12px; }
+.calendar-person-status { display:inline-block; margin-left:8px; color:var(--text-2); font-weight:500; }
+.calendar-person-conflict { display:inline-block; margin-left:8px; color:#b91c1c; font-weight:600; }
 .calendar-agenda-event { display:grid; grid-template-columns:92px 1fr; width:100%; margin:6px 0; border:1px solid #bfdbfe; border-radius:8px; padding:9px; color:var(--text); background:#eff6ff; text-align:left; cursor:pointer; }
 .calendar-agenda-event.conflict { border-color:#fca5a5; background:#fef2f2; }
 .calendar-available { padding:12px; border-radius:8px; color:#166534; background:#f0fdf4; font-size:12px; }

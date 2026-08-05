@@ -18,6 +18,12 @@
     return (shift.templateName || shift.template_name || '上班') + (shift.startAt
       ? ' ' + utils.fmtHM(new Date(shift.startAt)) + '–' + utils.fmtHM(new Date(shift.endAt)) : '');
   }
+  function attendanceStatusLabel(attendance, shift) {
+    if (shift && shift.assignmentType === 'leave') return '请假' + (shift.leaveType ? ' · ' + shift.leaveType : '');
+    if (shift && shift.assignmentType === 'rest') return '休息';
+    var value = attendance && attendance.status;
+    return ({ normal: '正常', late: '迟到', early: '早退', leave: '请假', absent: '缺勤', missing: '缺卡' }[value]) || '未记录';
+  }
   function personEvents(data, person) {
     return (data.events || []).filter(function (event) {
       return Number(event.staffId) === Number(person.id);
@@ -35,7 +41,7 @@
   function openTicket(event) {
     if (typeof window.openDrawer === 'function') window.openDrawer(event.ticketId);
   }
-  function renderAgenda(root, data) {
+  function renderAgenda(root, data, options) {
     var agenda = el('div', 'calendar-agenda');
     (data.people || []).slice().sort(function (a, b) {
       var aConflict = conflictIds(data, a), bConflict = conflictIds(data, b);
@@ -47,15 +53,28 @@
       head.appendChild(el('strong', '', person.name || ('人员 #' + person.id)));
       head.appendChild(el('span', '', shiftLabel(person.shift)));
       card.appendChild(head);
-      var status = person.attendance && person.attendance.status
-        ? person.attendance.status : '暂无考勤';
+      var status = attendanceStatusLabel(person.attendance, person.shift);
       var events = personEvents(data, person);
       var total = events.reduce(function (sum, event) {
         return sum + Math.max(0, new Date(event.endAt) - new Date(event.startAt));
       }, 0) / 3600000;
-      card.appendChild(el('div', 'calendar-agenda-meta',
-        '状态：' + status + ' · 已排工时 ' + total.toFixed(1) + 'h'));
+      var meta = el('div', 'calendar-agenda-meta',
+        '当天状态：' + status + ' · 已排工时 ' + total.toFixed(1) + 'h');
+      if (person.attendance && typeof options.onDeleteAttendance === 'function') {
+        var remove = el('button', 'calendar-attendance-delete', '删除考勤记录');
+        remove.type = 'button';
+        remove.addEventListener('click', function () {
+          remove.disabled = true;
+          Promise.resolve(options.onDeleteAttendance(person.attendance, person)).catch(function (error) {
+            remove.disabled = false;
+            if (typeof options.onError === 'function') options.onError(error);
+          });
+        });
+        meta.appendChild(remove);
+      }
+      card.appendChild(meta);
       var conflicts = conflictIds(data, person);
+      if (Object.keys(conflicts).length) card.appendChild(el('div', 'calendar-conflict-label', '存在工单时间冲突，请调整排班或工单时间'));
       events.forEach(function (event) {
         var row = el('button', 'calendar-agenda-event' + (conflicts[event.ticketId] ? ' conflict' : ''));
         row.type = 'button';
@@ -70,7 +89,7 @@
     });
     root.appendChild(agenda);
   }
-  function renderGrid(root, data) {
+  function renderGrid(root, data, options) {
     var chart = el('div', 'calendar-day-grid');
     chart.style.setProperty('--calendar-people', Math.max(1, (data.people || []).length));
     var ruler = el('div', 'calendar-time-ruler');
@@ -83,7 +102,24 @@
     chart.appendChild(ruler);
     (data.people || []).forEach(function (person) {
       var column = el('section', 'calendar-person-column');
-      column.appendChild(el('header', 'calendar-sticky-head', person.name + ' · ' + shiftLabel(person.shift)));
+      var header = el('header', 'calendar-sticky-head');
+      header.appendChild(el('strong', '', person.name + ' · ' + shiftLabel(person.shift)));
+      header.appendChild(el('span', 'calendar-person-status', attendanceStatusLabel(person.attendance, person.shift)));
+      var headerConflicts = conflictIds(data, person);
+      if (Object.keys(headerConflicts).length) header.appendChild(el('span', 'calendar-person-conflict', '有冲突'));
+      if (person.attendance && typeof options.onDeleteAttendance === 'function') {
+        var remove = el('button', 'calendar-attendance-delete', '删除考勤记录');
+        remove.type = 'button';
+        remove.addEventListener('click', function () {
+          remove.disabled = true;
+          Promise.resolve(options.onDeleteAttendance(person.attendance, person)).catch(function (error) {
+            remove.disabled = false;
+            if (typeof options.onError === 'function') options.onError(error);
+          });
+        });
+        header.appendChild(remove);
+      }
+      column.appendChild(header);
       var track = el('div', 'calendar-person-track');
       if (!person.shift || person.shift.assignmentType !== 'work') track.classList.add('off-duty');
       else {
@@ -138,16 +174,18 @@
     var view = utils.selectCalendarView(options && options.width !== undefined
       ? options.width : window.innerWidth);
     root.dataset.calendarView = view;
-    if (view === 'agenda') renderAgenda(root, data || {});
-    else renderGrid(root, data || {});
+    var renderOptions = options || {};
+    if (view === 'agenda') renderAgenda(root, data || {}, renderOptions);
+    else renderGrid(root, data || {}, renderOptions);
     if (!options || options.live !== false) {
       root._responsiveCalendarData = data || {};
+      root._responsiveCalendarOptions = Object.assign({}, renderOptions);
       if (!root._responsiveCalendarBound && typeof window.addEventListener === 'function') {
         root._responsiveCalendarBound = true;
         window.addEventListener('resize', function () {
           window.clearTimeout(root._responsiveCalendarResizeTimer);
           root._responsiveCalendarResizeTimer = window.setTimeout(function () {
-            render(root, root._responsiveCalendarData || {}, { live: false });
+            render(root, root._responsiveCalendarData || {}, Object.assign({}, root._responsiveCalendarOptions || {}, { live: false }));
           }, 100);
         });
       }
