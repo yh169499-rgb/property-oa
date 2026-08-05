@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildMyPageModel } = require('../public/js/my-page.js');
+const { buildMyPageModel, calendarPayload } = require('../public/js/my-page.js');
+
+test('兼容日历接口直接返回日历对象，避免我的页面读取 undefined.date', () => {
+  const payload = { date: '2026-08-05', people: [], events: [], conflicts: [] };
+  assert.deepEqual(calendarPayload({ ok: true, ...payload }), payload);
+  assert.deepEqual(calendarPayload({ ok: true, data: payload }), payload);
+  assert.deepEqual(calendarPayload({ ok: false }), {});
+});
 
 test('builds personal schedule from server calendar data', () => {
   const model = buildMyPageModel({ id: 9, name: '测试师傅', position: '维修师傅' }, {

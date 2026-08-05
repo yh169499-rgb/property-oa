@@ -286,6 +286,15 @@
       + '-' + String(value.getDate()).padStart(2, '0');
   }
 
+  function calendarPayload(result) {
+    if (!result || result.ok === false) return {};
+    if (result.data) return result.data;
+    if (!result.date) return {};
+    var payload = Object.assign({}, result);
+    delete payload.ok;
+    return payload;
+  }
+
   function managerPeriodQuery(period) {
     var now = new Date();
     var year = now.getFullYear();
@@ -329,7 +338,7 @@
       var stats = results[0].ok ? results[0].data : {};
       state.stats = stats;
       state.attendance = results[1].ok && Array.isArray(results[1].data) ? results[1].data : [];
-      state.calendar = results[2].ok ? results[2].data : {};
+      state.calendar = calendarPayload(results[2]);
       state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
       render(buildMyPageModel(state.profile, stats, state.attendance, state.period, state.calendar));
     } catch (error) {
@@ -348,7 +357,7 @@
     state.calendarDate = date;
     var result = await request('/api/calendar/day?date=' + encodeURIComponent(date));
     if (result.ok) {
-      state.calendar = result.data || {};
+      state.calendar = calendarPayload(result);
       render(buildMyPageModel(state.profile, state.stats, state.attendance, state.period, state.calendar));
     }
   }
@@ -366,5 +375,5 @@
     }
   }
 
-  return { buildMyPageModel: buildMyPageModel, init: load, render: render };
+  return { buildMyPageModel: buildMyPageModel, calendarPayload: calendarPayload, init: load, render: render };
 }));

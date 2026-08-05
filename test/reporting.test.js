@@ -12,6 +12,7 @@ async function fixture() {
     CREATE TABLE tickets (
       id TEXT PRIMARY KEY, type TEXT DEFAULT 'repair', cat TEXT DEFAULT '',
       status TEXT DEFAULT 'wait', priority TEXT DEFAULT 'normal',
+      worker TEXT DEFAULT '',
       created TEXT NOT NULL, finished TEXT DEFAULT '', estimated_hours REAL DEFAULT 0,
       community_id TEXT DEFAULT 'default', reject_reason TEXT DEFAULT '',
       is_recurring INTEGER DEFAULT 0, feedback_count INTEGER DEFAULT 1
@@ -119,6 +120,20 @@ test('主管首页累计统计从系统最早工单开始计算', async () => {
   assert.equal(stats.monthTotal, 2);
   assert.equal(stats.range.scope, 'all');
   assert.equal(stats.range.from, '2025-01-01T16:00:00.000Z');
+});
+
+test('主管看板兼容历史无 assignee_user_id 的待派单工单', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets (id, type, status, created, worker) VALUES
+      ('legacy-unassigned', 'repair', 'wait', '2026-07-15T00:00:00Z', '')
+  `);
+  const { getDashboardStats } = require('../services/reporting');
+  const stats = getDashboardStats(db, {
+    now: '2026-08-05T00:00:00+08:00', range: 'all', staffIds: [1, 2, 3],
+  });
+  assert.equal(stats.monthTotal, 1);
+  assert.equal(stats.byType.repair, 1);
 });
 
 test('报告路由要求登录并限制本人或递归团队范围', async (t) => {
