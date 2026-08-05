@@ -35,5 +35,7 @@ services:
         value: backups
       - key: SUPABASE_SYNC_REQUIRED
         value: "false"
+      - key: SEED_WORKFORCE_DEMO
+        value: "true"
       - key: JWT_SECRET
         generateValue: true

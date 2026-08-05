@@ -2,12 +2,18 @@
  * 物业工单系统 — 入口文件（重构版）
  */
 const config = require('./config');
-const { initDB, flushPersistence } = require('./db');
+const { initDB, flushPersistence, getDB, saveDB } = require('./db');
 const { createServerApp } = require('./server-app');
 
 // 启动
 async function start() {
   await initDB();
+  if (process.env.SEED_WORKFORCE_DEMO === 'true') {
+    const { seedDemo } = require('./scripts/seed-workforce-demo');
+    const seeded = seedDemo(getDB());
+    await saveDB();
+    console.log('✅ 演示数据已写入:', JSON.stringify(seeded.inserted));
+  }
   const app = createServerApp();
   app.listen(config.PORT, () => {
     console.log(`✅ 物业工单系统已启动: http://localhost:${config.PORT}`);

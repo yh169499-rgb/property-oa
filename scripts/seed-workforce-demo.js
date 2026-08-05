@@ -101,7 +101,13 @@ function seedDemo(db, now = new Date()) {
       users[key] = user;
       return;
     }
-    if (!process.env.DEMO_PASSWORD) return;
+    if (!process.env.DEMO_PASSWORD) {
+      const fallbackRoles = key === 'lead' ? ['admin', 'lead'] : [value.role];
+      users[key] = one(db,
+        `SELECT id, name, role FROM users WHERE role IN (${fallbackRoles.map(() => '?').join(',')}) ORDER BY id LIMIT 1`,
+        fallbackRoles);
+      return;
+    }
     db.run('INSERT INTO users (phone, password, name, role) VALUES (?, ?, ?, ?)', [
       value.phone,
       bcrypt.hashSync(process.env.DEMO_PASSWORD, 10),
