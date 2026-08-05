@@ -2,10 +2,10 @@
   'use strict';
 
   var MANAGEMENT_TABS = [
-    'organization', 'schedule', 'attendance', 'registrations', 'reports', 'settings'
+    'organization', 'schedule', 'registrations', 'reports', 'settings'
   ];
   var TAB_LABELS = {
-    organization: '组织架构', schedule: '排班', attendance: '考勤',
+    organization: '组织架构', schedule: '排班',
     registrations: '注册审核', reports: '报告', settings: '设置'
   };
   var loaded = {};
@@ -96,7 +96,7 @@
     var heroCopy = node('div');
     heroCopy.appendChild(node('span', 'management-eyebrow', '运营控制中心'));
     heroCopy.appendChild(node('h2', '', '管理工作台'));
-    heroCopy.appendChild(node('p', '', '统一管理组织、排班、考勤、审核、报告与系统设置。'));
+    heroCopy.appendChild(node('p', '', '统一管理组织、排班、请假、审核、报告与系统设置。'));
     hero.appendChild(heroCopy);
     container.appendChild(hero);
     var tabs = node('div', 'management-tabs');
@@ -147,7 +147,6 @@
     panel(tab).appendChild(node('div', 'management-state', '加载中…'));
     if (tab === 'organization') return loadOrganization();
     if (tab === 'schedule') return loadSchedule();
-    if (tab === 'attendance') return renderAttendance();
     if (tab === 'registrations') return renderRegistrations();
     if (tab === 'reports') return renderReports();
     return renderSettings();
@@ -442,7 +441,16 @@
         var calendarUrl = '/api/calendar/day?date=' + encodeURIComponent(date.value);
         if (staff.value) calendarUrl += '&staff_id=' + encodeURIComponent(staff.value);
         var calendarData = await request(calendarUrl);
-        window.ResponsiveCalendar.render(calendar, calendarData || {}, { width: window.innerWidth });
+        window.ResponsiveCalendar.render(calendar, calendarData || {}, {
+          width: window.innerWidth,
+          onDeleteAttendance: async function (attendance, person) {
+            if (!attendance || !attendance.id) return;
+            if (!window.confirm('确认删除 ' + (person.name || '该人员') + ' 在 ' + date.value + ' 的考勤记录？')) return;
+            await request('/api/attendance/' + attendance.id, { method: 'DELETE' });
+            await refresh();
+          },
+          onError: function (error) { showMessage(target, error.message || '考勤删除失败', true); }
+        });
       } catch (error) {
         empty(list);
         showMessage(list, error.message, true);
@@ -552,55 +560,6 @@
     target.appendChild(list);
     target.appendChild(calendar);
     await refresh();
-  }
-  function renderAttendance() {
-    var target = panel('attendance'); empty(target);
-    var toolbar = node('div', 'management-toolbar');
-    var date = node('input'); date.type = 'date'; date.value = window.WorkforceUtils.localDateKey(new Date());
-    toolbar.appendChild(field('日期', date));
-    target.appendChild(toolbar);
-    var summary = node('div', 'manager-today-grid');
-    var detail = node('div', 'management-list card');
-    target.appendChild(summary); target.appendChild(detail);
-    target.appendChild(node('div', 'management-warning', '本轮暂未启用签到、补卡和考勤修正；可删除错误的考勤记录。'));
-    async function refresh() {
-      empty(summary); empty(detail);
-      try {
-        var data = await request('/api/calendar/day?date=' + encodeURIComponent(date.value));
-        var people = data.people || [];
-        var actual = people.filter(function (person) { return person.attendance; });
-        var abnormal = actual.filter(function (person) {
-          return !['normal', 'rest', 'leave'].includes(person.attendance.status);
-        });
-        [['应到', people.filter(function (p) { return p.shift && p.shift.assignmentType === 'work'; }).length],
-          ['已有记录', actual.length], ['异常', abnormal.length]].forEach(function (item) {
-          var card = node('div', 'card manager-today-card'); card.appendChild(node('span', '', item[0]));
-          card.appendChild(node('strong', '', item[1] + ' 人')); summary.appendChild(card);
-        });
-        people.forEach(function (person) {
-          var row = node('div', 'management-list-row');
-          row.appendChild(node('strong', '', person.name));
-          row.appendChild(node('span', '', person.attendance ? person.attendance.status : '暂无记录'));
-          if (person.attendance) {
-            var remove = node('button', 'btn danger sm', '删除记录');
-            remove.addEventListener('click', async function () {
-              if (!window.confirm('确认删除 ' + person.name + ' 在 ' + date.value + ' 的考勤记录？')) return;
-              remove.disabled = true;
-              try {
-                await request('/api/attendance/' + person.attendance.id, { method: 'DELETE' });
-                await refresh();
-              } catch (error) {
-                showMessage(detail, error.message || '考勤删除失败', true);
-                remove.disabled = false;
-              }
-            });
-            row.appendChild(remove);
-          }
-          detail.appendChild(row);
-        });
-      } catch (error) { showMessage(detail, error.message, true); }
-    }
-    date.addEventListener('change', refresh); refresh();
   }
   function renderRegistrations() {
     var target = panel('registrations'); empty(target);
