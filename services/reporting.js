@@ -179,10 +179,13 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const placeholders = ids.map(() => '?').join(',');
   const community = communityClause(filters);
   const noStaff = ids.length === 0;
+  const staffPlaceholders = ids.map(() => '?').join(',');
   const staffPredicate = noStaff
     ? '0'
-    : `t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${placeholders}))`;
-  const baseParams = [...ids, ...community.params];
+    : `(t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${staffPlaceholders}))
+        OR (NULLIF(t.worker, '') IS NOT NULL
+            AND t.worker IN (SELECT name FROM staff_profiles WHERE id IN (${staffPlaceholders}))))`;
+  const baseParams = [...ids, ...ids, ...community.params];
   const columns = ticketColumns(db);
 
   const received = one(db, `
