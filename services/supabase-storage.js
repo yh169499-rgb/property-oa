@@ -23,11 +23,17 @@ function objectUrl(config, objectPath) {
 }
 
 function headers(config, extra = {}) {
-  return {
-    Authorization: `Bearer ${config.serviceRoleKey}`,
+  const result = {
     apikey: config.serviceRoleKey,
     ...extra,
   };
+  // 新版 sb_secret_* 是 opaque key，不是 JWT；放进 Bearer 会被 Storage
+  // 当成普通/无效 JWT 解析，最终按 RLS 规则拒绝写入。旧版 service_role
+  // 仍需 Bearer 头以保持兼容。
+  if (!config.serviceRoleKey.startsWith('sb_secret_')) {
+    result.Authorization = `Bearer ${config.serviceRoleKey}`;
+  }
+  return result;
 }
 
 async function responseError(response, action) {
