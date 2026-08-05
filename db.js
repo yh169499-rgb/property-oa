@@ -179,8 +179,18 @@ async function initDB() {
     db.run("INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', ?)", [nowIso]);
   }
 
-  await saveDB();
+  await persistInitialSnapshot(saveDB, Boolean(remoteConfig?.syncRequired));
   return db;
+}
+
+async function persistInitialSnapshot(persist = saveDB, syncRequired = false, onError = markUploadError) {
+  try {
+    await persist();
+  } catch (error) {
+    onError(error);
+    if (syncRequired) throw error;
+    console.warn('⚠️ 远程数据库首次同步失败，本地服务继续启动:', error.message);
+  }
 }
 
 function saveDB() {
@@ -241,6 +251,7 @@ function setDBForTests(value) {
 module.exports = {
   initDB,
   saveDB,
+  persistInitialSnapshot,
   flushPersistence,
   restoreRemoteSnapshot,
   getPersistenceStatus,
