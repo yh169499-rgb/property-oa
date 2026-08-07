@@ -183,7 +183,6 @@
       metrics.appendChild(metric('团队接单', model.teamResults.received + ' 张'));
       metrics.appendChild(metric('团队完成', model.teamResults.completed + ' 张'));
       metrics.appendChild(metric('团队按时率', model.teamResults.onTimeRate + '%'));
-      metrics.appendChild(metric('团队迟到', model.teamResults.late + ' 次'));
     } else {
       metrics.appendChild(metric('接单', model.results.received + ' 张'));
       metrics.appendChild(metric('完成', model.results.completed + ' 张'));
@@ -224,13 +223,6 @@
       ? shift.startAt.slice(11, 16) + '—' + shift.endAt.slice(11, 16)
       : (shift && shift.leaveType ? shift.leaveType : '')));
     scheduleBody.appendChild(shiftBlock);
-    var attendanceBlock = element('div', 'schedule-block schedule-attendance');
-    attendanceBlock.appendChild(element('strong', '', '考勤 · ' + (model.schedule.attendance
-      ? (STATUS_LABELS[model.schedule.attendance.status] || model.schedule.attendance.status)
-      : '暂无记录')));
-    attendanceBlock.appendChild(element('span', '', model.schedule.attendance && model.schedule.attendance.checkInAt
-      ? '上班 ' + model.schedule.attendance.checkInAt.slice(11, 16) : ''));
-    scheduleBody.appendChild(attendanceBlock);
     var eventGroup = element('div', 'schedule-events');
     if (!model.schedule.events.length) eventGroup.appendChild(element('div', 'my-empty', model.schedule.emptyEventsLabel));
     model.schedule.events.forEach(function (event) {
@@ -243,58 +235,12 @@
     if (model.schedule.hasConflict) scheduleBody.appendChild(element('div', 'management-warning', '当前日程存在工单时间重叠，请联系主管调整。'));
     scheduleCard.appendChild(scheduleBody);
     rootNode.appendChild(scheduleCard);
-
-    var attendanceCard = element('section', 'card my-attendance-panel');
-    var attendanceHead = element('div', 'my-section-head');
-    var title = element('div');
-    title.appendChild(element('h3', '', '本月实际考勤'));
-    title.appendChild(element('p', '', '今日打卡：本轮暂未启用打卡；下方仍展示系统已有记录。'));
-    attendanceHead.appendChild(title);
-    attendanceHead.appendChild(element('strong', 'attendance-total',
-      model.attendance.actualDays + ' 天 · 迟到 ' + model.attendance.late + ' 次'));
-    attendanceCard.appendChild(attendanceHead);
-    var calendar = element('div', 'attendance-calendar');
-    if (!model.calendar.length) {
-      calendar.appendChild(element('div', 'my-empty', '本月暂无考勤记录'));
-    } else {
-      model.calendar.forEach(function (day) {
-        var cell = element('div', 'attendance-day status-' + day.status);
-        cell.appendChild(element('span', 'attendance-date', day.date));
-        cell.appendChild(element('strong', '', day.statusLabel));
-        var times = [day.checkIn && '上班 ' + day.checkIn.slice(11, 16), day.checkOut && '下班 ' + day.checkOut.slice(11, 16)]
-          .filter(Boolean).join(' · ');
-        cell.appendChild(element('small', '', times || '暂无打卡时间'));
-        if (model.isManager && day.id) {
-          var remove = element('button', 'btn danger sm attendance-delete', '删除');
-          remove.type = 'button';
-          remove.addEventListener('click', function () { removeAttendance(day.id, day.date, remove); });
-          cell.appendChild(remove);
-        }
-        calendar.appendChild(cell);
-      });
-    }
-    attendanceCard.appendChild(calendar);
-    rootNode.appendChild(attendanceCard);
   }
 
   async function request(path, options) {
     if (typeof API !== 'undefined' && !options) return API.get(path);
     if (typeof API !== 'undefined' && options && options.method === 'PATCH') return API.patch(path, options.body);
-    if (typeof API !== 'undefined' && options && options.method === 'DELETE') return API.del(path);
     return { ok: false, error: '服务暂不可用' };
-  }
-
-  async function removeAttendance(id, date, button) {
-    if (!window.confirm('确认删除 ' + date + ' 的考勤记录？')) return;
-    button.disabled = true;
-    var result = await request('/api/attendance/' + encodeURIComponent(id), { method: 'DELETE' });
-    if (result && result.ok) return load(state.period);
-    button.disabled = false;
-  }
-
-  function monthKey() {
-    var now = new Date();
-    return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
   }
 
   function dateKey(value) {
@@ -348,13 +294,12 @@
         : '/api/me/stats?period=' + encodeURIComponent(state.period);
       var results = await Promise.all([
         request(statsPath),
-        request('/api/me/attendance?month=' + encodeURIComponent(monthKey())),
         request('/api/calendar/day?date=' + encodeURIComponent(state.calendarDate || dateKey(new Date())))
       ]);
       var stats = results[0].ok ? results[0].data : {};
       state.stats = stats;
-      state.attendance = results[1].ok && Array.isArray(results[1].data) ? results[1].data : [];
-      state.calendar = calendarPayload(results[2]);
+      state.attendance = [];
+      state.calendar = calendarPayload(results[1]);
       state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
       render(buildMyPageModel(state.profile, stats, state.attendance, state.period, state.calendar));
     } catch (error) {

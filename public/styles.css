@@ -1124,13 +1124,7 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
 .period-switch button { min-width:42px; border:0; border-radius:999px; padding:8px 12px; color:#fff; background:transparent; cursor:pointer; }
 .period-switch button.active { color:#0b4f8a; background:#fff; }
 .my-page-grid { display:grid; grid-template-columns:minmax(280px,.9fr) minmax(320px,1.3fr); gap:16px; margin-bottom:16px; }
-.my-profile-panel,.my-summary-panel,.my-attendance-panel { padding:20px; }
-.dashboard-attendance-details { margin:14px 0 16px; padding:16px 18px; }
-.dashboard-attendance-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.dashboard-attendance-details h3 { margin:0 0 8px; }
-.dashboard-attendance-empty { color:var(--text-2); font-size:13px; }
-.dashboard-attendance-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid var(--hairline); font-size:13px; }
-.attendance-delete { margin-top:6px; align-self:flex-start; }
+.my-profile-panel,.my-summary-panel { padding:20px; }
 .my-profile-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .my-field { display:grid; gap:6px; }
 .my-field-label,.my-field-readonly { color:var(--text-2); font-size:12px; }
@@ -1143,26 +1137,17 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
 .my-section-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:14px; }
 .my-section-head h3,.my-section-head p { margin:0 0 4px; }
 .my-section-head p { color:var(--text-2); font-size:12px; }
-.attendance-calendar { display:grid; grid-template-columns:repeat(7,minmax(110px,1fr)); gap:8px; overflow-x:auto; }
 .my-schedule-card { margin:18px 0; padding:18px; }
 .schedule-date-controls { display:flex; gap:6px; align-items:center; }
 .schedule-agenda { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 .schedule-block { display:grid; gap:5px; min-height:72px; padding:12px; border-radius:12px; background:#f5f8fc; border-left:4px solid #2f6fed; }
 .schedule-block span { color:var(--text-2); font-size:13px; }
-.schedule-attendance { border-left-color:#22a06b; }
 .schedule-ticket { border-left-color:#e8942e; }
 .schedule-events { display:grid; gap:8px; }
 .schedule-events .my-empty { grid-column:1 / -1; padding:16px; }
-.attendance-day { min-height:94px; padding:10px; border-radius:10px; border-left:4px solid #94a3b8; background:#f8fafc; }
-.attendance-day span,.attendance-day small { display:block; color:var(--text-2); font-size:11px; }
-.attendance-day.status-normal { border-left-color:#22c55e; background:#f0fdf4; }
-.attendance-day.status-late,.attendance-day.status-early { border-left-color:#f59e0b; background:#fffbeb; }
-.attendance-day.status-absent { border-left-color:#ef4444; background:#fef2f2; }
-.attendance-day.status-leave,.attendance-day.status-rest { border-left-color:#64748b; background:#f1f5f9; }
 .my-empty { padding:24px; text-align:center; color:var(--text-2); }
 @media (max-width:1024px) {
   #page-dashboard .kpi-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
-  .attendance-calendar { grid-template-columns:repeat(4,minmax(120px,1fr)); }
 }
 @media (max-width:768px) {
   #page-dashboard::before { margin:-16px -16px -118px; }
@@ -1172,7 +1157,6 @@ button.management-setting { cursor:pointer; text-align:left; font:inherit; }
   .schedule-agenda { grid-template-columns:1fr; }
   .schedule-date-controls { align-self:stretch; justify-content:flex-start; }
   .my-profile-fields,.my-metrics { grid-template-columns:1fr 1fr; }
-  .attendance-calendar { grid-template-columns:repeat(2,minmax(125px,1fr)); }
 }
 
 /* ========== 响应式日历 ========== */
