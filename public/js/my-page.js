@@ -5,11 +5,7 @@
 }(typeof window !== 'undefined' ? window : null, function () {
   'use strict';
 
-  var state = { period: 'month', profile: null, stats: {}, attendance: [], calendarDate: '', calendar: null, busy: false };
-  var STATUS_LABELS = {
-    normal: '正常', late: '迟到', early: '早退', absent: '缺勤',
-    leave: '请假', overtime: '加班', rest: '休息'
-  };
+  var state = { period: 'month', profile: null, stats: {}, calendarDate: '', calendar: null, busy: false };
 
   function number(value) {
     var parsed = Number(value);
@@ -23,10 +19,9 @@
     );
   }
 
-  function buildMyPageModel(profile, stats, attendance, period, calendar) {
+  function buildMyPageModel(profile, stats, ignoredAttendance, period, calendar) {
     profile = profile || {};
     stats = stats || {};
-    attendance = Array.isArray(attendance) ? attendance : [];
     calendar = calendar || {};
     period = ['day', 'month', 'year'].includes(period) ? period : 'month';
     var manager = isManagerProfile(profile, stats);
@@ -34,7 +29,6 @@
     var personal = manager ? (stats.personalActions || { total: 0, byAction: {} }) : null;
     var managerResults = manager ? (stats.personalResults || {}) : null;
     var own = manager ? {} : stats;
-    var attendanceStats = own.attendance || {};
 
     var ownCalendar = (calendar.people || []).find(function (person) {
       return Number(person.id) === Number(profile.id);
@@ -70,9 +64,7 @@
         received: number(team.received && team.received.total),
         completed: number(team.completed && team.completed.total),
         averageHours: number(team.completed && team.completed.averageHours),
-        onTimeRate: number(team.completed && team.completed.onTimeRate),
-        actualDays: number(team.attendance && team.attendance.actualDays),
-        late: number(team.attendance && team.attendance.late)
+        onTimeRate: number(team.completed && team.completed.onTimeRate)
       } : null,
       results: {
         received: number(own.received && own.received.total),
@@ -80,27 +72,9 @@
         averageHours: number(own.completed && own.completed.averageHours),
         onTimeRate: number(own.completed && own.completed.onTimeRate)
       },
-      attendance: {
-        actualDays: attendanceStats.actualDays == null ? attendance.length : number(attendanceStats.actualDays),
-        late: attendanceStats.late == null
-          ? attendance.filter(function (item) { return item.status === 'late'; }).length
-          : number(attendanceStats.late)
-      },
-      calendar: attendance.map(function (item) {
-        return {
-          id: item.id,
-          date: item.work_date || '',
-          day: String(item.work_date || '').slice(-2),
-          status: item.status || 'normal',
-          statusLabel: STATUS_LABELS[item.status] || '已记录',
-          checkIn: item.check_in_at || item.check_in || '',
-          checkOut: item.check_out_at || item.check_out || ''
-        };
-      }),
       schedule: {
         date: calendar.date || '',
         shift: ownCalendar.shift || null,
-        attendance: ownCalendar.attendance || null,
         events: scheduleEvents,
         hasConflict: (calendar.conflicts || []).some(function (conflict) {
           return scheduleEvents.some(function (event) { return (conflict.ticketIds || []).includes(event.ticketId); });
@@ -298,10 +272,9 @@
       ]);
       var stats = results[0].ok ? results[0].data : {};
       state.stats = stats;
-      state.attendance = [];
       state.calendar = calendarPayload(results[1]);
       state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
-      render(buildMyPageModel(state.profile, stats, state.attendance, state.period, state.calendar));
+      render(buildMyPageModel(state.profile, stats, [], state.period, state.calendar));
     } catch (error) {
       if (rootNode) {
         rootNode.replaceChildren(element('div', 'card my-empty',
@@ -319,7 +292,7 @@
     var result = await request('/api/calendar/day?date=' + encodeURIComponent(date));
     if (result.ok) {
       state.calendar = calendarPayload(result);
-      render(buildMyPageModel(state.profile, state.stats, state.attendance, state.period, state.calendar));
+      render(buildMyPageModel(state.profile, state.stats, [], state.period, state.calendar));
     }
   }
 

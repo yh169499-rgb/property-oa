@@ -30,7 +30,7 @@ test('builds personal schedule from server calendar data', () => {
   });
   assert.equal(model.schedule.date, '2026-08-04');
   assert.equal(model.schedule.shift.templateName, '标准白班');
-  assert.equal(model.schedule.attendance.status, 'normal');
+  assert.equal('attendance' in model.schedule, false);
   assert.equal(model.schedule.events[0].ticketId, 'DEMO-1');
   assert.equal(model.schedule.hasConflict, false);
 });
@@ -66,10 +66,11 @@ test('主管统计接口暂时无数据时，个人中心仍可渲染零值', ()
   assert.equal(model.teamResults.staffCount, 0);
 });
 
-test('个人考勤记录保留 ID，主管页面可对已有记录显示删除入口', () => {
+test('个人中心忽略历史考勤数据，只保留资料、成果和日程', () => {
   const model = buildMyPageModel({ id: 1, name: '主管', position: '主管' }, {}, [
     { id: 42, work_date: '2026-08-05', status: 'late' },
   ], 'month', { date: '2026-08-05', people: [], events: [], conflicts: [] });
-  assert.equal(model.calendar[0].id, 42);
+  assert.equal('attendance' in model, false);
+  assert.equal('calendar' in model, false);
   assert.equal(model.isManager, true);
 });

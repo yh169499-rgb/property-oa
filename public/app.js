@@ -140,23 +140,28 @@ function initNav() {
 }
 
 function showPage(page, navPage) {
-  var target = $('#page-' + page);
+  var employeeView = currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_');
+  var resolvedPage = page === 'dashboard' && employeeView ? 'worker-home' : page;
+  var target = $('#page-' + resolvedPage);
   if (!target) return false;
   $$('.nav button').forEach(x => x.classList.remove('active'));
   var activeNav = $$('.nav button').find(b => b.dataset.page === (navPage || page));
   if (activeNav) activeNav.classList.add('active');
   $$('.page').forEach(p => p.classList.remove('active'));
   target.classList.add('active');
-  if (page === 'dashboard') setTimeout(function() {
+  if (resolvedPage === 'dashboard') setTimeout(function() {
     // 销毁旧图表实例避免display:none时尺寸为0的问题
     Object.keys(charts).forEach(function(k) { try { charts[k].dispose(); } catch(e) {} });
     charts = {};
     renderDashboard();
   }, 50);
-  if (page === 'management' && window.ManagementWorkspace) {
+  if (resolvedPage === 'worker-home' && window.WorkerHome) {
+    setTimeout(window.WorkerHome.init, 0);
+  }
+  if (resolvedPage === 'management' && window.ManagementWorkspace) {
     setTimeout(window.ManagementWorkspace.init, 0);
   }
-  if (page === 'my' && window.MyPage && typeof window.MyPage.init === 'function') {
+  if (resolvedPage === 'my' && window.MyPage && typeof window.MyPage.init === 'function') {
     setTimeout(function() { window.MyPage.init('month'); }, 0);
   }
   return true;
@@ -216,139 +221,19 @@ function roleWorkerName() {
 function applyRoleView() {
   var isWorker = currentRole.startsWith('worker_');
   var isKeeper = currentRole.startsWith('pm_keeper_');
-  // 师傅/管家视图：隐藏管理工作台和看板
+  // 员工视图保留独立首页，只显示与本人职责相关的工单入口。
   $$('.nav button').forEach(b => {
     if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
-    if (b.dataset.page === 'dashboard') b.style.display = (isWorker || isKeeper) ? 'none' : '';
+    if (b.dataset.page === 'dashboard') b.style.display = '';
+    if (b.dataset.page === 'repair') b.style.display = isKeeper ? 'none' : '';
+    if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = isWorker ? 'none' : '';
   });
   // 重新加载小区列表（按角色权限过滤）
   reloadCommunities();
-  // 切换到师傅视图时默认显示工单页
-  if (isWorker) { navTo('repair'); }
-  else if (isKeeper) { navTo('complaint'); }
-  // 显示/隐藏"我的状态"卡片
-  var statusCard = $('#my-status-card');
-  if (statusCard) {
-    statusCard.style.display = (isWorker || isKeeper) ? '' : 'none';
-    if (isWorker || isKeeper) renderMyStatus();
-  }
-  // 显示个人信息卡片（所有角色）
-  var profileCard = $('#my-profile-card');
-  if (profileCard) {
-    profileCard.style.display = '';
-    renderMyProfile();
-  }
+  // 师傅/管家登录后进入自己的工作台。
+  if (isWorker || isKeeper) navTo('dashboard');
   renderAll();
   if (openTicketId) openDrawer(openTicketId);
-}
-
-function renderMyStatus() {
-  var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
-  var s = state.staff.find(function(x) { return x.name === myName; });
-  if (!s) return;
-  var label = s.status === 'on' ? '在岗待命' : s.status === 'busy' ? '正在处理' : '请假';
-  var dotCls = s.status === 'on' ? 'on' : s.status === 'busy' ? 'busy' : 'off';
-  var labelEl = $('#my-status-label');
-  if (labelEl) labelEl.innerHTML = '<span class="staff-status"><span class="status-dot ' + dotCls + '"></span>' + label + '</span>';
-  var sel = $('#my-status-select');
-  if (sel) sel.value = s.status;
-}
-
-function renderMyProfile() {
-  var el = $('#my-profile-content');
-  if (!el) return;
-  var user = JSON.parse(localStorage.getItem('login_user') || '{}');
-  var myName = user.name || roleObj().name;
-  var s = state.staff.find(function(x) { return x.name === myName; });
-  var isAdmin = currentRole === 'eng_lead';
-
-  // 入职时间（从 staff joinDate 或用默认值）
-  var joinDate = (s && s.joinDate) ? s.joinDate : '2026-01-01';
-  var joinMs = new Date(joinDate).getTime();
-  var now = Date.now();
-  var workDays = Math.floor((now - joinMs) / 86400000);
-  var workMonths = Math.floor(workDays / 30);
-  var workYears = Math.floor(workDays / 365);
-  var seniorityLabel = workYears >= 1 ? workYears + '年' + Math.floor((workDays % 365) / 30) + '个月' : workMonths + '个月';
-
-  // 本月在岗天数（简化：用当月天数 - 请假天数估算，这里用固定逻辑）
-  var thisMonth = new Date();
-  var monthDays = thisMonth.getDate(); // 本月已过天数
-  var attendDays = monthDays; // 默认全勤（后续可从状态记录计算）
-
-  // 处理工单数
-  var myTickets = state.tickets.filter(function(t) { return t.worker === myName; });
-  var doneCount = myTickets.filter(function(t) { return t.status === 'done'; }).length;
-  var activeCount = myTickets.filter(function(t) { return t.status === 'doing' || t.status === 'confirm' || t.status === 'pending'; }).length;
-
-  var roleLabel = isAdmin ? '主管' : (s ? s.role : user.role === 'worker' ? '维修工' : '物业管家');
-  var skillLabel = s ? (s.skill || '—') : '—';
-  var phoneLabel = user.phone || (s ? s.phone : '—');
-
-  // 主管专属数据
-  var adminExtra = '';
-  if (isAdmin) {
-    var totalDispatched = state.tickets.filter(function(t) { return t.status !== 'wait'; }).length;
-    var staffCount = state.staff.filter(function(s) { return s.role === '维修工' || s.role === '物业管家'; }).length;
-    adminExtra = `
-      <div class="elem"><div class="k">累计派单</div><div class="v">${totalDispatched} 张</div></div>
-      <div class="elem"><div class="k">管理人员</div><div class="v">${staffCount} 人</div></div>
-    `;
-  }
-
-  // 师傅专属数据
-  var workerExtra = '';
-  if (!isAdmin) {
-    workerExtra = `
-      <div class="elem"><div class="k">技能</div><div class="v">${esc(skillLabel)}</div></div>
-      <div class="elem"><div class="k">累计完成工单</div><div class="v">${doneCount} 张</div></div>
-      <div class="elem"><div class="k">当前处理中</div><div class="v">${activeCount} 张</div></div>
-    `;
-  }
-
-  el.innerHTML = `
-    <div class="elements">
-      <div class="elem"><div class="k">姓名</div><div class="v">${esc(myName)}</div></div>
-      <div class="elem"><div class="k">角色</div><div class="v">${esc(roleLabel)}</div></div>
-      <div class="elem"><div class="k">电话</div><div class="v">${esc(phoneLabel)}</div></div>
-      <div class="elem"><div class="k">入职时间</div><div class="v">${esc(joinDate)}</div></div>
-      <div class="elem"><div class="k">工龄</div><div class="v">${seniorityLabel}</div></div>
-      <div class="elem"><div class="k">本月出勤</div><div class="v">${attendDays} 天</div></div>
-      ${isAdmin ? adminExtra : workerExtra}
-    </div>
-  `;
-}
-
-function updateMyStatus() {
-  var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
-  var s = state.staff.find(function(x) { return x.name === myName; });
-  if (!s) { toast('未找到人员信息'); return; }
-  var newStatus = $('#my-status-select').value;
-  var hasActive = state.tickets.some(function(t) { return t.worker === myName && (t.status === 'doing' || t.status === 'confirm'); });
-
-  // 有工单时不能切到待命或请假
-  if (hasActive && (newStatus === 'on' || newStatus === 'off')) {
-    toast('您手上还有未完成工单，请先完成或驳回后再更改状态');
-    $('#my-status-select').value = s.status;
-    return;
-  }
-  // 没工单时不能切到正在处理
-  if (!hasActive && newStatus === 'busy') {
-    toast('当前没有处理中的工单，无法设为"正在处理"');
-    $('#my-status-select').value = s.status;
-    return;
-  }
-
-  s.status = newStatus;
-  save();
-  fetch(API_BASE + '/api/staff/status', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: myName, status: newStatus })
-  }).catch(function() {});
-  renderMyStatus();
-  var label = newStatus === 'on' ? '在岗待命' : newStatus === 'busy' ? '正在处理' : '请假';
-  toast('状态已更新为：' + label);
 }
 
 async function reloadCommunities() {
@@ -1129,6 +1014,7 @@ function openStaffProfile(id){
 }
 
 async function renderDashboard(){
+  if(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))return;
   var ids=['kpi-total','kpi-repair','kpi-complaint','kpi-help','kpi-urgent','kpi-avg','kpi-rate','dashboard-manager-actions'];
   var stateEl=$('#dashboard-api-state');
   ids.forEach(function(id){var el=$('#'+id);if(el)el.textContent='—';});

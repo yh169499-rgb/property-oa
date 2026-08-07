@@ -686,6 +686,54 @@ tbody tr:hover { background: #f8f7f6; box-shadow: inset 3px 0 0 var(--primary); 
 /* 驳回 */
 .reject-history { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius); background: var(--tint-rose); color: #a51d1d; font-size: 12px; }
 
+/* ========== 师傅工作台 ========== */
+#worker-home-root { display:grid; gap:22px; }
+.worker-hero {
+  display:flex; align-items:center; justify-content:space-between; gap:20px;
+  min-height:160px; padding:30px 36px; border-radius:24px; color:#fff;
+  background:linear-gradient(120deg,#0c3b70 0%,#1461bd 52%,#1677ff 100%);
+  box-shadow:0 18px 40px rgba(20,87,173,.18);
+}
+.worker-eyebrow { display:block; margin-bottom:8px; color:rgba(255,255,255,.72); font-size:13px; letter-spacing:.08em; }
+.worker-hero h2 { margin:0 0 8px; color:#fff; font-size:30px; }
+.worker-hero p { margin:0; color:rgba(255,255,255,.72); }
+.worker-profile-link { flex:0 0 auto; background:#fff; color:#1459aa; }
+.worker-kpi-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; }
+.worker-kpi {
+  display:grid; gap:9px; min-height:132px; padding:22px; border:1px solid #e4e9f2;
+  border-radius:18px; background:#fff; box-shadow:0 8px 24px rgba(17,42,78,.07);
+}
+.worker-kpi-label { color:var(--text-2); font-size:13px; }
+.worker-kpi-value { color:#0c4f91; font-size:28px; line-height:1.1; }
+.worker-kpi small { color:var(--text-3); }
+.worker-home-grid { display:grid; grid-template-columns:minmax(300px,.85fr) minmax(420px,1.5fr); gap:18px; }
+.worker-schedule-panel,.worker-task-panel { min-height:260px; }
+.worker-section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:18px; }
+.worker-section-head h3,.worker-task-panel h3 { margin:0 0 6px; }
+.worker-section-head p { margin:0; color:var(--text-3); font-size:12px; }
+.worker-shift-block {
+  display:grid; gap:8px; padding:20px; border-left:4px solid #2f6fed; border-radius:12px;
+  background:#f3f7ff;
+}
+.worker-shift-block span { color:var(--text-2); font-size:13px; }
+.worker-task-panel { display:grid; align-content:start; gap:10px; }
+.worker-task-item {
+  display:grid; gap:6px; width:100%; padding:14px 16px; border:1px solid #dfe7f5;
+  border-left:4px solid #16a36a; border-radius:12px; background:#fff; color:var(--text);
+  text-align:left; cursor:pointer; transition:border-color .18s,box-shadow .18s,transform .18s;
+}
+.worker-task-item:hover { border-color:#8cb9f2; box-shadow:0 7px 18px rgba(20,87,173,.1); transform:translateY(-1px); }
+.worker-task-item span { color:var(--text-2); font-size:12px; }
+@media (max-width:1100px) {
+  .worker-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .worker-home-grid { grid-template-columns:1fr; }
+}
+@media (max-width:700px) {
+  .worker-hero { align-items:flex-start; flex-direction:column; min-height:auto; padding:24px; border-radius:18px; }
+  .worker-kpi-grid { grid-template-columns:1fr; }
+  .worker-kpi { min-height:auto; }
+}
+
 /* ========== 师傅日程时间轴（竖版：飞书日历风格）========== */
 .schedule-grid { overflow-x: auto; overflow-y: auto; max-height: 700px; -webkit-overflow-scrolling: touch; }
 
