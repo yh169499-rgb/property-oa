@@ -68,3 +68,19 @@ test('删除接口等待持久化完成后再返回，避免刷新恢复旧记�
   release();
   assert.equal((await pending).status, 200);
 });
+
+test('主管可一次性清空全部考勤记录及变更日志，并等待持久化', async (t) => {
+  const db = await fixture();
+  db.run("INSERT INTO attendance_change_logs (attendance_id, operator_user_id) VALUES (30, 1)");
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const response = await fetch(`${server.url}/api/attendance/clear-all`, {
+    method: 'POST', headers: authHeader({ id: 1, role: 'lead' }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.deleted, { attendanceRecords: 1, changeLogs: 1 });
+  assert.deepEqual(body.remaining, { attendanceRecords: 0, changeLogs: 0 });
+  assert.equal(db.exec('SELECT COUNT(*) AS count FROM attendance_records')[0].values[0][0], 0);
+  assert.equal(db.exec('SELECT COUNT(*) AS count FROM attendance_change_logs')[0].values[0][0], 0);
+});
