@@ -6,6 +6,7 @@ const test = require('node:test');
 const publicDir = path.join(__dirname, '..', 'public');
 const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(publicDir, 'app.js'), 'utf8');
+const myPage = fs.readFileSync(path.join(publicDir, 'js', 'my-page.js'), 'utf8');
 const workspace = fs.readFileSync(
   path.join(publicDir, 'js', 'management-workspace.js'),
   'utf8'
@@ -41,8 +42,8 @@ test('management page keeps the blue hero as its only title and reports react to
   assert.match(workspace, /to\.addEventListener\('change', generateReport\)/);
 });
 
-test('主管首页提供当天考勤明细删除入口', () => {
-  assert.match(html, /dashboard-attendance-details/);
-  assert.match(app, /dashboard-attendance-details/);
-  assert.match(app, /API\.del\('\/api\/attendance\//);
+test('主管首页和我的页面不再渲染考勤模块', () => {
+  assert.doesNotMatch(html, /团队到岗|考勤异常|dashboard-attendance/);
+  assert.doesNotMatch(app, /renderDashboardAttendanceDetails|dashboard-team-attendance|dashboard-attendance/);
+  assert.doesNotMatch(myPage, /本月实际考勤|考勤 ·|my-attendance-panel|\/api\/me\/attendance|团队迟到/);
 });
