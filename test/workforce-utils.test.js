@@ -49,7 +49,7 @@ test('encodes required path segments and rejects empty identifiers', () => {
   );
 });
 
-test('builds an editable personal month model from actual attendance records', () => {
+test('builds an editable personal month model without attendance data', () => {
   const model = buildMyPageModel(
     {
       id: 8,
@@ -77,10 +77,8 @@ test('builds an editable personal month model from actual attendance records', (
   assert.equal(model.periodLabel, '本月');
   assert.deepEqual(model.editableFields, ['birth_month', 'phone']);
   assert.deepEqual(model.readonlyFields, ['join_date', 'position', 'manager']);
-  assert.equal(model.attendance.actualDays, 3);
-  assert.equal(model.attendance.late, 1);
-  assert.equal(model.calendar.length, 3);
-  assert.equal(model.calendar[1].statusLabel, '迟到');
+  assert.equal('attendance' in model, false);
+  assert.equal('calendar' in model, false);
   assert.equal(model.teamResults, null);
 });
 
