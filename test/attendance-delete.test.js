@@ -4,6 +4,7 @@ const { createTestDB } = require('./helpers/test-db');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 const { startHttpServer } = require('./helpers/http-server');
 const { authHeader } = require('./helpers/auth');
+const database = require('../db');
 
 async function fixture() {
   const db = await createTestDB();
@@ -41,4 +42,29 @@ test('deleting an unknown attendance record returns a stable code', async (t) =>
   });
   assert.equal(response.status, 404);
   assert.equal((await response.json()).code, 'ATTENDANCE_NOT_FOUND');
+});
+
+test('删除接口等待持久化完成后再返回，避免刷新恢复旧记录', async (t) => {
+  const db = await fixture();
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+  const originalSave = database.saveDB;
+  t.after(() => { database.saveDB = originalSave; });
+  let release;
+  let saveStarted = false;
+  database.saveDB = () => new Promise((resolve) => {
+    saveStarted = true;
+    release = resolve;
+  });
+  const pending = fetch(`${server.url}/api/attendance/30`, {
+    method: 'DELETE', headers: authHeader({ id: 1, role: 'lead' }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(saveStarted, true);
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  release();
+  assert.equal((await pending).status, 200);
 });
