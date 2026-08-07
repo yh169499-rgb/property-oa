@@ -1132,9 +1132,27 @@ function renderDashboardAttendanceDetails(records) {
   var mount = $('#dashboard-attendance-details');
   if (!mount) return;
   mount.innerHTML = '';
+  var header = document.createElement('div');
+  header.className = 'dashboard-attendance-header';
   var title = document.createElement('h3');
   title.textContent = '今日考勤记录';
-  mount.appendChild(title);
+  header.appendChild(title);
+  var clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'btn danger sm';
+  clear.textContent = '清空全部历史考勤';
+  clear.addEventListener('click', async function () {
+    if (!window.confirm('将删除全部历史考勤记录及变更日志，排班和工单不受影响。确认继续？')) return;
+    clear.disabled = true;
+    var result = await API.post('/api/attendance/clear-all', {});
+    if (result && result.ok) {
+      toast('已清空 ' + ((result.deleted && result.deleted.attendanceRecords) || 0) + ' 条考勤记录');
+      return renderDashboard();
+    }
+    clear.disabled = false;
+  });
+  header.appendChild(clear);
+  mount.appendChild(header);
   records = Array.isArray(records) ? records : [];
   if (!records.length) {
     var empty = document.createElement('div');
