@@ -1142,17 +1142,6 @@ function renderDashboardAttendanceDetails(records) {
   clear.className = 'btn danger sm';
   clear.textContent = '清空全部历史考勤';
   clear.addEventListener('click', async function () {
-    if (clear.dataset.confirm !== 'yes') {
-      clear.dataset.confirm = 'yes';
-      clear.textContent = '再次点击确认清空';
-      setTimeout(function () {
-        if (!clear.disabled) {
-          clear.dataset.confirm = '';
-          clear.textContent = '清空全部历史考勤';
-        }
-      }, 5000);
-      return;
-    }
     clear.disabled = true;
     var result = await API.post('/api/attendance/clear-all', {});
     if (result && result.ok) {
