@@ -44,7 +44,7 @@ test('上海日/月边界和包含结束日的范围使用排他终点', () => {
   assert.throws(() => inclusiveDateRange('2026-02-30', '2026-03-01'), /日期/);
 });
 
-test('人员报告按接单和完成双口径统计，考勤只数现有记录', async () => {
+test('人员报告按接单和完成双口径统计且不再混入考勤', async () => {
   const db = await fixture();
   db.run(`
     INSERT INTO tickets
@@ -62,8 +62,7 @@ test('人员报告按接单和完成双口径统计，考勤只数现有记录',
   assert.equal(report.received.total, 2);
   assert.equal(report.completed.total, 2);
   assert.equal(report.completed.onTimeRate, 100);
-  assert.equal(report.attendance.actualDays, 2);
-  assert.equal(report.attendance.late, 1);
+  assert.equal(Object.hasOwn(report, 'attendance'), false);
   assert.deepEqual(report.categories, [{ category: '电路', total: 2 }]);
   assert.equal(report.current.returned, 1);
   assert.equal(report.recurrence.total, 1);

@@ -8,12 +8,19 @@ const { queryAll, queryOne, run, saveDB, getDB } = require('../db');
 const config = require('../config');
 const { descendantIds } = require('../services/organization');
 const { getStaffReport, completionExpression } = require('../services/reporting');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
+const {
+  getActiveRule,
+  listRuleVersions,
+  createRuleVersion,
+} = require('../services/performance');
 
 const REPORT_BUSINESS_ERRORS = new Set([
   'PROFILE_NOT_FOUND',
   'REPORT_SCOPE_FORBIDDEN',
   'INVALID_DATE_RANGE',
   'INVALID_STAFF_ID',
+  'INVALID_PERFORMANCE_RULE',
 ]);
 
 function reportError(res, error) {
@@ -133,6 +140,34 @@ router.post('/settings/sla', (req, res) => {
   slaInterval = Math.max(0, Number(intervalMinutes) || 0) * 60000;
   startSlaAlerts();
   res.json({ success: true, intervalMinutes: slaInterval / 60000 });
+});
+
+// GET/POST /api/settings/performance
+// 规则是版本化的：历史版本只读，发布新规则后仅后续工单使用新版本。
+router.get('/settings/performance', requireAuth, requireAdmin, (req, res) => {
+  try {
+    res.json({
+      data: {
+        active: getActiveRule(getDB()),
+        versions: listRuleVersions(getDB()),
+      },
+    });
+  } catch (error) {
+    return reportError(res, error);
+  }
+});
+
+router.post('/settings/performance/versions', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const active = createRuleVersion(getDB(), req.body || {}, req.user.id);
+    // saveDB is intentionally best-effort here; persistence middleware handles retry.
+    Promise.resolve(saveDB()).catch(() => {});
+    return res.status(201).json({
+      data: { active, versions: listRuleVersions(getDB()) },
+    });
+  } catch (error) {
+    return reportError(res, error);
+  }
 });
 
 // GET /api/sla/overdue

@@ -1,4 +1,5 @@
 const { descendantIds } = require('./organization');
+const { scoreStaff } = require('./performance');
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -242,20 +243,6 @@ function reportForStaffIds(db, staffIds, filters = {}) {
       SUM(CASE WHEN t.status = 'wait' THEN 1 ELSE 0 END) waiting
       FROM tickets t WHERE ${staffPredicate}${community.sql}`,
   baseParams);
-  const attendanceRows = noStaff ? [] : rows(db, `
-    SELECT status, COUNT(*) count
-      FROM attendance_records
-     WHERE staff_id IN (${placeholders})
-       AND work_date >= ? AND work_date < ?
-     GROUP BY status`,
-  [...ids, shanghaiDateFromInstant(range.from), shanghaiDateFromInstant(range.toExclusive)]);
-  const attendance = { actualDays: 0, normal: 0, late: 0, early: 0, leave: 0, absent: 0, missing: 0 };
-  for (const item of attendanceRows) {
-    attendance.actualDays += Number(item.count);
-    if (Object.hasOwn(attendance, item.status)) attendance[item.status] = Number(item.count);
-    else if (item.status === 'early_leave') attendance.early = Number(item.count);
-    else if (item.status === 'missing_punch') attendance.missing = Number(item.count);
-  }
   return {
     range,
     received: { total: Number(received.total || 0), basis: 'assigned_at_or_created' },
@@ -273,7 +260,6 @@ function reportForStaffIds(db, staffIds, filters = {}) {
     recurrence: { total: Number(periodSignals.recurring || 0) },
     feedback: { multiple: Number(periodSignals.feedback || 0) },
     categories,
-    attendance,
   };
 }
 
@@ -292,7 +278,11 @@ function getStaffReport(db, staffId, filters = {}) {
     error.code = 'PROFILE_NOT_FOUND';
     throw error;
   }
-  return { staff: profile, ...reportForStaffIds(db, [id], filters) };
+  return {
+    staff: profile,
+    ...reportForStaffIds(db, [id], filters),
+    performance: scoreStaff(db, id, filters),
+  };
 }
 
 function getManagerReport(db, staffId, filters = {}) {
