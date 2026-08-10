@@ -18,7 +18,7 @@
     var received = report.received || {};
     var completed = report.completed || {};
     var current = report.current || {};
-    var attendance = report.attendance || {};
+    var performance = report.performance || {};
     var recurrence = report.recurrence || {};
     var feedback = report.feedback || {};
     var categories = report.categories || [];
@@ -34,7 +34,8 @@
       '工单状态：处理中 ' + value(current.doing, ' 单') + '；搁置 ' + value(current.pending, ' 单') + '；待派单 ' + value(current.waiting, ' 单') + '；期间退回 ' + value(current.returned, ' 单'),
       '异常关注：复发 ' + value(recurrence.total, ' 单') + '；多人反馈 ' + value(feedback.multiple, ' 单'),
       '分类分布：' + (categories.length ? categories.map(function (item) { return item.category + ' ' + item.total + ' 单'; }).join('；') : '无'),
-      '考勤：实际 ' + value(attendance.actualDays, ' 天') + '；正常 ' + value(attendance.normal, ' 天') + '；迟到 ' + value(attendance.late, ' 天') + '；早退 ' + value(attendance.early, ' 天') + '；请假 ' + value(attendance.leave, ' 天') + '；缺勤 ' + value(attendance.absent, ' 天') + '；缺卡 ' + value(attendance.missing, ' 天'),
+      '绩效评分：' + (performance.status === 'scored' ? value(performance.score, ' 分') + '（' + (performance.level || '-') + '）' : '样本不足'),
+      '评分依据：规则版本 ' + ((performance.ruleVersions || []).map(function (item) { return item.version; }).join('、') || '-') + '；样本 ' + value(performance.sampleSize, ' 单'),
       '生成时间：' + new Date().toLocaleString('zh-CN', { hour12: false }),
     ].join('\n');
   }
@@ -42,7 +43,7 @@
   function reportHtml(report, filters) {
     var staff = report.staff || {}, received = report.received || {};
     var completed = report.completed || {}, current = report.current || {};
-    var attendance = report.attendance || {}, categories = report.categories || [];
+    var performance = report.performance || {}, categories = report.categories || [];
     var recurrence = report.recurrence || {}, feedback = report.feedback || {};
     return '<article class="staff-report-document">' +
       '<div class="staff-report-head"><div><span>人员工作报告</span><h2>' + escapeHtml(staff.name || '-') + '</h2><p>' +
@@ -56,10 +57,9 @@
         .map(function (item) { return '<div><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(value(item[1])) + '</strong><small>' + escapeHtml(item[2]) + '</small></div>'; }).join('') +
       '</div><div class="staff-report-sections"><section><h3>分类分布</h3>' +
       (categories.length ? categories.map(function (item) { return '<p><span>' + escapeHtml(item.category) + '</span><strong>' + escapeHtml(item.total) + ' 单</strong></p>'; }).join('') : '<p>暂无接单</p>') +
-      '</section><section><h3>实际考勤</h3><p>出勤记录 <strong>' + value(attendance.actualDays, ' 天') +
-      '</strong></p><p>正常 / 迟到 / 早退 <strong>' + value(attendance.normal) + ' / ' + value(attendance.late) + ' / ' + value(attendance.early) +
-      '</strong></p><p>请假 / 缺勤 / 缺卡 <strong>' + value(attendance.leave) + ' / ' + value(attendance.absent) + ' / ' + value(attendance.missing) +
-      '</strong></p></section></div><div class="staff-report-basis"><p>接单口径：按 assigned_at 统计，缺失时使用 created。</p><p>完成口径：按完成时间统计，不要求工单在本期接收。</p><p>生成时间：' + escapeHtml(new Date().toLocaleString('zh-CN', { hour12: false })) + '</p></div></article>';
+      '</section><section><h3>绩效评分</h3><p>综合得分 <strong>' + (performance.status === 'scored' ? value(performance.score, ' 分') : '样本不足') + '</strong></p>' +
+      '<p>等级 <strong>' + escapeHtml(performance.level || '样本不足') + '</strong></p><p>规则版本 <strong>' + escapeHtml((performance.ruleVersions || []).map(function (item) { return 'v' + item.version + '（' + (item.sampleSize || 0) + '单）'; }).join('、') || '-') + '</strong></p>' +
+      '</section></div><div class="staff-report-basis"><p>接单口径：按 assigned_at 统计，缺失时使用 created。</p><p>完成口径：按完成时间统计；评分由服务端按版本化规则计算。</p><p>计算依据：完成率、准时率、质量分及各项权重见规则版本。</p><p>生成时间：' + escapeHtml(new Date().toLocaleString('zh-CN', { hour12: false })) + '</p></div></article>';
   }
 
   function copy(report, filters) {

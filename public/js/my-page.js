@@ -5,7 +5,7 @@
 }(typeof window !== 'undefined' ? window : null, function () {
   'use strict';
 
-  var state = { period: 'month', profile: null, stats: {}, calendarDate: '', calendar: null, busy: false };
+  var state = { period: 'month', profile: null, stats: {}, calendarDate: '', calendar: null, directory: [], busy: false };
 
   function number(value) {
     var parsed = Number(value);
@@ -19,10 +19,11 @@
     );
   }
 
-  function buildMyPageModel(profile, stats, ignoredAttendance, period, calendar) {
+  function buildMyPageModel(profile, stats, ignoredAttendance, period, calendar, directory) {
     profile = profile || {};
     stats = stats || {};
     calendar = calendar || {};
+    directory = Array.isArray(directory) ? directory : [];
     period = ['day', 'month', 'year'].includes(period) ? period : 'month';
     var manager = isManagerProfile(profile, stats);
     var team = stats.team || stats.teamResults || {};
@@ -81,7 +82,8 @@
         }),
         emptyShiftLabel: '今天未安排班次',
         emptyEventsLabel: '暂无工单时间块'
-      }
+      },
+      directory: directory
     };
   }
 
@@ -209,6 +211,16 @@
     if (model.schedule.hasConflict) scheduleBody.appendChild(element('div', 'management-warning', '当前日程存在工单时间重叠，请联系主管调整。'));
     scheduleCard.appendChild(scheduleBody);
     rootNode.appendChild(scheduleCard);
+    var directoryCard = element('section', 'card my-directory-card');
+    directoryCard.appendChild(element('h3', '', '同小区员工通讯录'));
+    if (!model.directory.length) directoryCard.appendChild(element('div', 'my-empty', '暂无可见同事或当前小区未配置通讯录。'));
+    model.directory.forEach(function (person) {
+      var row = element('div', 'my-directory-row');
+      row.appendChild(element('strong', '', person.name || '未命名'));
+      row.appendChild(element('span', '', (person.position || '员工') + ' · ' + (person.phone || '未登记手机号')));
+      directoryCard.appendChild(row);
+    });
+    rootNode.appendChild(directoryCard);
   }
 
   async function request(path, options) {
@@ -266,15 +278,19 @@
       var statsPath = manager
         ? '/api/reports/manager/' + encodeURIComponent(state.profile.id) + managerPeriodQuery(state.period)
         : '/api/me/stats?period=' + encodeURIComponent(state.period);
+      var communityId = state.profile.community_id || localStorage.getItem('juzi_oa_community_v1') || 'default';
       var results = await Promise.all([
         request(statsPath),
-        request('/api/calendar/day?date=' + encodeURIComponent(state.calendarDate || dateKey(new Date())))
+        request('/api/calendar/day?date=' + encodeURIComponent(state.calendarDate || dateKey(new Date()))),
+        request('/api/staff/directory?community_id=' + encodeURIComponent(communityId))
       ]);
       var stats = results[0].ok ? results[0].data : {};
       state.stats = stats;
       state.calendar = calendarPayload(results[1]);
+      state.directory = results[2].ok ? (results[2].data || []) : [];
       state.calendarDate = state.calendar.date || state.calendarDate || dateKey(new Date());
-      render(buildMyPageModel(state.profile, stats, [], state.period, state.calendar));
+      render(buildMyPageModel(state.profile, stats, [], state.period, state.calendar,
+        results[2].ok ? (results[2].data || []) : []));
     } catch (error) {
       if (rootNode) {
         rootNode.replaceChildren(element('div', 'card my-empty',
@@ -292,7 +308,7 @@
     var result = await request('/api/calendar/day?date=' + encodeURIComponent(date));
     if (result.ok) {
       state.calendar = calendarPayload(result);
-      render(buildMyPageModel(state.profile, state.stats, [], state.period, state.calendar));
+      render(buildMyPageModel(state.profile, state.stats, [], state.period, state.calendar, state.directory || []));
     }
   }
 

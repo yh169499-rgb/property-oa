@@ -12,10 +12,11 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
-  function buildWorkerHomeModel(profile, stats, calendar) {
+  function buildWorkerHomeModel(profile, stats, calendar, directory) {
     profile = profile || {};
     stats = stats || {};
     calendar = calendar || {};
+    directory = Array.isArray(directory) ? directory : [];
     var person = (calendar.people || []).find(function (item) {
       return Number(item.id) === Number(profile.id);
     }) || (calendar.people || [])[0] || { shift: null };
@@ -43,6 +44,7 @@
           return (conflict.ticketIds || []).some(function (ticketId) { return eventIds.has(ticketId); });
         }),
       },
+      directory: directory,
     };
   }
 
@@ -143,6 +145,16 @@
     });
     content.appendChild(tickets);
     rootNode.appendChild(content);
+    var directoryCard = element('section', 'card worker-directory-panel');
+    directoryCard.appendChild(element('h3', '', '同小区员工通讯录'));
+    if (!model.directory.length) directoryCard.appendChild(element('div', 'my-empty', '暂无可见同事或当前小区未配置通讯录。'));
+    model.directory.forEach(function (person) {
+      var row = element('div', 'worker-directory-row');
+      row.appendChild(element('strong', '', person.name || '未命名'));
+      row.appendChild(element('span', '', (person.position || '员工') + ' · ' + (person.phone || '未登记手机号')));
+      directoryCard.appendChild(row);
+    });
+    rootNode.appendChild(directoryCard);
   }
 
   async function request(path) {
@@ -171,11 +183,14 @@
       var results = await Promise.all([
         request('/api/me/stats?period=month'),
         request('/api/calendar/day?date=' + encodeURIComponent(dateKey(new Date()))),
+        request('/api/staff/directory?community_id=' + encodeURIComponent(
+          profileResult.data.community_id || localStorage.getItem('juzi_oa_community_v1') || 'default')),
       ]);
       render(buildWorkerHomeModel(
         profileResult.data,
         results[0].ok ? results[0].data : {},
         payload(results[1]),
+        results[2].ok ? (results[2].data || []) : [],
       ));
     } catch (error) {
       if (rootNode) rootNode.replaceChildren(element('div', 'card my-empty',

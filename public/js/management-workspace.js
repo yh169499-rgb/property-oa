@@ -812,6 +812,7 @@
   function renderSettings() {
     var target = panel('settings'); empty(target);
     target.appendChild(node('h3', '', '系统设置'));
+    renderPerformanceSettings(target);
     renderShiftTemplates(target);
     var links = node('div', 'management-settings-grid');
     var community = node('button', 'card management-setting', '小区管理');
@@ -853,6 +854,63 @@
     links.appendChild(sla);
     target.appendChild(links);
     if (typeof window.loadReminderInterval === 'function') window.loadReminderInterval();
+  }
+
+  function renderPerformanceSettings(target) {
+    var section = node('section', 'card management-performance-settings');
+    section.appendChild(node('h3', '', '绩效评分标准'));
+    section.appendChild(node('p', 'management-hint', '评分全部由服务端按已发布规则计算；发布新版本后仅后续工单使用。'));
+    var form = node('div', 'management-form-grid');
+    var fields = [
+      ['完成率权重', 'completion_weight', 30],
+      ['准时率权重', 'on_time_weight', 50],
+      ['质量权重', 'quality_weight', 20],
+      ['优秀分界线', 'excellent_threshold', 90],
+      ['良好分界线', 'good_threshold', 80],
+      ['合格分界线', 'qualified_threshold', 60],
+      ['最小样本数', 'minimum_sample_size', 1]
+    ];
+    var inputs = {};
+    fields.forEach(function (item) {
+      var input = node('input'); input.type = 'number'; input.min = '0'; input.value = item[2]; input.dataset.field = item[1];
+      inputs[item[1]] = input; form.appendChild(field(item[0], input));
+    });
+    var name = node('input'); name.type = 'text'; name.placeholder = '规则名称'; inputs.name = name; form.appendChild(field('规则名称', name));
+    var total = node('span', 'management-inline-message', '权重合计：100%');
+    function updateTotal() {
+      var sum = Number(inputs.completion_weight.value || 0) + Number(inputs.on_time_weight.value || 0) + Number(inputs.quality_weight.value || 0);
+      total.textContent = '权重合计：' + sum + '%'; total.classList.toggle('error', sum !== 100);
+    }
+    ['completion_weight', 'on_time_weight', 'quality_weight'].forEach(function (key) { inputs[key].addEventListener('input', updateTotal); });
+    form.appendChild(total);
+    var actions = node('div', 'management-actions');
+    var publish = node('button', 'btn sm', '发布新评分规则');
+    publish.addEventListener('click', async function () {
+      publish.disabled = true;
+      try {
+        var body = {};
+        Object.keys(inputs).forEach(function (key) { body[key] = key === 'name' ? inputs[key].value.trim() : Number(inputs[key].value); });
+        await request('/api/settings/performance/versions', { method: 'POST', body: JSON.stringify(body) });
+        showMessage(section, '评分规则已发布');
+        await loadPerformance();
+      } catch (error) { showMessage(section, error.message || '评分规则发布失败', true); }
+      publish.disabled = false;
+    });
+    actions.appendChild(publish); section.appendChild(form); section.appendChild(actions);
+    var history = node('div', 'management-performance-history'); section.appendChild(history); target.appendChild(section);
+    async function loadPerformance() {
+      try {
+        var data = await request('/api/settings/performance');
+        var active = data.active || {};
+        fields.forEach(function (item) { if (active[item[1]] != null) inputs[item[1]].value = active[item[1]]; });
+        if (active.name) inputs.name.value = active.name;
+        updateTotal(); empty(history);
+        (data.versions || []).forEach(function (version) {
+          history.appendChild(node('div', 'management-performance-version', '规则 v' + version.version_no + ' · 样本 ' + Number(version.sample_size || version.sampleSize || 0) + ' · ' + (version.effective_at || '')));
+        });
+      } catch (error) { showMessage(section, error.message || '评分规则加载失败', true); }
+    }
+    loadPerformance();
   }
 
   window.ManagementWorkspace = {

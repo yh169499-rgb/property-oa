@@ -707,7 +707,7 @@ function setupEnhancedUI() {
   var kpis = dash.querySelector('.kpi-grid');
   if (!$('#kpi-help')) kpis.insertAdjacentHTML('beforeend', '<div class="kpi teal"><div class="label">帮助/其他</div><div class="value" id="kpi-help">—</div><div class="trend">生活帮助/咨询/协调/其他</div></div><div class="kpi orange"><div class="label">紧急待处理</div><div class="value" id="kpi-urgent">—</div><div class="trend">按紧急度与等待时间排序</div></div>');
   var grid = dash.querySelector('.chart-grid');
-  if (!$('#chart-event-frequency')) grid.insertAdjacentHTML('beforeend', '<div class="chart-card chart-full"><h3>事件发生频率（全部工单）</h3><div class="chart-box" id="chart-event-frequency"></div></div><div class="chart-card performance-card"><h3>师傅 / 管家处理明细与表现</h3><div class="table-wrap"><table class="performance-table"><thead><tr><th>人员</th><th>处理过什么</th><th>总工单</th><th>已完成</th><th>处理中</th><th>平均时长</th><th>按时率</th><th>表现</th></tr></thead><tbody id="tbody-performance"></tbody></table></div></div>');
+  if (!$('#chart-event-frequency')) grid.insertAdjacentHTML('beforeend', '<div class="chart-card chart-full"><h3>事件发生频率（全部工单）</h3><div class="chart-box" id="chart-event-frequency"></div></div>');
   if (!$('#page-help')) $('#page-management').insertAdjacentHTML('beforebegin', `<section class="page" id="page-help"><div class="page-title">帮助 / 其他工单</div><div class="page-sub">生活帮助、咨询建议、邻里协调及其他事项</div><div class="card"><div class="priority-legend"><b>优先级：</b><span><i class="priority-dot urgent"></i>紧急</span><span><i class="priority-dot high"></i>高</span><span><i class="priority-dot normal"></i>普通</span><span><i class="priority-dot low"></i>低</span><span>默认同级按等待时间从长到短</span></div><div class="toolbar"><select id="filter-status-help"></select><select id="filter-cat-help"></select><select id="filter-priority-help"></select><select id="sort-help"><option value="newest" selected>最新创建</option><option value="oldest">等待最久</option><option value="priority">紧急度优先</option></select><span class="spacer"></span><span class="count" id="count-help"></span></div><div class="table-wrap"><table><thead><tr><th>优先级</th><th>工单号</th><th>位置</th><th>状态</th><th>负责人</th><th>创建时间</th><th>已等待/处理时长</th></tr></thead><tbody id="tbody-help"></tbody></table></div></div></section>`);
   ['repair','complaint'].forEach(type => {
     var page = $('#page-' + type), toolbar = page.querySelector('.toolbar');
@@ -956,15 +956,11 @@ function urgeTicket(id) {
 }
 
 function staffMetrics(name){var all=state.tickets.filter(t=>t.worker===name),done=all.filter(t=>t.status==='done'),active=all.filter(t=>t.status==='doing'||t.status==='confirm'),d=done.map(t=>durHours(t.created,t.finished)).filter(x=>x!=null),avg=d.length?(d.reduce((a,b)=>a+b,0)/d.length):null,on=done.filter(isOnTime).length,cats=[...new Set(all.map(t=>t.cat))];return{all,done,active,avg,onRate:done.length?Math.round(on/done.length*100):0,cats};}
-function performanceScore(m){if(!m.done.length)return 60;return Math.max(0,Math.min(100,Math.round(m.onRate*.7+Math.max(0,30-(m.avg||0)))));}
-function renderPerformance(){var body=$('#tbody-performance');if(!body)return;var staffList=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家');body.innerHTML=staffList.map(s=>{var m=staffMetrics(s.name),score=performanceScore(m),cls=score>=85?'good':score<70?'warn':'';return `<tr style="cursor:pointer" onclick="openStaffProfile('${s.id}')"><td>${avatar(s.name,staffColor(s.name))}<b>${esc(s.name)}</b><br><small>${esc(s.role)} · ${esc(s.skill)}</small></td><td class="type-list">${m.cats.length?m.cats.map(c=>`<span class="tag cat">${esc(c)}</span>`).join(' '):'暂无工单'}</td><td>${m.all.length}</td><td>${m.done.length}</td><td>${m.active.length}</td><td>${m.avg==null?'—':m.avg.toFixed(1)+'h'}</td><td>${m.done.length?m.onRate+'%':'—'}</td><td><span class="performance-score ${cls}">${score}</span><small>/100</small></td></tr>`}).join('');}
 function renderStaff(){var tbody=$('#tbody-staff');if(!tbody)return;var staffList=state.staff.filter(s=>s.role==='维修工'||s.role==='物业管家');tbody.innerHTML=staffList.map(s=>{var m=staffMetrics(s.name),st=s.status==='on'?'在岗待命':s.status==='busy'?'正在处理':'请假',dot=s.status==='on'?'on':s.status==='busy'?'busy':'off';return `<tr style="cursor:pointer" onclick="openStaffProfile('${s.id}')"><td>${avatar(s.name,staffColor(s.name))}${esc(s.name)}</td><td>${esc(s.role)}</td><td>${esc(s.skill)}</td><td class="mono">${esc(s.phone)}</td><td><span class="staff-status"><span class="status-dot ${dot}"></span>${st}</span></td><td><b>${m.done.length}</b> / 共${m.all.length}</td><td><button class="btn sm ghost" onclick="event.stopPropagation();openStaffModal('${s.id}')">编辑</button> <button class="btn sm danger" onclick="event.stopPropagation();deleteStaff('${s.id}')">删除</button></td></tr>`}).join('');}
 
 function openStaffProfile(id){
   var s=state.staff.find(x=>x.id===id);if(!s)return;
   var m=staffMetrics(s.name);
-  var score=performanceScore(m);
-  var cls=score>=85?'good':score<70?'warn':'';
   var st=s.status==='on'?'在岗待命':s.status==='busy'?'正在处理':'请假';
   // 最近工单列表
   var recentTickets=state.tickets.filter(t=>t.worker===s.name).sort((a,b)=>new Date(b.created)-new Date(a.created)).slice(0,10);
@@ -989,18 +985,7 @@ function openStaffProfile(id){
         <div class="elem"><div class="k">状态</div><div class="v">${st}</div></div>
       </div>
     </div>
-    <div class="drawer-section">
-      <h4>绩效概览</h4>
-      <div class="elements">
-        <div class="elem"><div class="k">综合评分</div><div class="v"><span class="performance-score ${cls}">${score}</span> / 100</div></div>
-        <div class="elem"><div class="k">总工单</div><div class="v">${m.all.length} 张</div></div>
-        <div class="elem"><div class="k">已完成</div><div class="v">${m.done.length} 张</div></div>
-        <div class="elem"><div class="k">处理中</div><div class="v">${m.active.length} 张</div></div>
-        <div class="elem"><div class="k">平均处理时长</div><div class="v">${m.avg==null?'暂无数据':m.avg.toFixed(1)+' 小时'}</div></div>
-        <div class="elem"><div class="k">按时完成率</div><div class="v">${m.done.length?m.onRate+'%':'暂无数据'}</div></div>
-      </div>
-      ${slaDetail}
-    </div>
+    <div class="drawer-section"><h4>绩效评分</h4><p>绩效由服务端按当前规则版本计算，请在“管理工作台 → 报告”中选择人员、日期和小区查看评分及计算依据。</p>${slaDetail}</div>
     <div class="drawer-section">
       <h4>擅长处理</h4>
       <div class="type-list">${m.cats.length?m.cats.map(c=>'<span class="tag cat">'+esc(c)+'</span>').join(' '):'<span style="color:#aaa">暂无工单记录</span>'}</div>
