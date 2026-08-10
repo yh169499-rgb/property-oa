@@ -6,6 +6,24 @@ const router = express.Router();
 const { queryAll, queryOne, run, saveDB } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 
+function syncMemberships(communityId, allowedStaff) {
+  run('DELETE FROM community_memberships WHERE community_id = ?', [communityId]);
+  if (!Array.isArray(allowedStaff)) return;
+  for (const name of allowedStaff) {
+    const matches = queryAll(
+      `SELECT id FROM staff_profiles
+        WHERE TRIM(name) = TRIM(?) AND COALESCE(employment_status, 'active') = 'active'`,
+      [String(name || '')]
+    );
+    if (matches.length === 1) {
+      run(
+        'INSERT OR IGNORE INTO community_memberships (community_id, staff_profile_id, created_at) VALUES (?, ?, ?)',
+        [communityId, matches[0].id, new Date().toISOString()]
+      );
+    }
+  }
+}
+
 // GET /api/communities (public — filtered by staff_name)
 router.get('/', (req, res) => {
   const staffName = req.query.staff_name;
@@ -36,6 +54,7 @@ router.post('/', requireAdmin, (req, res) => {
     run('INSERT INTO communities (id, name, address, created) VALUES (?, ?, ?, ?)', [id, name, address || '', now]);
     if (allowedStaff && Array.isArray(allowedStaff)) {
       allowedStaff.forEach(s => run('INSERT OR IGNORE INTO community_permissions (community_id, staff_name) VALUES (?, ?)', [id, s]));
+      syncMemberships(id, allowedStaff);
     }
     saveDB();
     res.json({ success: true, community: { id, name, address: address || '', created: now, allowedStaff: allowedStaff || [] } });
@@ -54,6 +73,7 @@ router.patch('/:id', requireAdmin, (req, res) => {
   if (allowedStaff !== undefined && Array.isArray(allowedStaff)) {
     run('DELETE FROM community_permissions WHERE community_id = ?', [req.params.id]);
     allowedStaff.forEach(s => run('INSERT OR IGNORE INTO community_permissions (community_id, staff_name) VALUES (?, ?)', [req.params.id, s]));
+    syncMemberships(req.params.id, allowedStaff);
   }
   saveDB();
   const row = queryOne('SELECT * FROM communities WHERE id = ?', [req.params.id]);
@@ -67,6 +87,7 @@ router.delete('/:id', requireAdmin, (req, res) => {
   if (req.params.id === 'default') return res.status(400).json({ error: '默认小区不能删除' });
   run("UPDATE tickets SET community_id = 'default' WHERE community_id = ?", [req.params.id]);
   run('DELETE FROM communities WHERE id = ?', [req.params.id]);
+  run('DELETE FROM community_memberships WHERE community_id = ?', [req.params.id]);
   saveDB();
   res.json({ success: true });
 });

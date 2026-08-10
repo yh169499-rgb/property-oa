@@ -15,6 +15,7 @@ const profileRoutes = require('./routes/profiles');
 const shiftRoutes = require('./routes/shifts');
 const attendanceRoutes = require('./routes/attendance');
 const workforceReportRoutes = require('./routes/workforce-reports');
+const directoryRoutes = require('./routes/directory');
 
 function createServerApp() {
   const app = express();
@@ -38,6 +39,7 @@ function createServerApp() {
   app.use('/api/tickets', ticketRoutes);
   app.use('/api/communities', communityRoutes);
   app.use('/api/staff', staffRoutes);
+  app.use('/api', directoryRoutes);
   app.use('/api', settingsRoutes);
   app.use('/api', profileRoutes);
   app.use('/api', shiftRoutes);
