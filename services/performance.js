@@ -92,10 +92,15 @@ function tableExists(db, table) {
 function listRuleVersions(db) {
   const versions = rows(db, 'SELECT * FROM performance_rule_versions ORDER BY version_no ASC')
     .map(normalizeRule);
-  if (!tableExists(db, 'tickets')) return versions.map((rule) => ({ ...rule, sample_size: 0 }));
+  if (!tableExists(db, 'tickets')) {
+    return versions.map((rule) => ({ ...rule, sample_size: 0, sampleSize: 0 }));
+  }
   return versions.map((rule) => ({
     ...rule,
     sample_size: Number(one(db,
+      'SELECT COUNT(DISTINCT id) count FROM tickets WHERE performance_rule_version_id = ?',
+      [rule.id])?.count || 0),
+    sampleSize: Number(one(db,
       'SELECT COUNT(DISTINCT id) count FROM tickets WHERE performance_rule_version_id = ?',
       [rule.id])?.count || 0),
   }));
