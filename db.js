@@ -5,7 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const initSqlJs = require('sql.js');
 const config = require('./config');
-const { ensureWorkforceSchema } = require('./workforce-schema');
+const {
+  ensureWorkforceSchema,
+  backfillCommunityMemberships,
+} = require('./workforce-schema');
 const {
   migrateUsersToProfiles,
   backfillTicketAssignees,
@@ -86,7 +89,8 @@ async function initDB() {
       is_recurring INTEGER DEFAULT 0,
       recurrence_note TEXT DEFAULT '',
       feedback_count INTEGER DEFAULT 1,
-      metadata TEXT DEFAULT '{}'
+      metadata TEXT DEFAULT '{}',
+      performance_rule_version_id INTEGER
     )
   `);
 
@@ -171,6 +175,7 @@ async function initDB() {
   ensureWorkforceSchema(db);
   const nowIso = new Date().toISOString();
   migrateUsersToProfiles(db, nowIso);
+  backfillCommunityMemberships(db, nowIso);
   backfillTicketAssignees(db);
 
   // 确保默认小区存在

@@ -8,6 +8,35 @@ function addColumn(db, table, definition) {
   }
 }
 
+function tableExists(db, table) {
+  const result = db.exec(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+    [table]
+  );
+  return Boolean(result[0] && result[0].values.length);
+}
+
+function backfillCommunityMemberships(db, nowIso = new Date().toISOString()) {
+  if (!tableExists(db, 'community_permissions')) return;
+  db.run(`
+    INSERT OR IGNORE INTO community_memberships (
+      community_id,
+      staff_profile_id,
+      created_at
+    )
+    SELECT
+      cp.community_id,
+      MIN(sp.id),
+      ?
+    FROM community_permissions cp
+    JOIN staff_profiles sp
+      ON TRIM(sp.name) = TRIM(cp.staff_name)
+    WHERE TRIM(sp.name) <> ''
+    GROUP BY cp.community_id, cp.staff_name
+    HAVING COUNT(sp.id) = 1
+  `, [nowIso]);
+}
+
 function ensureWorkforceSchema(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS staff_profiles (
@@ -105,8 +134,75 @@ function ensureWorkforceSchema(db) {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS performance_rule_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      version_no INTEGER UNIQUE NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      completion_weight REAL NOT NULL,
+      on_time_weight REAL NOT NULL,
+      quality_weight REAL NOT NULL,
+      excellent_threshold REAL NOT NULL,
+      good_threshold REAL NOT NULL,
+      qualified_threshold REAL NOT NULL,
+      minimum_sample_size INTEGER NOT NULL,
+      effective_at TEXT NOT NULL,
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 0,
+      CHECK (completion_weight >= 0 AND completion_weight <= 100),
+      CHECK (on_time_weight >= 0 AND on_time_weight <= 100),
+      CHECK (quality_weight >= 0 AND quality_weight <= 100),
+      CHECK (completion_weight + on_time_weight + quality_weight = 100),
+      CHECK (excellent_threshold <= 100 AND excellent_threshold > good_threshold),
+      CHECK (good_threshold > qualified_threshold AND qualified_threshold >= 0),
+      CHECK (minimum_sample_size >= 0)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS community_memberships (
+      community_id TEXT NOT NULL,
+      staff_profile_id INTEGER NOT NULL,
+      created_at TEXT DEFAULT '',
+      created_by_user_id INTEGER,
+      UNIQUE (community_id, staff_profile_id)
+    )
+  `);
+
   addColumn(db, 'tickets', 'assignee_user_id INTEGER');
   addColumn(db, 'tickets', "assigned_at TEXT DEFAULT ''");
+  addColumn(db, 'tickets', 'performance_rule_version_id INTEGER');
+
+  const nowIso = new Date().toISOString();
+  db.run(`
+    INSERT OR IGNORE INTO performance_rule_versions (
+      version_no,
+      name,
+      completion_weight,
+      on_time_weight,
+      quality_weight,
+      excellent_threshold,
+      good_threshold,
+      qualified_threshold,
+      minimum_sample_size,
+      effective_at,
+      created_at,
+      is_active
+    ) VALUES (1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1)
+  `, [nowIso, nowIso]);
+
+  if (tableExists(db, 'tickets')) {
+    db.run(`
+      UPDATE tickets
+      SET performance_rule_version_id = (
+        SELECT id FROM performance_rule_versions WHERE version_no = 1
+      )
+      WHERE performance_rule_version_id IS NULL
+    `);
+  }
+
+  backfillCommunityMemberships(db, nowIso);
 
   db.run('CREATE INDEX IF NOT EXISTS idx_staff_manager ON staff_profiles(manager_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_shift_staff_date ON shift_assignments(staff_id, work_date)');
@@ -114,4 +210,4 @@ function ensureWorkforceSchema(db) {
   db.run('CREATE INDEX IF NOT EXISTS idx_ticket_activity_actor_time ON ticket_activity_logs(actor_staff_id, created_at)');
 }
 
-module.exports = { ensureWorkforceSchema, addColumn };
+module.exports = { ensureWorkforceSchema, addColumn, backfillCommunityMemberships };

@@ -26,6 +26,8 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
     'attendance_change_logs',
     'ticket_activity_logs',
     'workforce_import_batches',
+    'performance_rule_versions',
+    'community_memberships',
   ]) {
     assert.equal(names.includes(name), true, `missing table: ${name}`);
   }
@@ -33,6 +35,56 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
   const ticketColumns = columnNames(db, 'tickets');
   assert.equal(ticketColumns.includes('assignee_user_id'), true);
   assert.equal(ticketColumns.includes('assigned_at'), true);
+  assert.equal(ticketColumns.includes('performance_rule_version_id'), true);
+});
+
+test('performance rules include a stable default version 1', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+  ensureWorkforceSchema(db);
+
+  const rows = db.exec(`
+    SELECT version_no, completion_weight, on_time_weight, quality_weight,
+      excellent_threshold, good_threshold, qualified_threshold,
+      minimum_sample_size, is_active
+    FROM performance_rule_versions
+    WHERE version_no = 1
+  `);
+  assert.equal(rows[0].values.length, 1);
+  assert.deepEqual(rows[0].values[0], [1, 30, 50, 20, 90, 80, 60, 1, 1]);
+
+  ensureWorkforceSchema(db);
+  assert.equal(db.exec('SELECT COUNT(*) FROM performance_rule_versions')[0].values[0][0], 1);
+});
+
+test('old community permissions migrate only uniquely named staff profiles', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+  db.run(`
+    CREATE TABLE communities (id TEXT PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
+    CREATE TABLE community_permissions (
+      community_id TEXT NOT NULL,
+      staff_name TEXT NOT NULL,
+      PRIMARY KEY (community_id, staff_name)
+    );
+  `);
+  db.run("INSERT INTO community_permissions VALUES ('c1', '张三')");
+  db.run("INSERT INTO community_permissions VALUES ('c1', '李四')");
+  db.run("INSERT INTO community_permissions VALUES ('c1', '王五')");
+
+  ensureWorkforceSchema(db);
+  db.run("INSERT INTO staff_profiles (name) VALUES ('张三')");
+  db.run("INSERT INTO staff_profiles (name) VALUES ('李四')");
+  db.run("INSERT INTO staff_profiles (name) VALUES ('李四')");
+  ensureWorkforceSchema(db);
+  ensureWorkforceSchema(db);
+
+  const rows = db.exec(`
+    SELECT community_id, staff_profile_id
+    FROM community_memberships
+    ORDER BY staff_profile_id
+  `);
+  assert.deepEqual(rows[0].values, [['c1', 1]]);
 });
 
 test('workforce tables expose the approved fields and indexes', async (t) => {
@@ -81,6 +133,12 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
   ]) {
     assert.equal(indexes.includes(name), true, `missing index: ${name}`);
   }
+
+  const membershipIndexes = db.exec(`PRAGMA index_list(community_memberships)`)[0].values;
+  const uniqueMembership = membershipIndexes.find((row) => row[2] === 1);
+  assert.ok(uniqueMembership, 'community memberships should have a unique index');
+  const membershipIndexColumns = db.exec(`PRAGMA index_info(${JSON.stringify(uniqueMembership[1])})`);
+  assert.deepEqual(membershipIndexColumns[0].values.map((row) => row[2]), ['community_id', 'staff_profile_id']);
 });
 
 test('daily shift assignments and attendance records are unique per staff member', async (t) => {
