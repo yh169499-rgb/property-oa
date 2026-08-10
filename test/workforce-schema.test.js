@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const database = require('../db');
-const { ensureWorkforceSchema } = require('../workforce-schema');
+const { ensureWorkforceSchema, backfillCommunityMemberships } = require('../workforce-schema');
 const { startHttpServer } = require('./helpers/http-server');
 const {
   createTestDB,
@@ -85,6 +85,19 @@ test('old community permissions migrate only uniquely named staff profiles', asy
     ORDER BY staff_profile_id
   `);
   assert.deepEqual(rows[0].values, [['c1', 1]]);
+});
+
+test('single community without legacy permissions enrolls active profiles only', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+  db.run(`
+    CREATE TABLE communities (id TEXT PRIMARY KEY, name TEXT NOT NULL, created TEXT NOT NULL);
+    INSERT INTO communities (id, name, created) VALUES ('default', '默认小区', '2026-01-01T00:00:00Z');
+  `);
+  ensureWorkforceSchema(db);
+  db.run("INSERT INTO staff_profiles (id, name, employment_status) VALUES (1, '在岗师傅', 'active'), (2, '已停用师傅', 'inactive')");
+  backfillCommunityMemberships(db);
+  assert.deepEqual(db.exec('SELECT community_id, staff_profile_id FROM community_memberships ORDER BY staff_profile_id')[0].values, [['default', 1]]);
 });
 
 test('workforce tables expose the approved fields and indexes', async (t) => {

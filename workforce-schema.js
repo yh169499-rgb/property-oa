@@ -17,24 +17,45 @@ function tableExists(db, table) {
 }
 
 function backfillCommunityMemberships(db, nowIso = new Date().toISOString()) {
-  if (!tableExists(db, 'community_permissions')) return;
-  db.run(`
-    INSERT OR IGNORE INTO community_memberships (
-      community_id,
-      staff_profile_id,
-      created_at
-    )
-    SELECT
-      cp.community_id,
-      MIN(sp.id),
-      ?
-    FROM community_permissions cp
-    JOIN staff_profiles sp
-      ON TRIM(sp.name) = TRIM(cp.staff_name)
-    WHERE TRIM(sp.name) <> ''
-    GROUP BY cp.community_id, cp.staff_name
-    HAVING COUNT(sp.id) = 1
-  `, [nowIso]);
+  if (tableExists(db, 'community_permissions')) {
+    db.run(`
+      INSERT OR IGNORE INTO community_memberships (
+        community_id,
+        staff_profile_id,
+        created_at
+      )
+      SELECT
+        cp.community_id,
+        MIN(sp.id),
+        ?
+      FROM community_permissions cp
+      JOIN staff_profiles sp
+        ON TRIM(sp.name) = TRIM(cp.staff_name)
+      WHERE TRIM(sp.name) <> ''
+      GROUP BY cp.community_id, cp.staff_name
+      HAVING COUNT(sp.id) = 1
+    `, [nowIso]);
+  }
+  // 单小区且没有任何历史授权时，所有在职档案默认属于该唯一小区；
+  // 多小区或存在旧授权时不猜测归属，避免越权和串区。
+  if (tableExists(db, 'communities')) {
+    const communities = db.exec('SELECT id FROM communities ORDER BY created');
+    const communityRows = communities[0] ? communities[0].values : [];
+    if (communityRows.length === 1) {
+      const communityId = communityRows[0][0];
+      const legacyCount = tableExists(db, 'community_permissions')
+        ? db.exec('SELECT COUNT(*) FROM community_permissions WHERE community_id = ?', [communityId])[0].values[0][0]
+        : 0;
+      const membershipCount = db.exec('SELECT COUNT(*) FROM community_memberships WHERE community_id = ?', [communityId])[0].values[0][0];
+      if (Number(legacyCount) === 0 && Number(membershipCount) === 0) {
+        db.run(`
+          INSERT OR IGNORE INTO community_memberships (community_id, staff_profile_id, created_at)
+          SELECT ?, id, ? FROM staff_profiles
+          WHERE COALESCE(employment_status, 'active') = 'active'
+        `, [communityId, nowIso]);
+      }
+    }
+  }
 }
 
 function ensureWorkforceSchema(db) {
