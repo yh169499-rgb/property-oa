@@ -26,6 +26,13 @@ function invalidRule(message) {
   return error;
 }
 
+function invalidDate(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = 'INVALID_DATE_RANGE';
+  return error;
+}
+
 function value(input, snake, camel, fallback) {
   if (input && input[snake] !== undefined) return input[snake];
   if (input && input[camel] !== undefined) return input[camel];
@@ -78,9 +85,20 @@ function normalizeRule(row) {
   };
 }
 
+function tableExists(db, table) {
+  return rows(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]).length > 0;
+}
+
 function listRuleVersions(db) {
-  return rows(db, 'SELECT * FROM performance_rule_versions ORDER BY version_no ASC')
+  const versions = rows(db, 'SELECT * FROM performance_rule_versions ORDER BY version_no ASC')
     .map(normalizeRule);
+  if (!tableExists(db, 'tickets')) return versions.map((rule) => ({ ...rule, sample_size: 0 }));
+  return versions.map((rule) => ({
+    ...rule,
+    sample_size: Number(one(db,
+      'SELECT COUNT(DISTINCT id) count FROM tickets WHERE performance_rule_version_id = ?',
+      [rule.id])?.count || 0),
+  }));
 }
 
 function getActiveRule(db) {
@@ -127,7 +145,10 @@ function ticketColumns(db) {
 
 function dateRange(filters = {}) {
   const now = new Date(filters.now || Date.now());
-  const hasExplicitRange = Boolean(filters.from || filters.to);
+  const hasFrom = filters.from !== undefined && filters.from !== '';
+  const hasTo = filters.to !== undefined && filters.to !== '';
+  if (hasFrom !== hasTo) throw invalidDate('开始日期和结束日期必须同时提供');
+  const hasExplicitRange = hasFrom && hasTo;
   let from = filters.from;
   let to = filters.to;
   if (!from || !to) {
@@ -140,15 +161,22 @@ function dateRange(filters = {}) {
   }
   const parse = (date, label) => {
     const match = DATE_RE.exec(String(date));
-    if (!match) throw invalidRule(`${label}格式必须为 YYYY-MM-DD`);
+    if (!match) throw invalidDate(`${label}格式必须为 YYYY-MM-DD`);
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const check = new Date(Date.UTC(year, month - 1, day));
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1
+        || check.getUTCDate() !== day) throw invalidDate(`${label}不是有效日期`);
     const valueAt = new Date(`${date}T00:00:00+08:00`);
-    if (!Number.isFinite(valueAt.getTime())) throw invalidRule(`${label}不是有效日期`);
+    if (!Number.isFinite(valueAt.getTime())) throw invalidDate(`${label}不是有效日期`);
     return valueAt.toISOString();
   };
   const fromIso = parse(from, '开始日期');
   const toIso = parse(to, '结束日期');
   if (hasExplicitRange) {
     // Report filters use an inclusive end date; convert it to an exclusive bound.
+    if (Date.parse(fromIso) > Date.parse(toIso)) throw invalidDate('开始日期不能晚于结束日期');
     const end = new Date(`${to}T00:00:00+08:00`);
     end.setUTCDate(end.getUTCDate() + 1);
     return { from: fromIso, toExclusive: end.toISOString() };
@@ -163,12 +191,14 @@ function completionTime(ticket, columns) {
   return '';
 }
 
-function metricValues(ticketRows, columns) {
-  const completed = ticketRows.filter((ticket) => {
+function metricValues(ticketRows, columns, range) {
+  const uniqueRows = [...new Map(ticketRows.map((ticket) => [String(ticket.id), ticket])).values()];
+  const completed = uniqueRows.filter((ticket) => {
     if (ticket.status !== 'done') return false;
     const start = Date.parse(ticket.assigned_at || ticket.created);
     const end = Date.parse(completionTime(ticket, columns));
-    return Number.isFinite(start) && Number.isFinite(end) && end >= start;
+    return Number.isFinite(start) && Number.isFinite(end) && end >= start
+      && (!range || (end >= Date.parse(range.from) && end < Date.parse(range.toExclusive)));
   });
   const sla = completed.filter((ticket) => Number(ticket.estimated_hours) > 0);
   const onTime = sla.filter((ticket) => {
@@ -176,18 +206,20 @@ function metricValues(ticketRows, columns) {
     const end = Date.parse(completionTime(ticket, columns));
     return (end - start) / 3600000 <= Number(ticket.estimated_hours);
   });
-  const returned = ticketRows.filter((ticket) => String(ticket.reject_reason || '').trim() !== '')
+  const returned = uniqueRows.filter((ticket) => String(ticket.reject_reason || '').trim() !== '')
     .length;
-  const multipleFeedback = ticketRows.filter((ticket) => Number(ticket.feedback_count || 1) > 1)
+  const multipleFeedback = uniqueRows.filter((ticket) => Number(ticket.feedback_count || 1) > 1)
     .length;
-  const quality = ticketRows.length
-    ? Math.max(0, 100 - ((returned + multipleFeedback) / ticketRows.length) * 100)
+  const recurring = columns.has('is_recurring')
+    ? uniqueRows.filter((ticket) => Number(ticket.is_recurring || 0) === 1).length : 0;
+  const quality = uniqueRows.length
+    ? Math.max(0, 100 - ((returned + multipleFeedback + recurring) / uniqueRows.length) * 100)
     : null;
   return {
-    completion: ticketRows.length ? (completed.length / ticketRows.length) * 100 : null,
+    completion: uniqueRows.length ? (completed.length / uniqueRows.length) * 100 : null,
     onTime: sla.length ? (onTime.length / sla.length) * 100 : null,
     quality,
-    sampleSize: ticketRows.length,
+    sampleSize: uniqueRows.length,
   };
 }
 
@@ -254,12 +286,14 @@ function scoreStaff(db, staffId, filters = {}) {
   const staffPredicate = columns.has('assignee_user_id')
     ? '(t.assignee_user_id = ? OR (NULLIF(t.worker, \'\') IS NOT NULL AND t.worker = ?))'
     : '(NULLIF(t.worker, \'\') IS NOT NULL AND t.worker = ?)';
+  const communityId = filters.communityId || filters.community_id;
+  const communityPredicate = communityId && columns.has('community_id') ? ' AND t.community_id = ?' : '';
   const params = columns.has('assignee_user_id')
-    ? [profile.user_id, profile.name, range.from, range.toExclusive]
-    : [profile.name, range.from, range.toExclusive];
+    ? [profile.user_id, profile.name, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive]
+    : [profile.name, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive];
   const tickets = rows(db, `
     SELECT t.* FROM tickets t
-    WHERE ${staffPredicate} AND ${assignedExpr} >= ? AND ${assignedExpr} < ?
+    WHERE ${staffPredicate}${communityPredicate} AND ${assignedExpr} >= ? AND ${assignedExpr} < ?
   `, params);
   const groups = new Map();
   for (const ticket of tickets) {
@@ -270,10 +304,12 @@ function scoreStaff(db, staffId, filters = {}) {
     groups.get(rule.id).rows.push(ticket);
   }
   const groupResults = [...groups.values()].map(({ rule, rows: ticketRows }) => {
-    const metrics = metricValues(ticketRows, columns);
-    return { rule, result: calculateScore(metrics, rule, ticketRows.length) };
+    const uniqueTickets = [...new Map(ticketRows.map((ticket) => [String(ticket.id), ticket])).values()];
+    const metrics = metricValues(uniqueTickets, columns, range);
+    return { rule, result: calculateScore(metrics, rule, uniqueTickets.length) };
   });
-  const sampleSize = tickets.length;
+  const uniqueTickets = [...new Map(tickets.map((ticket) => [String(ticket.id), ticket])).values()];
+  const sampleSize = uniqueTickets.length;
   const weighted = groupResults.filter((group) => group.result.status === 'scored' && group.result.score != null);
   let performance;
   if (!weighted.length || sampleSize < Number(active?.minimum_sample_size || 0)) {
@@ -295,25 +331,50 @@ function scoreStaff(db, staffId, filters = {}) {
         const componentScore = round(groupsWithComponent.reduce((sum, group) => (
           sum + Number(group.result.components[definition.key].score) * group.result.sampleSize
         ), 0) / groupsWithComponent.reduce((sum, group) => sum + group.result.sampleSize, 0));
+        const componentContribution = groupsWithComponent.reduce((sum, group) => (
+          sum + Number(group.result.components[definition.key].contribution || 0) * group.result.sampleSize
+        ), 0) / groupsWithComponent.reduce((sum, group) => sum + group.result.sampleSize, 0);
         components[definition.key] = {
           score: componentScore,
-          weight: Number(active?.[definition.weight] || 0),
-          contribution: round(componentScore * Number(active?.[definition.weight] || 0) / 100),
+          weight: null,
+          contribution: round(componentContribution),
           status: 'scored',
         };
       }
     }
-    const level = score >= Number(active?.excellent_threshold) ? 'excellent'
-      : score >= Number(active?.good_threshold) ? 'good'
-        : score >= Number(active?.qualified_threshold) ? 'qualified' : 'unqualified';
+    const thresholds = ['excellent_threshold', 'good_threshold', 'qualified_threshold']
+      .map((key) => weighted.reduce((sum, group) => (
+        sum + Number(group.rule[key]) * group.result.sampleSize
+      ), 0) / total);
+    const level = score >= thresholds[0] ? 'excellent'
+      : score >= thresholds[1] ? 'good'
+        : score >= thresholds[2] ? 'qualified' : 'unqualified';
     performance = { status: 'scored', score, level, sampleSize, components };
   }
-  const usedRules = groupResults.length ? groupResults.map((group) => group.rule) : (active ? [active] : []);
+  const usedRules = groupResults.length ? groupResults : (active ? [{
+    rule: active,
+    result: calculateScore({}, active, 0),
+  }] : []);
   return {
     ...performance,
-    ruleVersions: usedRules.map((rule) => ({
+    ruleVersions: usedRules.map(({ rule, result }) => ({
       id: rule.id, version: rule.version_no, version_no: rule.version_no,
       name: rule.name, effective_at: rule.effective_at,
+      sampleSize: result.sampleSize,
+      status: result.status,
+      score: result.score,
+      level: result.level,
+      components: result.components,
+      weights: {
+        completion: rule.completion_weight,
+        onTime: rule.on_time_weight,
+        quality: rule.quality_weight,
+      },
+      thresholds: {
+        excellent: rule.excellent_threshold,
+        good: rule.good_threshold,
+        qualified: rule.qualified_threshold,
+      },
     })),
     range,
   };

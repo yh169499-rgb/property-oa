@@ -17,7 +17,8 @@ async function fixture() {
       status TEXT DEFAULT 'wait', priority TEXT DEFAULT 'normal', worker TEXT DEFAULT '',
       created TEXT NOT NULL, finished TEXT DEFAULT '', estimated_hours REAL DEFAULT 0,
       assigned_at TEXT DEFAULT '', assignee_user_id INTEGER, community_id TEXT DEFAULT 'default',
-      reject_reason TEXT DEFAULT '', feedback_count INTEGER DEFAULT 1
+      reject_reason TEXT DEFAULT '', feedback_count INTEGER DEFAULT 1,
+      is_recurring INTEGER DEFAULT 0
     );
   `);
   ensureWorkforceSchema(db);
@@ -117,6 +118,50 @@ test('服务端评分按工单冻结的旧规则版本分组', async () => {
   assert.equal(report.status, 'scored');
   assert.deepEqual(report.ruleVersions.map((version) => version.version), [1, 2]);
   assert.equal(report.sampleSize, 2);
+  assert.equal(report.ruleVersions[0].sampleSize, 1);
+  assert.equal(report.ruleVersions[0].score, 100);
+});
+
+test('质量分按唯一工单计数并把复发工单纳入质量依据', async () => {
+  const db = await fixture();
+  const { scoreStaff } = require('../services/performance');
+  db.run(`
+    INSERT INTO tickets
+      (id, status, created, assigned_at, assignee_user_id, is_recurring, feedback_count)
+    VALUES
+      ('quality-one', 'doing', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z', 2, 0, 1),
+      ('quality-repeat', 'doing', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', 2, 1, 1)
+  `);
+  const result = scoreStaff(db, 2, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(result.sampleSize, 2);
+  assert.equal(result.components.quality.score, 50);
+});
+
+test('完成率只使用报告日期范围内完成的工单', async () => {
+  const db = await fixture();
+  const { scoreStaff } = require('../services/performance');
+  db.run(`
+    INSERT INTO tickets
+      (id, status, created, assigned_at, finished, assignee_user_id)
+    VALUES
+      ('completed-later', 'done', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z',
+       '2026-08-01T00:00:00Z', 2)
+  `);
+  const result = scoreStaff(db, 2, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(result.components.completion.score, 0);
+});
+
+test('评分日期缺失或倒序时返回稳定日期错误', async () => {
+  const db = await fixture();
+  const { scoreStaff } = require('../services/performance');
+  assert.throws(
+    () => scoreStaff(db, 2, { from: '2026-07-01' }),
+    (error) => error.code === 'INVALID_DATE_RANGE'
+  );
+  assert.throws(
+    () => scoreStaff(db, 2, { from: '2026-08-01', to: '2026-07-01' }),
+    (error) => error.code === 'INVALID_DATE_RANGE'
+  );
 });
 
 test('绩效规则设置接口仅主管可发布并返回历史版本', async (t) => {
@@ -134,7 +179,9 @@ test('绩效规则设置接口仅主管可发布并返回历史版本', async (t
     });
     return { response, body: await response.json() };
   };
-  assert.equal((await get('/api/settings/performance', authHeader({ id: 2, role: 'worker' }))).response.status, 403);
+  const workerView = await get('/api/settings/performance', authHeader({ id: 2, role: 'worker' }));
+  assert.equal(workerView.response.status, 200);
+  assert.equal(workerView.body.data.versions.length, 0);
   const created = await post('/api/settings/performance/versions', {
     name: '接口规则', completion_weight: 30, on_time_weight: 50, quality_weight: 20,
     excellent_threshold: 90, good_threshold: 80, qualified_threshold: 60,

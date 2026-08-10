@@ -7,6 +7,7 @@ const router = express.Router();
 const { queryAll, queryOne, run, saveDB, getDB } = require('../db');
 const config = require('../config');
 const { descendantIds } = require('../services/organization');
+const { isManagerRole } = require('../services/roles');
 const { getStaffReport, completionExpression } = require('../services/reporting');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
@@ -144,12 +145,14 @@ router.post('/settings/sla', (req, res) => {
 
 // GET/POST /api/settings/performance
 // 规则是版本化的：历史版本只读，发布新规则后仅后续工单使用新版本。
-router.get('/settings/performance', requireAuth, requireAdmin, (req, res) => {
+router.get('/settings/performance', requireAuth, (req, res) => {
   try {
     res.json({
       data: {
         active: getActiveRule(getDB()),
-        versions: listRuleVersions(getDB()),
+        // 登录用户可读取当前规则；历史版本属于管理数据，仅主管可见。
+        versions: req.user && isManagerRole(req.user.role)
+          ? listRuleVersions(getDB()) : [],
       },
     });
   } catch (error) {
@@ -157,11 +160,11 @@ router.get('/settings/performance', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-router.post('/settings/performance/versions', requireAuth, requireAdmin, (req, res) => {
+router.post('/settings/performance/versions', requireAuth, requireAdmin, async (req, res) => {
   try {
     const active = createRuleVersion(getDB(), req.body || {}, req.user.id);
-    // saveDB is intentionally best-effort here; persistence middleware handles retry.
-    Promise.resolve(saveDB()).catch(() => {});
+    // 发布成功必须等待持久化，避免进程重启后规则版本回滚。
+    await saveDB();
     return res.status(201).json({
       data: { active, versions: listRuleVersions(getDB()) },
     });
