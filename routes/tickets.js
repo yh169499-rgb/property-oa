@@ -14,6 +14,8 @@ const {
   resolveAssigneeUserId,
   recordTicketActivity
 } = require('../services/ticket-activity');
+const { resolveCommunity } = require('../services/community-resolution');
+const { getActiveRule } = require('../services/performance');
 
 // 上传配置
 if (!fs.existsSync(config.UPLOAD_DIR)) fs.mkdirSync(config.UPLOAD_DIR, { recursive: true });
@@ -42,6 +44,7 @@ function rowToTicket(row) {
     repeatOf: row.repeat_of || '', repeatCount: Number(row.repeat_count) || 1,
     isRecurring: Boolean(Number(row.is_recurring)), recurrenceNote: row.recurrence_note || '',
     feedbackCount: Number(row.feedback_count) || 1,
+    performanceRuleVersionId: row.performance_rule_version_id == null ? null : Number(row.performance_rule_version_id),
     notes: meta.notes || [], urged: meta.urged || [],
     suspendReason: meta.suspendReason || '', suspendEstimate: meta.suspendEstimate || '',
     steps: meta.steps || []
@@ -96,6 +99,9 @@ router.get('/:id', (req, res) => {
 // POST /api/tickets
 router.post('/', (req, res) => {
   const t = req.body;
+  let community;
+  try { community = resolveCommunity(getDB(), t); }
+  catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
   const rawId = t.id ? String(t.id).trim() : '';
   const invalidIds = ['测试', 'test', ''];
   let id;
@@ -106,7 +112,7 @@ router.post('/', (req, res) => {
     id = 'WX' + String(maxNum + 1).padStart(4, '0');
   }
   const now = t.created || new Date().toISOString();
-  const communityId = t.community_id || 'default';
+  const communityId = community.id;
   const type = t.type || 'repair';
   const cat = t.cat || '其他';
   const loc = t.loc || '';
@@ -141,14 +147,14 @@ router.post('/', (req, res) => {
 
   try {
     run(
-      `INSERT INTO tickets (id, type, cat, desc, loc, priority, status, worker, message, created, estimated_hours, session_id, community_id, repeat_key, repeat_of, repeat_count, is_recurring, recurrence_note, feedback_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, type, cat, t.desc || '', loc, priority, t.status || 'wait', t.worker || '', t.message || '', now, t.estimated_hours || 0, t.sessionId || '', communityId, repeatKey, repeatOf, repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1]
+      `INSERT INTO tickets (id, type, cat, desc, loc, priority, status, worker, message, created, estimated_hours, session_id, community_id, repeat_key, repeat_of, repeat_count, is_recurring, recurrence_note, feedback_count, performance_rule_version_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, type, cat, t.desc || '', loc, priority, t.status || 'wait', t.worker || '', t.message || '', now, t.estimated_hours || 0, t.sessionId || '', communityId, repeatKey, repeatOf, repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1, getActiveRule(getDB())?.id || null]
     );
     saveDB();
     const row = queryOne('SELECT * FROM tickets WHERE id = ?', [id]);
     const ticket = rowToTicket(row);
-    res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', record: ticket });
+    res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -164,7 +170,7 @@ router.patch('/:id', (req, res) => {
   const before = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
   if (!before) return res.status(404).json({ error: '工单不存在' });
   const action = detectTicketAction(before, updates);
-  const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', community_id: 'community_id', metadata: 'metadata' };
+  const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', metadata: 'metadata' };
   const sets = [], values = [];
   for (const [key, col] of Object.entries(allowed)) {
     if (updates[key] !== undefined) { sets.push(`${col} = ?`); values.push(updates[key]); }
@@ -176,6 +182,20 @@ router.patch('/:id', (req, res) => {
       resolveAssigneeUserId(db, workerName),
       workerName ? new Date().toISOString() : null
     );
+    if (workerName && before.performance_rule_version_id == null) {
+      sets.push('performance_rule_version_id = ?');
+      values.push(getActiveRule(db)?.id || null);
+    }
+  }
+  let community = null;
+  if (Object.prototype.hasOwnProperty.call(updates, 'community_id')
+      || Object.prototype.hasOwnProperty.call(updates, 'communityId')
+      || Object.prototype.hasOwnProperty.call(updates, 'community_name')
+      || Object.prototype.hasOwnProperty.call(updates, 'communityName')) {
+    try { community = resolveCommunity(db, updates); }
+    catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
+    sets.push('community_id = ?');
+    values.push(community.id);
   }
   if (!sets.length) return res.status(400).json({ error: '无更新字段' });
   values.push(req.params.id);
@@ -203,7 +223,7 @@ router.patch('/:id', (req, res) => {
     saveDB();
     const row = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
     if (!row) return res.status(404).json({ error: '工单不存在' });
-    res.json({ success: true, record: rowToTicket(row) });
+    res.json({ success: true, community_resolution: community, record: rowToTicket(row) });
   } catch (e) {
     if (transactionStarted) {
       try { db.run('ROLLBACK'); } catch (rollbackError) {}
