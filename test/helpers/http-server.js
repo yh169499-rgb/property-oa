@@ -1,10 +1,10 @@
 const { createServerApp } = require('../../server-app');
 
-async function startHttpServer(testDb) {
+async function startHttpServer(testDb, appOptions) {
   const restoreDB = testDb
     ? require('../../db').setDBForTests(testDb)
     : () => {};
-  const app = createServerApp();
+  const app = createServerApp(appOptions);
   let server;
   try {
     server = await new Promise((resolve, reject) => {

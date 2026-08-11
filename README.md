@@ -157,6 +157,25 @@ server/
 | JZMM_SESSION_ID | 默认会话 ID |
 | DB_PATH | 数据库文件路径；Render 生产环境固定为 `/var/data/data.db` |
 
+### 千问 AI 润色报告
+
+主管在“管理工作台 → 报告”生成确定性人员报告后，可以点击“AI 优化并润色”。系统会在原始统计和绩效卡之后增加一份正式的六段式解读：整体总结、工作亮点、主要问题、趋势判断、风险提醒和后续建议。复制、打印与 Word 导出都会包含 AI 润色内容。
+
+AI 不参与工单统计、绩效计算或权限判断。服务端只向模型发送岗位、日期范围、工单数量、分类分布、处理时长、SLA 和绩效分等聚合数据，不发送姓名、手机号、人员/工单/小区 ID、地址、原始描述、图片或附件。AI 调用失败、超时或免费额度耗尽时，原始报告仍可正常查看和导出。
+
+首期使用阿里云百炼北京地域的 OpenAI 兼容接口和 `qwen3.6-flash`。先在百炼控制台创建 API Key，并开启“免费额度用完即停”，然后在 Render 服务的 **Environment** 中配置：
+
+```text
+AI_REPORT_ENABLED=true
+AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+AI_API_KEY=<仅保存在 Render 服务端环境变量中>
+AI_MODEL=qwen3.6-flash
+AI_TIMEOUT_MS=30000
+AI_REPORT_PROMPT_VERSION=report-analysis-v1
+```
+
+`AI_API_KEY` 不得写入 GitHub、`render.yaml` 的 `value`、数据库或浏览器代码。相同人员、日期、小区、模型和提示词版本的报告会命中 SQLite/Supabase 持久化缓存，不重复消耗 Token；每个登录用户每分钟最多调用 5 次。
+
 ### Render 数据持久化
 
 Render Web Service 的默认文件系统是临时的，重新部署或实例重启后会丢失运行时写入的 `data.db` 和附件。本项目的 `render.yaml` 已声明 1GB Persistent Disk，并将 `DB_PATH` 指向 `/var/data/data.db`、`UPLOAD_DIR` 指向 `/var/data/uploads`。

@@ -9,6 +9,7 @@ const report = fs.readFileSync(path.join(root, 'js', 'staff-report.js'), 'utf8')
 const myPage = fs.readFileSync(path.join(root, 'js', 'my-page.js'), 'utf8');
 const workerHome = fs.readFileSync(path.join(root, 'js', 'worker-home.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const workforceApi = fs.readFileSync(path.join(root, 'js', 'workforce-api.js'), 'utf8');
 
 test('设置页提供服务端绩效规则读取和发布入口', () => {
   assert.match(workspace, /\/api\/settings\/performance/);
@@ -45,4 +46,19 @@ test('每个人都能在我的页面看到服务端计算的本人绩效', () =>
 test('旧前端本地绩效公式不再作为数据源', () => {
   assert.doesNotMatch(app, /function performanceScore\s*\(/);
   assert.doesNotMatch(app, /m\.onRate\s*\*\s*\.7/);
+});
+
+test('人员报告提供按需千问润色并固定展示六类管理解读', () => {
+  assert.match(report, /AI 优化并润色/);
+  assert.match(report, /AI 润色报告/);
+  assert.match(report, /整体总结/);
+  assert.match(report, /工作亮点/);
+  assert.match(report, /主要问题/);
+  assert.match(report, /趋势判断/);
+  assert.match(report, /风险提醒/);
+  assert.match(report, /后续建议/);
+  assert.match(report, /AI 建议，仅供管理参考/);
+  assert.match(workforceApi, /ai-analysis/);
+  assert.match(workforceApi, /reports\/ai\/status/);
+  assert.doesNotMatch(report, /analysis\.summary[^\n]*innerHTML/);
 });
