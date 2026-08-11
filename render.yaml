@@ -39,3 +39,15 @@ services:
         value: "true"
       - key: JWT_SECRET
         generateValue: true
+      - key: AI_REPORT_ENABLED
+        value: "false"
+      - key: AI_BASE_URL
+        value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: AI_MODEL
+        value: qwen3.6-flash
+      - key: AI_TIMEOUT_MS
+        value: "30000"
+      - key: AI_REPORT_PROMPT_VERSION
+        value: report-analysis-v1
+      - key: AI_API_KEY
+        sync: false

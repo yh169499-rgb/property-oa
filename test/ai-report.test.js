@@ -76,6 +76,15 @@ test('模型输入只保留聚合数据并移除人员和工单敏感字段', ()
   }
 });
 
+test('自定义职位即使夹带个人信息也只映射为固定岗位枚举', () => {
+  const report = reportFixture();
+  report.staff.position = '张师傅-水暖维修-13800138000';
+  const payload = sanitizeReport(report, { from: '2026-08-01', to: '2026-08-31' });
+  assert.equal(payload.staff.role, '维修师傅');
+  assert.equal(JSON.stringify(payload).includes('张师傅'), false);
+  assert.equal(JSON.stringify(payload).includes('13800138000'), false);
+});
+
 test('提示词明确要求正式润色、保持数字并输出六段式 JSON', () => {
   const messages = buildMessages(sanitizeReport(reportFixture(), {
     from: '2026-08-01', to: '2026-08-31',

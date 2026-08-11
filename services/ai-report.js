@@ -18,6 +18,14 @@ function scoreComponent(performance, key) {
   };
 }
 
+function safeRoleLabel(value) {
+  const role = String(value || '');
+  if (/主管|经理|管理/.test(role)) return '主管';
+  if (/管家/.test(role)) return '物业管家';
+  if (/维修|师傅|技工/.test(role)) return '维修师傅';
+  return '员工';
+}
+
 function sanitizeReport(report = {}, filters = {}) {
   const staff = report.staff || {};
   const completed = report.completed || {};
@@ -29,7 +37,7 @@ function sanitizeReport(report = {}, filters = {}) {
       to: String(filters.to || '').slice(0, 10),
     },
     scope: '所选小区',
-    staff: { role: String(staff.position || '员工').slice(0, 40) },
+    staff: { role: safeRoleLabel(staff.position) },
     workOrders: {
       received: number(report.received && report.received.total),
       completed: number(completed.total),
