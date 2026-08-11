@@ -16,9 +16,9 @@ services:
       - key: FEISHU_APP_SECRET
         sync: false
       - key: FEISHU_APP_TOKEN
-        value: PdZ0bstWWasvZFsWa3gc5PHznMb
+        sync: false
       - key: FEISHU_TABLE_ID
-        value: tbloxkuixNZIp76r
+        sync: false
       - key: DB_PATH
         value: /var/data/data.db
       - key: UPLOAD_DIR
@@ -39,3 +39,15 @@ services:
         value: "true"
       - key: JWT_SECRET
         generateValue: true
+      - key: AI_REPORT_ENABLED
+        value: "false"
+      - key: AI_BASE_URL
+        value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: AI_MODEL
+        value: qwen3.6-flash
+      - key: AI_TIMEOUT_MS
+        value: "30000"
+      - key: AI_REPORT_PROMPT_VERSION
+        value: report-analysis-v1
+      - key: AI_API_KEY
+        sync: false
