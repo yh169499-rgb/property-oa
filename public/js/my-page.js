@@ -19,7 +19,39 @@
     );
   }
 
-  function buildMyPageModel(profile, stats, ignoredAttendance, period, calendar, directory) {
+  function buildPerformanceModel(input) {
+    input = input || {};
+    var components = input.components || {};
+    var levels = {
+      excellent: '优秀', good: '良好', qualified: '合格',
+      unqualified: '待提升', insufficient_sample: '样本不足'
+    };
+    function performanceComponent(key, label) {
+      var item = components[key] || {};
+      return {
+        label: label,
+        score: item.score == null ? null : number(item.score),
+        contribution: item.contribution == null ? null : number(item.contribution)
+      };
+    }
+    return {
+      status: input.status || 'insufficient_sample',
+      score: input.score == null ? null : number(input.score),
+      level: input.level || 'insufficient_sample',
+      levelLabel: levels[input.level] || '样本不足',
+      sampleSize: number(input.sampleSize),
+      ruleLabel: (input.ruleVersions || []).map(function (rule) {
+        return 'v' + (rule.version || rule.version_no);
+      }).join('、') || '—',
+      components: {
+        completion: performanceComponent('completion', '完成率'),
+        onTime: performanceComponent('onTime', '准时率'),
+        quality: performanceComponent('quality', '质量分')
+      }
+    };
+  }
+
+  function buildMyPageModel(profile, stats, ignoredLegacyRecords, period, calendar, directory) {
     profile = profile || {};
     stats = stats || {};
     calendar = calendar || {};
@@ -30,10 +62,11 @@
     var personal = manager ? (stats.personalActions || { total: 0, byAction: {} }) : null;
     var managerResults = manager ? (stats.personalResults || {}) : null;
     var own = manager ? {} : stats;
+    var ownPerformance = manager ? managerResults.performance : stats.performance;
 
     var ownCalendar = (calendar.people || []).find(function (person) {
       return Number(person.id) === Number(profile.id);
-    }) || (calendar.people || [])[0] || { shift: null, attendance: null };
+    }) || (calendar.people || [])[0] || { shift: null };
     var scheduleEvents = (calendar.events || []).filter(function (event) {
       return event.staffId == null || Number(event.staffId) === Number(profile.id);
     });
@@ -73,6 +106,7 @@
         averageHours: number(own.completed && own.completed.averageHours),
         onTimeRate: number(own.completed && own.completed.onTimeRate)
       },
+      performance: buildPerformanceModel(ownPerformance),
       schedule: {
         date: calendar.date || '',
         shift: ownCalendar.shift || null,
@@ -168,6 +202,34 @@
     summary.appendChild(metrics);
     grid.appendChild(summary);
     rootNode.appendChild(grid);
+
+    var performanceCard = element('section', 'card my-performance-card');
+    var performanceHead = element('div', 'my-section-head');
+    var performanceTitle = element('div');
+    performanceTitle.appendChild(element('h3', '', '我的绩效'));
+    performanceTitle.appendChild(element('p', '', model.periodLabel + ' · 服务端统一计算'));
+    performanceHead.appendChild(performanceTitle);
+    performanceHead.appendChild(element('span', 'my-performance-rule', '规则 ' + model.performance.ruleLabel));
+    performanceCard.appendChild(performanceHead);
+    var performanceBody = element('div', 'my-performance-body');
+    var score = element('div', 'my-performance-score');
+    score.appendChild(element('span', '', '综合得分'));
+    score.appendChild(element('strong', '', model.performance.status === 'scored'
+      ? model.performance.score + ' 分' : '样本不足'));
+    score.appendChild(element('small', '', model.performance.levelLabel + ' · ' + model.performance.sampleSize + ' 单样本'));
+    performanceBody.appendChild(score);
+    var componentGrid = element('div', 'my-performance-components');
+    ['completion', 'onTime', 'quality'].forEach(function (key) {
+      var item = model.performance.components[key];
+      var box = element('div', 'my-performance-component');
+      box.appendChild(element('span', '', item.label));
+      box.appendChild(element('strong', '', item.score == null ? '—' : item.score + ' 分'));
+      box.appendChild(element('small', '', item.contribution == null ? '暂无计算结果' : '计入 ' + item.contribution + ' 分'));
+      componentGrid.appendChild(box);
+    });
+    performanceBody.appendChild(componentGrid);
+    performanceCard.appendChild(performanceBody);
+    rootNode.appendChild(performanceCard);
 
     var scheduleCard = element('section', 'card my-schedule-card');
     var scheduleHead = element('div', 'my-section-head');
