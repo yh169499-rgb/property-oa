@@ -74,3 +74,41 @@ test('个人中心忽略历史考勤数据，只保留资料、成果和日程',
   assert.equal('calendar' in model, false);
   assert.equal(model.isManager, true);
 });
+
+test('普通员工个人中心展示本人的服务端绩效', () => {
+  const model = buildMyPageModel({ id: 9, name: '测试师傅', position: '维修师傅' }, {
+    performance: {
+      status: 'scored', score: 88.5, level: 'good', sampleSize: 6,
+      components: {
+        completion: { score: 90, contribution: 36 },
+        onTime: { score: 85, contribution: 25.5 },
+        quality: { score: 90, contribution: 27 },
+      },
+      ruleVersions: [{ version: 2, sampleSize: 6 }],
+    },
+  }, [], 'month', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+
+  assert.equal(model.performance.score, 88.5);
+  assert.equal(model.performance.levelLabel, '良好');
+  assert.equal(model.performance.sampleSize, 6);
+  assert.equal(model.performance.components.completion.score, 90);
+  assert.equal(model.performance.ruleLabel, 'v2');
+});
+
+test('主管个人中心读取本人结果中的绩效且样本不足不伪造分数', () => {
+  const model = buildMyPageModel({ id: 1, name: '主管', position: '主管' }, {
+    personalActions: { total: 1 },
+    personalResults: {
+      performance: {
+        status: 'insufficient_sample', score: null, level: 'insufficient_sample', sampleSize: 1,
+        components: {}, ruleVersions: [{ version: 3, sampleSize: 1 }],
+      },
+    },
+    team: { staffIds: [] },
+  }, [], 'year', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+
+  assert.equal(model.performance.status, 'insufficient_sample');
+  assert.equal(model.performance.score, null);
+  assert.equal(model.performance.levelLabel, '样本不足');
+  assert.equal(model.performance.ruleLabel, 'v3');
+});
