@@ -99,6 +99,13 @@ test('AI 状态与分析接口要求登录并返回六段式润色结果', async
   assert.deepEqual(Object.keys(success.body.data.analysis).sort(), [
     'highlights', 'issues', 'recommendations', 'risks', 'summary', 'trends',
   ]);
+
+  const team = await jsonRequest(server, '/api/reports/staff/all/ai-analysis', {
+    method: 'POST',
+    headers: { ...authHeader({ id: 1, role: '主管' }), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: '2026-08-01', to: '2026-08-31', community_id: 'c1' }),
+  });
+  assert.equal(team.response.status, 200);
 });
 
 test('AI 分析限制本人递归团队和小区范围并校验日期', async (t) => {
@@ -114,6 +121,12 @@ test('AI 分析限制本人递归团队和小区范围并校验日期', async (t
 
   assert.equal((await post(2, { id: 3, role: 'worker' }, filters)).response.status, 403);
   assert.equal((await post(3, { id: 1, role: 'lead' }, filters)).response.status, 200);
+  const teamForbidden = await jsonRequest(server, '/api/reports/staff/all/ai-analysis', {
+    method: 'POST',
+    headers: { ...authHeader({ id: 3, role: 'worker' }), 'Content-Type': 'application/json' },
+    body: JSON.stringify(filters),
+  });
+  assert.equal(teamForbidden.response.status, 403);
   assert.equal((await post(4, { id: 1, role: 'lead' }, { ...filters, community_id: 'c2' })).response.status, 403);
   const crossCommunity = await post(3, { id: 1, role: 'lead' }, { ...filters, community_id: 'c2' });
   assert.equal(crossCommunity.response.status, 403);
