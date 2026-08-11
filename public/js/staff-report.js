@@ -38,7 +38,38 @@
       ? value(performance.score, ' 分') : '样本不足';
   }
 
-  function reportText(report, filters) {
+  var AI_SECTIONS = [
+    ['highlights', '工作亮点'],
+    ['issues', '主要问题'],
+    ['trends', '趋势判断'],
+    ['risks', '风险提醒'],
+    ['recommendations', '后续建议']
+  ];
+
+  function analysisText(analysis) {
+    if (!analysis || !analysis.summary) return [];
+    var lines = ['', 'AI 润色报告', '整体总结：' + analysis.summary];
+    AI_SECTIONS.forEach(function (section) {
+      var items = Array.isArray(analysis[section[0]]) ? analysis[section[0]] : [];
+      lines.push(section[1] + '：' + (items.length ? items.join('；') : '数据不足以判断'));
+    });
+    lines.push('AI 建议，仅供管理参考');
+    return lines;
+  }
+
+  function analysisHtml(analysis) {
+    if (!analysis || !analysis.summary) return '';
+    return '<section class="staff-report-ai"><header><div><span>千问生成</span><h3>AI 润色报告</h3></div><strong>AI 建议，仅供管理参考</strong></header>' +
+      '<section class="staff-report-ai-summary"><h4>整体总结</h4><p>' + escapeHtml(analysis.summary) + '</p></section>' +
+      '<div class="staff-report-ai-grid">' + AI_SECTIONS.map(function (section) {
+        var items = Array.isArray(analysis[section[0]]) ? analysis[section[0]] : [];
+        return '<section><h4>' + escapeHtml(section[1]) + '</h4>' +
+          (items.length ? '<ul>' + items.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join('') + '</ul>' : '<p>数据不足以判断</p>') +
+          '</section>';
+      }).join('') + '</div></section>';
+  }
+
+  function reportText(report, filters, analysis) {
     filters = filters || {};
     var staff = report.staff || {};
     var range = report.range || {};
@@ -65,10 +96,11 @@
       '异常关注：复发 ' + value(recurrence.total, ' 单') + '；多人反馈 ' + value(feedback.multiple, ' 单'),
       '分类分布：' + (categories.length ? categories.map(function (item) { return item.category + ' ' + item.total + ' 单'; }).join('；') : '无'),
       '生成时间：' + new Date().toLocaleString('zh-CN', { hour12: false }),
-    ].join('\n');
+    ].concat(analysisText(analysis)).join('\n');
   }
 
-  function reportHtml(report, filters) {
+  function reportHtml(report, filters, analysis) {
+    filters = filters || {};
     var staff = report.staff || {}, received = report.received || {};
     var completed = report.completed || {}, current = report.current || {};
     var performance = report.performance || {}, categories = report.categories || [];
@@ -86,7 +118,7 @@
       '<div class="staff-report-performance-meta"><span>样本 <strong>' + escapeHtml(value(performance.sampleSize, ' 单')) + '</strong></span><span>规则版本 <strong>' + escapeHtml(ruleLabel(performance)) + '</strong></span></div>' +
       '<div class="staff-report-performance-components">' + components.map(function (item) {
         return '<div><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(item.score == null ? '—' : value(item.score, ' 分')) + '</strong><small>' + escapeHtml(item.contribution == null ? '暂无计算结果' : '计入 ' + value(item.contribution, ' 分')) + '</small></div>';
-      }).join('') + '</div></section>' +
+      }).join('') + '</div></section>' + analysisHtml(analysis) +
       '<div class="staff-report-metrics">' +
       [['期间接单', received.total, '单'], ['期间完成', completed.total, '单'],
         ['平均时长', completed.averageHours, '小时'], ['SLA 按时率', completed.onTimeRate, '%'],
@@ -98,8 +130,8 @@
       '</section></div><div class="staff-report-footer">生成时间：' + escapeHtml(new Date().toLocaleString('zh-CN', { hour12: false })) + '</div></article>';
   }
 
-  function copy(report, filters) {
-    var text = reportText(report, filters);
+  function copy(report, filters, analysis) {
+    var text = reportText(report, filters, analysis);
     if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
     var area = document.createElement('textarea');
     area.value = text;
@@ -110,17 +142,17 @@
     return Promise.resolve();
   }
 
-  function printReport(report, filters) {
+  function printReport(report, filters, analysis) {
     var popup = window.open('', '_blank', 'noopener,noreferrer');
     if (!popup) throw new Error('浏览器阻止了打印窗口');
-    popup.document.write('<!doctype html><meta charset="utf-8"><title>人员工作报告</title><style>body{font-family:sans-serif;padding:32px;line-height:1.7}h2{margin-bottom:24px}</style>' + reportHtml(report, filters));
+    popup.document.write('<!doctype html><meta charset="utf-8"><title>人员工作报告</title><style>body{font-family:sans-serif;padding:32px;line-height:1.7}h2{margin-bottom:24px}</style>' + reportHtml(report, filters, analysis));
     popup.document.close();
     popup.focus();
     popup.print();
   }
 
-  function exportWord(report, filters) {
-    var html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' + reportHtml(report, filters) + '</body></html>';
+  function exportWord(report, filters, analysis) {
+    var html = '<!doctype html><html><head><meta charset="utf-8"></head><body>' + reportHtml(report, filters, analysis) + '</body></html>';
     var blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' });
     var link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -131,11 +163,37 @@
     setTimeout(function () { URL.revokeObjectURL(link.href); }, 0);
   }
 
-  function render(container, report, filters) {
-    container.innerHTML = reportHtml(report, filters);
+  function render(container, report, filters, analysis, aiStatus) {
+    container.innerHTML = reportHtml(report, filters, analysis);
     var actions = document.createElement('div');
     actions.className = 'staff-report-actions';
-    [['复制', function () { copy(report, filters); }], ['打印', function () { printReport(report, filters); }], ['导出 Word', function () { exportWord(report, filters); }]].forEach(function (item) {
+    var aiButton = document.createElement('button');
+    aiButton.type = 'button';
+    aiButton.className = 'btn sm staff-report-ai-action';
+    aiButton.textContent = aiStatus && aiStatus.enabled ? (analysis ? '重新查看 AI 润色' : 'AI 优化并润色') : 'AI 报告未配置';
+    aiButton.disabled = !(aiStatus && aiStatus.enabled);
+    aiButton.addEventListener('click', function () {
+      aiButton.disabled = true;
+      aiButton.textContent = '千问正在整理报告…';
+      root.WorkforceAPI.aiStaffReport((report.staff || {}).id, {
+        from: filters.from,
+        to: filters.to,
+        community_id: filters.community_id || ''
+      }).then(function (response) {
+        if (!response || response.ok === false) throw new Error(response && response.error || 'AI 润色失败');
+        var result = response.data || response;
+        render(container, report, filters, result.analysis, { enabled: true, model: result.model });
+      }).catch(function (error) {
+        aiButton.disabled = false;
+        aiButton.textContent = analysis ? '重新查看 AI 润色' : 'AI 优化并润色';
+        var message = document.createElement('div');
+        message.className = 'management-state staff-report-ai-error';
+        message.textContent = (error && error.message || 'AI 分析暂不可用') + '，原始报告不受影响';
+        actions.appendChild(message);
+      });
+    });
+    actions.appendChild(aiButton);
+    [['复制', function () { copy(report, filters, analysis); }], ['打印', function () { printReport(report, filters, analysis); }], ['导出 Word', function () { exportWord(report, filters, analysis); }]].forEach(function (item) {
       var button = document.createElement('button');
       button.type = 'button';
       button.className = 'btn sm';
@@ -144,19 +202,29 @@
       actions.appendChild(button);
     });
     container.appendChild(actions);
-    return report;
+    return { report: report, analysis: analysis || null };
   }
 
   function load(container, staffId, filters) {
     container.innerHTML = '<div class="management-state">报告生成中…</div>';
     return root.WorkforceAPI.staffReport(staffId, filters || {}).then(function (response) {
       if (!response || response.ok === false) throw new Error(response && response.error || '报告生成失败');
-      return render(container, response.data || response, filters || {});
+      var report = response.data || response;
+      var statusPromise = root.WorkforceAPI.aiReportStatus
+        ? root.WorkforceAPI.aiReportStatus()
+        : Promise.resolve({ ok: false });
+      return statusPromise.catch(function () { return { ok: false }; }).then(function (statusResponse) {
+        var status = statusResponse && statusResponse.ok !== false
+          ? statusResponse.data || statusResponse : { enabled: false };
+        return render(container, report, filters || {}, null, status);
+      });
     }).catch(function (error) {
       container.innerHTML = '<div class="management-state">' + escapeHtml(error.message || '报告生成失败') + '</div>';
       throw error;
     });
   }
 
-  root.StaffReport = { load: load, render: render, reportText: reportText, copy: copy, print: printReport, exportWord: exportWord };
-}(window));
+  var api = { load: load, render: render, reportText: reportText, reportHtml: reportHtml, copy: copy, print: printReport, exportWord: exportWord };
+  root.StaffReport = api;
+  if (typeof module === 'object' && module.exports) module.exports = api;
+}(typeof window !== 'undefined' ? window : globalThis));
