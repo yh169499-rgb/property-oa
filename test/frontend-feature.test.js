@@ -24,8 +24,22 @@ test('员工页面从同小区通讯录读取手机号', () => {
 
 test('报告展示服务端绩效依据且不再展示考勤', () => {
   assert.match(report, /performance/);
-  assert.match(report, /计算依据|规则版本|样本/);
-  assert.doesNotMatch(report, /考勤|attendance/);
+  assert.match(report, /staff-report-performance/);
+  assert.match(report, /综合得分/);
+  assert.match(report, /完成率/);
+  assert.match(report, /准时率/);
+  assert.match(report, /质量分/);
+  assert.match(report, /规则版本|样本/);
+  assert.doesNotMatch(report, /实际考勤|考勤|attendance|接单口径|完成口径/);
+});
+
+test('每个人都能在我的页面看到服务端计算的本人绩效', () => {
+  assert.match(myPage, /我的绩效/);
+  assert.match(myPage, /stats\.performance|personalResults\.performance/);
+  assert.match(myPage, /完成率/);
+  assert.match(myPage, /准时率/);
+  assert.match(myPage, /质量分/);
+  assert.doesNotMatch(myPage, /实际考勤|考勤记录|attendance/);
 });
 
 test('旧前端本地绩效公式不再作为数据源', () => {
