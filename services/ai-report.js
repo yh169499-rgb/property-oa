@@ -75,7 +75,9 @@ function sanitizeReport(report = {}, filters = {}) {
   if (Array.isArray(report.staffReports)) {
     sanitized.team = {
       staffCount: Math.min(report.staffReports.length, 100),
-      members: report.staffReports.slice(0, 100).map((item) => ({
+      members: report.staffReports.slice(0, 100).map((item) => {
+        const itemPerformance = item.performance || {};
+        return {
         role: safeRoleLabel(item.staff && item.staff.position),
         received: number(item.received && item.received.total),
         completed: number(item.completed && item.completed.total),
@@ -84,11 +86,11 @@ function sanitizeReport(report = {}, filters = {}) {
         recurring: number(item.recurrence && item.recurrence.total),
         multipleFeedback: number(item.feedback && item.feedback.multiple),
         performance: {
-          status: String(item.performance && item.performance.status || 'insufficient_sample'),
-          score: item.performance && item.performance.score == null
-            ? null : number(item.performance && item.performance.score),
+          status: String(itemPerformance.status || 'insufficient_sample'),
+          score: itemPerformance.score == null ? null : number(itemPerformance.score),
         },
-      })),
+        };
+      }),
     };
   }
   return sanitized;
