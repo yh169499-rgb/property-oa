@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const defaultFetch = require('node-fetch');
 
 const ANALYSIS_FIELDS = [
   'summary', 'highlights', 'issues', 'trends', 'risks', 'recommendations',
@@ -126,9 +127,189 @@ function mapProviderError(status, body = {}) {
     return aiError(503, 'AI_REPORT_QUOTA_EXHAUSTED', 'AI 免费额度已用完，原始报告仍可正常使用');
   }
   if (Number(status) === 429) {
-    return aiError(429, 'AI_REPORT_RATE_LIMITED', 'AI 报告请求过于频繁，请稍后再试');
+    const error = aiError(429, 'AI_REPORT_RATE_LIMITED', 'AI 报告请求过于频繁，请稍后再试');
+    error.retryable = true;
+    return error;
   }
-  return aiError(502, 'AI_REPORT_PROVIDER_ERROR', 'AI 服务暂时不可用，原始报告不受影响');
+  const error = aiError(502, 'AI_REPORT_PROVIDER_ERROR', 'AI 服务暂时不可用，原始报告不受影响');
+  error.retryable = Number(status) >= 500;
+  return error;
+}
+
+function rows(db, sql, params = []) {
+  const statement = db.prepare(sql);
+  statement.bind(params);
+  const result = [];
+  while (statement.step()) result.push(statement.getAsObject());
+  statement.free();
+  return result;
+}
+
+function configured(config) {
+  return Boolean(config && config.AI_REPORT_ENABLED && config.AI_API_KEY
+    && config.AI_BASE_URL && config.AI_MODEL);
+}
+
+function parseAnalysisContent(content) {
+  if (content && typeof content === 'object' && !Array.isArray(content)) return content;
+  const text = String(content || '').trim();
+  if (!text) throw aiError(502, 'AI_REPORT_INVALID_RESPONSE', 'AI 返回内容无效，原始报告不受影响');
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    const repaired = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    try {
+      return JSON.parse(repaired);
+    } catch (_) {
+      throw aiError(502, 'AI_REPORT_INVALID_RESPONSE', 'AI 返回内容无效，原始报告不受影响');
+    }
+  }
+}
+
+function validateAnalysisShape(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+      || typeof input.summary !== 'string'
+      || !ANALYSIS_FIELDS.slice(1).every((field) => Array.isArray(input[field]))) {
+    throw aiError(502, 'AI_REPORT_INVALID_RESPONSE', 'AI 返回内容无效，原始报告不受影响');
+  }
+  const cleaned = cleanAnalysis(input);
+  if (!cleaned.summary) {
+    throw aiError(502, 'AI_REPORT_INVALID_RESPONSE', 'AI 返回内容无效，原始报告不受影响');
+  }
+  return cleaned;
+}
+
+function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
+  const controller = new AbortController();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(aiError(504, 'AI_REPORT_TIMEOUT', 'AI 生成超时，原始报告不受影响'));
+    }, timeoutMs);
+  });
+  return Promise.race([
+    Promise.resolve().then(() => fetchImpl(url, { ...options, signal: controller.signal })),
+    timeout,
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function providerAttempt(config, payload, fetchImpl) {
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      fetchImpl,
+      `${config.AI_BASE_URL.replace(/\/+$/, '')}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.AI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.AI_MODEL,
+          messages: buildMessages(payload),
+          response_format: { type: 'json_object' },
+          temperature: 0.2,
+          max_tokens: 1800,
+        }),
+      },
+      Number(config.AI_TIMEOUT_MS) || 30000
+    );
+  } catch (error) {
+    if (error && error.code === 'AI_REPORT_TIMEOUT') throw error;
+    const networkError = aiError(502, 'AI_REPORT_PROVIDER_ERROR', 'AI 服务暂时不可用，原始报告不受影响');
+    networkError.retryable = true;
+    throw networkError;
+  }
+  let body = {};
+  try {
+    body = await response.json();
+  } catch (_) {
+    if (response.ok) throw aiError(502, 'AI_REPORT_INVALID_RESPONSE', 'AI 返回内容无效，原始报告不受影响');
+  }
+  if (!response.ok) throw mapProviderError(response.status, body);
+  const content = body && body.choices && body.choices[0]
+    && body.choices[0].message && body.choices[0].message.content;
+  return validateAnalysisShape(parseAnalysisContent(content));
+}
+
+async function callProvider(config, payload, fetchImpl) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await providerAttempt(config, payload, fetchImpl);
+    } catch (error) {
+      if (!error.retryable || attempt === 1) throw error;
+    }
+  }
+  throw aiError(502, 'AI_REPORT_PROVIDER_ERROR', 'AI 服务暂时不可用，原始报告不受影响');
+}
+
+async function analyzeReport(options = {}) {
+  const {
+    db,
+    report,
+    filters = {},
+    staffProfileId,
+    actorUserId,
+    config,
+    fetchImpl = defaultFetch,
+    persist = async () => {},
+  } = options;
+  if (!configured(config)) {
+    throw aiError(503, 'AI_REPORT_NOT_CONFIGURED', 'AI 报告尚未配置，原始报告仍可正常使用');
+  }
+  const payload = sanitizeReport(report, filters);
+  const hash = reportHash(payload, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION);
+  const cached = rows(db, `
+    SELECT analysis_json, created_at
+      FROM ai_report_analyses
+     WHERE report_hash = ? AND model = ? AND prompt_version = ?
+     LIMIT 1`,
+  [hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION])[0];
+  if (cached) {
+    try {
+      return {
+        status: 'ready',
+        cached: true,
+        model: config.AI_MODEL,
+        promptVersion: config.AI_REPORT_PROMPT_VERSION,
+        analysis: validateAnalysisShape(JSON.parse(cached.analysis_json)),
+        createdAt: cached.created_at,
+      };
+    } catch (_) {
+      db.run(`DELETE FROM ai_report_analyses
+        WHERE report_hash = ? AND model = ? AND prompt_version = ?`,
+      [hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION]);
+    }
+  }
+
+  const analysis = await callProvider(config, payload, fetchImpl);
+  const createdAt = new Date().toISOString();
+  db.run(`INSERT OR REPLACE INTO ai_report_analyses (
+      staff_profile_id, community_id, range_from, range_to, report_hash,
+      model, prompt_version, analysis_json, created_by_user_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    Number(staffProfileId),
+    String(filters.community_id || filters.communityId || ''),
+    String(filters.from || ''),
+    String(filters.to || ''),
+    hash,
+    config.AI_MODEL,
+    config.AI_REPORT_PROMPT_VERSION,
+    JSON.stringify(analysis),
+    Number(actorUserId) || null,
+    createdAt,
+  ]);
+  await persist();
+  return {
+    status: 'ready',
+    cached: false,
+    model: config.AI_MODEL,
+    promptVersion: config.AI_REPORT_PROMPT_VERSION,
+    analysis,
+    createdAt,
+  };
 }
 
 module.exports = {
@@ -138,4 +319,6 @@ module.exports = {
   cleanAnalysis,
   reportHash,
   mapProviderError,
+  configured,
+  analyzeReport,
 };

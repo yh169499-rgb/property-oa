@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const initSqlJs = require('sql.js');
+const { ensureWorkforceSchema } = require('../workforce-schema');
 
 const {
   sanitizeReport,
@@ -7,6 +9,7 @@ const {
   cleanAnalysis,
   reportHash,
   mapProviderError,
+  analyzeReport,
 } = require('../services/ai-report');
 
 function reportFixture() {
@@ -124,4 +127,167 @@ test('供应商状态映射为稳定且不泄露原始响应的错误', () => {
   assert.equal(mapProviderError(400, { code: 'Arrearage' }).code, 'AI_REPORT_QUOTA_EXHAUSTED');
   assert.equal(mapProviderError(503, {}).status, 502);
   assert.doesNotMatch(mapProviderError(401, { message: 'secret upstream body' }).message, /secret upstream body/);
+});
+
+async function cacheFixture() {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run('CREATE TABLE tickets (id TEXT PRIMARY KEY)');
+  ensureWorkforceSchema(db);
+  return db;
+}
+
+function aiConfig(overrides = {}) {
+  return {
+    AI_REPORT_ENABLED: true,
+    AI_BASE_URL: 'https://example.test/compatible-mode/v1',
+    AI_API_KEY: 'server-only-key',
+    AI_MODEL: 'qwen3.6-flash',
+    AI_TIMEOUT_MS: 100,
+    AI_REPORT_PROMPT_VERSION: 'report-analysis-v1',
+    ...overrides,
+  };
+}
+
+function providerResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  };
+}
+
+test('千问成功响应写入缓存，相同报告第二次不再消耗调用额度', async (t) => {
+  const db = await cacheFixture();
+  t.after(() => db.close());
+  let calls = 0;
+  let persisted = 0;
+  let captured;
+  const fetchImpl = async (url, options) => {
+    calls += 1;
+    captured = { url, options, body: JSON.parse(options.body) };
+    return providerResponse(200, {
+      choices: [{ message: { content: JSON.stringify({
+        summary: '本期整体表现稳定。',
+        highlights: ['按时率保持较高水平'],
+        issues: ['存在少量复发工单'],
+        trends: ['处理时长总体平稳'],
+        risks: ['复发问题可能影响满意度'],
+        recommendations: ['对水暖点位开展专项巡检'],
+      }) } }],
+    });
+  };
+  const options = {
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-08-01', to: '2026-08-31', community_id: 'default' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig(),
+    fetchImpl,
+    persist: async () => { persisted += 1; },
+  };
+
+  const first = await analyzeReport(options);
+  const second = await analyzeReport({
+    ...options,
+    fetchImpl: async () => { throw new Error('cache miss'); },
+  });
+
+  assert.equal(first.cached, false);
+  assert.equal(second.cached, true);
+  assert.equal(second.analysis.summary, '本期整体表现稳定。');
+  assert.equal(calls, 1);
+  assert.equal(persisted, 1);
+  assert.equal(captured.url, 'https://example.test/compatible-mode/v1/chat/completions');
+  assert.equal(captured.options.headers.Authorization, 'Bearer server-only-key');
+  assert.equal(captured.body.model, 'qwen3.6-flash');
+  assert.deepEqual(captured.body.response_format, { type: 'json_object' });
+  assert.equal(JSON.stringify(captured.body).includes('张师傅'), false);
+  const stored = db.exec('SELECT analysis_json FROM ai_report_analyses');
+  assert.equal(JSON.stringify(stored).includes('server-only-key'), false);
+});
+
+test('未配置 AI 时立即返回 503 且不会调用供应商', async (t) => {
+  const db = await cacheFixture();
+  t.after(() => db.close());
+  await assert.rejects(() => analyzeReport({
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-08-01', to: '2026-08-31' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig({ AI_API_KEY: '' }),
+    fetchImpl: async () => { throw new Error('must not call'); },
+  }), (error) => error.status === 503 && error.code === 'AI_REPORT_NOT_CONFIGURED');
+});
+
+test('429 和 5xx 只重试一次，额度耗尽与无效 JSON 不重试', async (t) => {
+  const db = await cacheFixture();
+  t.after(() => db.close());
+  let retryCalls = 0;
+  const retried = await analyzeReport({
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-08-01', to: '2026-08-31' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig(),
+    fetchImpl: async () => {
+      retryCalls += 1;
+      if (retryCalls === 1) return providerResponse(503, {});
+      return providerResponse(200, { choices: [{ message: { content: JSON.stringify({
+        summary: '重试后成功', highlights: [], issues: [], trends: [], risks: [], recommendations: [],
+      }) } }] });
+    },
+  });
+  assert.equal(retried.analysis.summary, '重试后成功');
+  assert.equal(retryCalls, 2);
+
+  let quotaCalls = 0;
+  await assert.rejects(() => analyzeReport({
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-09-01', to: '2026-09-30' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig(),
+    fetchImpl: async () => {
+      quotaCalls += 1;
+      return providerResponse(400, { code: 'Arrearage', message: 'private provider detail' });
+    },
+  }), (error) => error.code === 'AI_REPORT_QUOTA_EXHAUSTED'
+      && !error.message.includes('private provider detail'));
+  assert.equal(quotaCalls, 1);
+
+  let invalidCalls = 0;
+  await assert.rejects(() => analyzeReport({
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-10-01', to: '2026-10-31' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig(),
+    fetchImpl: async () => {
+      invalidCalls += 1;
+      return providerResponse(200, { choices: [{ message: { content: 'not json' } }] });
+    },
+  }), (error) => error.code === 'AI_REPORT_INVALID_RESPONSE');
+  assert.equal(invalidCalls, 1);
+});
+
+test('超时返回稳定错误且不包含密钥', async (t) => {
+  const db = await cacheFixture();
+  t.after(() => db.close());
+  await assert.rejects(() => analyzeReport({
+    db,
+    report: reportFixture(),
+    filters: { from: '2026-11-01', to: '2026-11-30' },
+    staffProfileId: 27,
+    actorUserId: 1,
+    config: aiConfig({ AI_TIMEOUT_MS: 5 }),
+    fetchImpl: async () => new Promise(() => {}),
+  }), (error) => error.code === 'AI_REPORT_TIMEOUT'
+      && error.status === 504
+      && !error.message.includes('server-only-key'));
 });
