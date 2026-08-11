@@ -31,7 +31,7 @@ function sanitizeReport(report = {}, filters = {}) {
   const completed = report.completed || {};
   const current = report.current || {};
   const performance = report.performance || {};
-  return {
+  const sanitized = {
     period: {
       from: String(filters.from || '').slice(0, 10),
       to: String(filters.to || '').slice(0, 10),
@@ -72,6 +72,26 @@ function sanitizeReport(report = {}, filters = {}) {
         })),
     },
   };
+  if (Array.isArray(report.staffReports)) {
+    sanitized.team = {
+      staffCount: Math.min(report.staffReports.length, 100),
+      members: report.staffReports.slice(0, 100).map((item) => ({
+        role: safeRoleLabel(item.staff && item.staff.position),
+        received: number(item.received && item.received.total),
+        completed: number(item.completed && item.completed.total),
+        doing: number(item.current && item.current.doing),
+        pending: number(item.current && item.current.pending),
+        recurring: number(item.recurrence && item.recurrence.total),
+        multipleFeedback: number(item.feedback && item.feedback.multiple),
+        performance: {
+          status: String(item.performance && item.performance.status || 'insufficient_sample'),
+          score: item.performance && item.performance.score == null
+            ? null : number(item.performance && item.performance.score),
+        },
+      })),
+    };
+  }
+  return sanitized;
 }
 
 function buildMessages(payload) {
@@ -158,6 +178,15 @@ function configured(config) {
     && config.AI_BASE_URL && config.AI_MODEL);
 }
 
+// Qwen3.5+ hybrid models enable deep thinking by default. This report only
+// needs a short deterministic rewrite, so skip the reasoning phase to avoid
+// the non-streaming request spending the whole timeout budget before content
+// is returned. Restrict the parameter to Qwen3.x models because other
+// OpenAI-compatible providers may reject the DashScope-specific option.
+function shouldDisableThinking(config) {
+  return /^qwen3\.(?:5|6|7|8)-/i.test(String(config && config.AI_MODEL || '').trim());
+}
+
 function parseAnalysisContent(content) {
   if (content && typeof content === 'object' && !Array.isArray(content)) return content;
   const text = String(content || '').trim();
@@ -220,6 +249,7 @@ async function providerAttempt(config, payload, fetchImpl) {
           response_format: { type: 'json_object' },
           temperature: 0.2,
           max_tokens: 1800,
+          ...(shouldDisableThinking(config) ? { enable_thinking: false } : {}),
         }),
       },
       Number(config.AI_TIMEOUT_MS) || 30000
