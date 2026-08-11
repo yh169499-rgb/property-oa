@@ -28,6 +28,7 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
     'workforce_import_batches',
     'performance_rule_versions',
     'community_memberships',
+    'ai_report_analyses',
   ]) {
     assert.equal(names.includes(name), true, `missing table: ${name}`);
   }
@@ -36,6 +37,16 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
   assert.equal(ticketColumns.includes('assignee_user_id'), true);
   assert.equal(ticketColumns.includes('assigned_at'), true);
   assert.equal(ticketColumns.includes('performance_rule_version_id'), true);
+
+  const aiColumns = columnNames(db, 'ai_report_analyses');
+  for (const column of [
+    'staff_profile_id', 'community_id', 'range_from', 'range_to',
+    'report_hash', 'model', 'prompt_version', 'analysis_json',
+    'created_by_user_id', 'created_at',
+  ]) {
+    assert.equal(aiColumns.includes(column), true, `missing AI cache column: ${column}`);
+  }
+  assert.equal(indexNames(db).includes('uq_ai_report_cache'), true);
 });
 
 test('performance rules include a stable default version 1', async (t) => {
