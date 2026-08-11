@@ -311,3 +311,39 @@ git commit -m "docs: document community and performance APIs"
 - [ ] **步骤 7：Commit/部署回执**
 
 记录最终 commit、Render 部署状态、专项测试结果和生产验证结果；若有失败，只报告实际失败点和下一步，不宣称完成。
+
+### 任务 7：绩效可见性与报告精简修正
+
+**目标：** 让主管报告和所有角色的“我的”页面直接显示服务端绩效，并删除报告中的考勤与技术口径文案。
+
+**文件：**
+
+- 修改：`public/js/staff-report.js`
+- 修改：`public/js/my-page.js`
+- 修改：`public/styles.css`
+- 测试：`test/frontend-feature.test.js`
+- 测试：`test/my-page.test.js`
+
+- [ ] **步骤 1：先写失败测试**
+
+断言报告含显眼的绩效摘要及三项分值，不含“实际考勤”“接单口径”“完成口径”或 `attendance`；个人中心模型兼容普通员工的 `stats.performance` 和主管的 `stats.personalResults.performance`。
+
+- [ ] **步骤 2：运行测试确认失败**
+
+运行：`node --test --test-concurrency=1 test/frontend-feature.test.js test/my-page.test.js`
+
+预期：报告仍含口径文案，个人中心模型没有 `performance`，测试失败。
+
+- [ ] **步骤 3：实现最小修正**
+
+在 `staff-report.js` 把绩效摘要移到报告顶部并展示三项计算结果；在 `my-page.js` 归一化本人绩效并渲染“我的绩效”卡片；在 `styles.css` 增加响应式卡片样式。
+
+- [ ] **步骤 4：运行专项测试**
+
+运行：`node --test --test-concurrency=1 test/frontend-feature.test.js test/my-page.test.js test/reporting.test.js`
+
+预期：全部通过，报告源码不再包含考勤和技术口径文案。
+
+- [ ] **步骤 5：提交并推送**
+
+只暂存上述代码、测试和文档，保留 `data.db`、备份文件和压缩包；提交后推送 `master` 触发 Render 部署。
