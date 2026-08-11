@@ -7,6 +7,7 @@ const {
   shanghaiMonthRange,
   getDashboardStats,
   getStaffReport,
+  getAllStaffReport,
   getManagerReport,
 } = require('../services/reporting');
 const { isManagerRole, isGlobalManagerRole, positionForRole } = require('../services/roles');
@@ -203,6 +204,29 @@ router.get('/dashboard/stats', requireAuth, (req, res) => {
       range: req.query.range,
       staffIds,
     }) });
+  } catch (error) {
+    fail(res, error);
+  }
+});
+
+router.get('/reports/staff/all', requireAuth, (req, res) => {
+  try {
+    if (!isGlobalManagerRole(req.user.role)) {
+      const error = new Error('无权查看全部人员报告');
+      error.status = 403;
+      error.code = 'REPORT_SCOPE_FORBIDDEN';
+      throw error;
+    }
+    const profiles = all(`
+      SELECT id FROM staff_profiles
+       WHERE COALESCE(employment_status, 'active') <> 'inactive'
+       ORDER BY id
+    `);
+    res.json({ data: getAllStaffReport(database.getDB(), {
+      from: req.query.from,
+      to: req.query.to,
+      communityId: req.query.community_id,
+    }, profiles.map((profile) => profile.id)) });
   } catch (error) {
     fail(res, error);
   }

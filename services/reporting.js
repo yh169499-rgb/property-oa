@@ -285,6 +285,52 @@ function getStaffReport(db, staffId, filters = {}) {
   };
 }
 
+function getAllStaffReport(db, filters = {}, staffIds) {
+  const requested = Array.isArray(staffIds)
+    ? [...new Set(staffIds.map(Number).filter(Number.isInteger))]
+    : null;
+  const profiles = rows(db, `
+    SELECT * FROM staff_profiles
+     WHERE (${requested ? 'id IN (' + (requested.length ? requested.map(() => '?').join(',') : '0') + ')' : '1 = 1'})
+       AND COALESCE(employment_status, 'active') <> 'inactive'
+     ORDER BY id
+  `, requested || []);
+  const ids = profiles.map((profile) => Number(profile.id));
+  const aggregate = reportForStaffIds(db, ids, filters);
+  const staffReports = profiles.map((profile) => {
+    const report = getStaffReport(db, profile.id, filters);
+    return {
+      staff: {
+        id: profile.id,
+        name: profile.name || '',
+        position: profile.position || '',
+      },
+      received: report.received,
+      completed: report.completed,
+      current: report.current,
+      recurrence: report.recurrence,
+      feedback: report.feedback,
+      performance: report.performance,
+    };
+  });
+  const scored = staffReports
+    .map((item) => Number(item.performance && item.performance.score))
+    .filter((score) => Number.isFinite(score));
+  return {
+    staff: { id: 'all', name: '全部人员', position: '团队汇总' },
+    ...aggregate,
+    performance: {
+      status: 'team_summary',
+      score: scored.length ? Number((scored.reduce((sum, score) => sum + score, 0) / scored.length).toFixed(1)) : null,
+      level: 'team_summary',
+      sampleSize: scored.length,
+      components: {},
+      ruleVersions: [],
+    },
+    staffReports,
+  };
+}
+
 function getManagerReport(db, staffId, filters = {}) {
   const ownReport = getStaffReport(db, staffId, filters);
   const manager = ownReport.staff;
@@ -382,5 +428,6 @@ module.exports = {
   completionExpression,
   getDashboardStats,
   getStaffReport,
+  getAllStaffReport,
   getManagerReport,
 };
