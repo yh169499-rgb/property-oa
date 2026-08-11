@@ -76,6 +76,24 @@ test('模型输入只保留聚合数据并移除人员和工单敏感字段', ()
   }
 });
 
+test('团队报告只向模型发送脱敏的人员聚合指标', () => {
+  const report = reportFixture();
+  report.staffReports = [
+    { staff: { name: '张师傅', position: '维修师傅' }, received: { total: 4 }, completed: { total: 3 }, performance: { status: 'scored', score: 80 } },
+    { staff: { name: '李管家', position: '物业管家' }, received: { total: 2 }, completed: { total: 2 }, performance: { status: 'insufficient_sample', score: null } },
+  ];
+  const payload = sanitizeReport(report, { from: '2026-08-01', to: '2026-08-31' });
+  assert.deepEqual(payload.team, {
+    staffCount: 2,
+    members: [
+      { role: '维修师傅', received: 4, completed: 3, doing: 0, pending: 0, recurring: 0, multipleFeedback: 0, performance: { status: 'scored', score: 80 } },
+      { role: '物业管家', received: 2, completed: 2, doing: 0, pending: 0, recurring: 0, multipleFeedback: 0, performance: { status: 'insufficient_sample', score: null } },
+    ],
+  });
+  assert.equal(JSON.stringify(payload).includes('张师傅'), false);
+  assert.equal(JSON.stringify(payload).includes('李管家'), false);
+});
+
 test('自定义职位即使夹带个人信息也只映射为固定岗位枚举', () => {
   const report = reportFixture();
   report.staff.position = '张师傅-水暖维修-13800138000';
@@ -211,6 +229,7 @@ test('千问成功响应写入缓存，相同报告第二次不再消耗调用�
   assert.equal(captured.url, 'https://example.test/compatible-mode/v1/chat/completions');
   assert.equal(captured.options.headers.Authorization, 'Bearer server-only-key');
   assert.equal(captured.body.model, 'qwen3.6-flash');
+  assert.equal(captured.body.enable_thinking, false);
   assert.deepEqual(captured.body.response_format, { type: 'json_object' });
   assert.equal(JSON.stringify(captured.body).includes('张师傅'), false);
   const stored = db.exec('SELECT analysis_json FROM ai_report_analyses');
