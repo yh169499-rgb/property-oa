@@ -82,6 +82,26 @@ test('人员报告兼容只有 worker 名称的历史工单', async () => {
   assert.deepEqual(report.categories, [{ category: '其他', total: 1 }]);
 });
 
+test('全部人员报告聚合团队指标并保留人员明细', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets
+      (id, type, status, created, assigned_at, finished, estimated_hours, assignee_user_id)
+    VALUES
+      ('all-one', 'repair', 'done', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', '2026-07-03T01:00:00Z', 2, 2),
+      ('all-two', 'complaint', 'doing', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '', 0, 3);
+  `);
+  const { getAllStaffReport } = require('../services/reporting');
+  const report = getAllStaffReport(db, { from: '2026-07-01', to: '2026-07-31' }, [1, 2, 3]);
+  assert.equal(report.staff.id, 'all');
+  assert.equal(report.staff.name, '全部人员');
+  assert.equal(report.received.total, 2);
+  assert.equal(report.completed.total, 1);
+  assert.deepEqual(report.staffReports.map((item) => item.staff.name), ['主管', '组长', '师傅']);
+  assert.equal(report.staffReports.find((item) => item.staff.name === '组长').received.total, 1);
+  assert.equal(report.staffReports.find((item) => item.staff.name === '师傅').received.total, 1);
+});
+
 test('主管个人动作只计本人，团队成果递归下级且排除树外', async () => {
   const db = await fixture();
   db.run(`
@@ -172,6 +192,10 @@ test('报告路由要求登录并限制本人或递归团队范围', async (t) =
   assert.equal((await get('/api/reports/staff/3', authHeader({ id: 3, role: 'worker' }))).response.status, 200);
   assert.equal((await get('/api/reports/staff/2', authHeader({ id: 3, role: 'worker' }))).response.status, 403);
   assert.equal((await get('/api/reports/staff/3', authHeader({ id: 1, role: 'lead' }))).response.status, 200);
+  const all = await get('/api/reports/staff/all', authHeader({ id: 1, role: '主管' }));
+  assert.equal(all.response.status, 200);
+  assert.equal(all.body.data.staff.name, '全部人员');
+  assert.equal((await get('/api/reports/staff/all', authHeader({ id: 3, role: 'worker' }))).response.status, 403);
   const attendance = await get('/api/me/attendance?month=2026-07', authHeader({ id: 3, role: 'worker' }));
   assert.equal(attendance.response.status, 200);
   assert.deepEqual(attendance.body.data, []);

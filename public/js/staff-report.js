@@ -14,7 +14,7 @@
   function levelLabel(level) {
     return {
       excellent: '优秀', good: '良好', qualified: '合格',
-      unqualified: '待提升', insufficient_sample: '样本不足'
+      unqualified: '待提升', insufficient_sample: '样本不足', team_summary: '团队汇总'
     }[level] || '样本不足';
   }
 
@@ -34,8 +34,33 @@
   }
 
   function scoreLabel(performance) {
+    if (performance.status === 'team_summary') {
+      return performance.score == null ? '—' : value(performance.score, ' 分（团队均分）');
+    }
     return performance.status === 'scored' && performance.score != null
       ? value(performance.score, ' 分') : '样本不足';
+  }
+
+  function teamPerformanceText(report) {
+    if (!Array.isArray(report.staffReports)) return [];
+    return ['人员绩效概览'].concat(report.staffReports.map(function (item) {
+      var performance = item.performance || {};
+      return (item.staff && item.staff.name || '-') + '：接单 ' + value(item.received && item.received.total, ' 单') +
+        '；完成 ' + value(item.completed && item.completed.total, ' 单') +
+        '；绩效 ' + scoreLabel(performance);
+    }));
+  }
+
+  function teamPerformanceHtml(report) {
+    if (!Array.isArray(report.staffReports)) return '';
+    return '<section class="staff-report-team"><h3>人员绩效概览</h3><div class="staff-report-team-table">' +
+      report.staffReports.map(function (item) {
+        var performance = item.performance || {};
+        return '<div class="staff-report-team-row"><strong>' + escapeHtml(item.staff && item.staff.name || '-') + '</strong>' +
+          '<span>接单 ' + escapeHtml(value(item.received && item.received.total)) + ' 单</span>' +
+          '<span>完成 ' + escapeHtml(value(item.completed && item.completed.total)) + ' 单</span>' +
+          '<span>' + escapeHtml(scoreLabel(performance)) + '</span></div>';
+      }).join('') + '</div></section>';
   }
 
   var AI_SECTIONS = [
@@ -96,7 +121,7 @@
       '异常关注：复发 ' + value(recurrence.total, ' 单') + '；多人反馈 ' + value(feedback.multiple, ' 单'),
       '分类分布：' + (categories.length ? categories.map(function (item) { return item.category + ' ' + item.total + ' 单'; }).join('；') : '无'),
       '生成时间：' + new Date().toLocaleString('zh-CN', { hour12: false }),
-    ].concat(analysisText(analysis)).join('\n');
+    ].concat(teamPerformanceText(report), analysisText(analysis)).join('\n');
   }
 
   function reportHtml(report, filters, analysis) {
@@ -125,7 +150,7 @@
         ['处理中', current.doing, '单'], ['搁置中', current.pending, '单'],
         ['期间退回', current.returned, '单'], ['复发 / 多人反馈', value(recurrence.total) + ' / ' + value(feedback.multiple), '单']]
         .map(function (item) { return '<div><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(value(item[1])) + '</strong><small>' + escapeHtml(item[2]) + '</small></div>'; }).join('') +
-      '</div><div class="staff-report-sections"><section><h3>分类分布</h3>' +
+      '</div>' + teamPerformanceHtml(report) + '<div class="staff-report-sections"><section><h3>分类分布</h3>' +
       (categories.length ? categories.map(function (item) { return '<p><span>' + escapeHtml(item.category) + '</span><strong>' + escapeHtml(item.total) + ' 单</strong></p>'; }).join('') : '<p>暂无接单</p>') +
       '</section></div><div class="staff-report-footer">生成时间：' + escapeHtml(new Date().toLocaleString('zh-CN', { hour12: false })) + '</div></article>';
   }
@@ -167,12 +192,16 @@
     container.innerHTML = reportHtml(report, filters, analysis);
     var actions = document.createElement('div');
     actions.className = 'staff-report-actions';
+    var isAggregate = String((report.staff || {}).id) === 'all';
     var aiButton = document.createElement('button');
     aiButton.type = 'button';
     aiButton.className = 'btn sm staff-report-ai-action';
-    aiButton.textContent = aiStatus && aiStatus.enabled ? (analysis ? '重新查看 AI 润色' : 'AI 优化并润色') : 'AI 报告未配置';
-    aiButton.disabled = !(aiStatus && aiStatus.enabled);
+    aiButton.textContent = isAggregate
+      ? '团队汇总暂不调用 AI'
+      : (aiStatus && aiStatus.enabled ? (analysis ? '重新查看 AI 润色' : 'AI 优化并润色') : 'AI 报告未配置');
+    aiButton.disabled = isAggregate || !(aiStatus && aiStatus.enabled);
     aiButton.addEventListener('click', function () {
+      if (isAggregate) return;
       aiButton.disabled = true;
       aiButton.textContent = '千问正在整理报告…';
       root.WorkforceAPI.aiStaffReport((report.staff || {}).id, {

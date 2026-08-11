@@ -58,3 +58,27 @@ test('AI 内容经过 HTML 转义且没有分析时原报告仍可导出', () =>
   assert.match(original, /人员工作报告/);
   assert.doesNotMatch(original, /AI 润色报告/);
 });
+
+test('全部人员报告导出团队汇总和人员绩效明细', () => {
+  const allReport = {
+    staff: { id: 'all', name: '全部人员', position: '团队汇总' },
+    range: report.range,
+    received: { total: 9 },
+    completed: { total: 7, averageHours: 3, onTimeRate: 90 },
+    current: { doing: 2, pending: 0, waiting: 0, returned: 0 },
+    recurrence: { total: 0 }, feedback: { multiple: 0 }, categories: [],
+    performance: { status: 'team_summary', score: 88.5, level: 'team_summary', sampleSize: 2, components: {}, ruleVersions: [] },
+    staffReports: [
+      { staff: { name: '张师傅' }, received: { total: 5 }, completed: { total: 4 }, performance: { status: 'scored', score: 90, level: 'excellent' } },
+      { staff: { name: '李师傅' }, received: { total: 4 }, completed: { total: 3 }, performance: { status: 'scored', score: 87, level: 'good' } },
+    ],
+  };
+  const text = StaffReport.reportText(allReport, filters);
+  const html = StaffReport.reportHtml(allReport, filters);
+  assert.match(text, /全部人员/);
+  assert.match(text, /人员绩效概览/);
+  assert.match(text, /张师傅/);
+  assert.match(html, /staff-report-team/);
+  assert.match(html, /李师傅/);
+  assert.match(html, /团队均分/);
+});

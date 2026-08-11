@@ -42,6 +42,11 @@ test('management page keeps the blue hero as its only title and reports react to
   assert.match(workspace, /to\.addEventListener\('change', generateReport\)/);
 });
 
+test('人员报告支持全部人员团队汇总', () => {
+  assert.match(workspace, /全部人员/);
+  assert.match(workspace, /value: 'all'/);
+});
+
 test('主管首页和我的页面不再渲染考勤模块', () => {
   assert.doesNotMatch(html, /团队到岗|考勤异常|dashboard-attendance/);
   assert.doesNotMatch(app, /renderDashboardAttendanceDetails|dashboard-team-attendance|dashboard-attendance/);
