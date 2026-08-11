@@ -191,6 +191,22 @@ function ensureWorkforceSchema(db) {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS ai_report_analyses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      staff_profile_id INTEGER NOT NULL,
+      community_id TEXT NOT NULL DEFAULT '',
+      range_from TEXT NOT NULL,
+      range_to TEXT NOT NULL,
+      report_hash TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_version TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL
+    )
+  `);
+
   addColumn(db, 'tickets', 'assignee_user_id INTEGER');
   addColumn(db, 'tickets', "assigned_at TEXT DEFAULT ''");
   addColumn(db, 'tickets', 'performance_rule_version_id INTEGER');
@@ -229,6 +245,8 @@ function ensureWorkforceSchema(db) {
   db.run('CREATE INDEX IF NOT EXISTS idx_shift_staff_date ON shift_assignments(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_attendance_staff_date ON attendance_records(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_ticket_activity_actor_time ON ticket_activity_logs(actor_staff_id, created_at)');
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_report_cache
+    ON ai_report_analyses(report_hash, model, prompt_version)`);
 }
 
 module.exports = { ensureWorkforceSchema, addColumn, backfillCommunityMemberships };
