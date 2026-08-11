@@ -16,9 +16,9 @@ services:
       - key: FEISHU_APP_SECRET
         sync: false
       - key: FEISHU_APP_TOKEN
-        value: PdZ0bstWWasvZFsWa3gc5PHznMb
+        sync: false
       - key: FEISHU_TABLE_ID
-        value: tbloxkuixNZIp76r
+        sync: false
       - key: DB_PATH
         value: /var/data/data.db
       - key: UPLOAD_DIR
