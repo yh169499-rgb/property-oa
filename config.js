@@ -15,6 +15,11 @@ if (fs.existsSync(envPath)) {
   });
 }
 
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
 module.exports = {
   PORT: process.env.PORT || 3001,
   NOTIFY_WEBHOOK: process.env.NOTIFY_WEBHOOK || '',
@@ -28,6 +33,15 @@ module.exports = {
   SUPABASE_DB_OBJECT: process.env.SUPABASE_DB_OBJECT || 'production/data.db',
   SUPABASE_BACKUP_PREFIX: process.env.SUPABASE_BACKUP_PREFIX || 'backups',
   SUPABASE_SYNC_REQUIRED: String(process.env.SUPABASE_SYNC_REQUIRED || '').toLowerCase() === 'true',
+
+  // AI 人员报告（服务端调用 OpenAI 兼容接口）
+  AI_REPORT_ENABLED: String(process.env.AI_REPORT_ENABLED || '').toLowerCase() === 'true',
+  AI_BASE_URL: String(process.env.AI_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+    .replace(/\/+$/, ''),
+  AI_API_KEY: process.env.AI_API_KEY || '',
+  AI_MODEL: process.env.AI_MODEL || 'qwen3.6-flash',
+  AI_TIMEOUT_MS: positiveInteger(process.env.AI_TIMEOUT_MS, 30000),
+  AI_REPORT_PROMPT_VERSION: process.env.AI_REPORT_PROMPT_VERSION || 'report-analysis-v1',
 
   // JWT
   // 生产环境必须通过 JWT_SECRET 注入；仅保留无敏感信息的本地开发占位值。
