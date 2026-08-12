@@ -12,7 +12,11 @@ const STAFF_ROLE_ALIASES = new Map([
 
 function normalizedStaffRole(roleOrPosition) {
   const value = String(roleOrPosition || '').trim().toLowerCase();
-  return STAFF_ROLE_ALIASES.get(value) || null;
+  const exact = STAFF_ROLE_ALIASES.get(value);
+  if (exact) return exact;
+  if (value.includes('维修')) return 'worker';
+  if (value.includes('管家')) return 'keeper';
+  return null;
 }
 
 function queryAll(db, sql, params = []) {

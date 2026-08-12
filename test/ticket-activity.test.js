@@ -8,7 +8,7 @@ const { ensureWorkforceSchema } = require('../workforce-schema');
 
 const {
   detectTicketAction,
-  resolveAssigneeUserId,
+  resolveAssignee,
   recordTicketActivity,
 } = require('../services/ticket-activity');
 
@@ -32,16 +32,38 @@ test('detectTicketAction ignores metadata and unsupported explicit actions', () 
   assert.equal(detectTicketAction(doing, { _action: 'approve_complete' }), null);
 });
 
-test('resolveAssigneeUserId only resolves a unique staff name', async () => {
+test('resolveAssignee returns stable identity only for a unique active direct report', async () => {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
-  db.run('CREATE TABLE staff_profiles (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)');
-  db.run("INSERT INTO staff_profiles (user_id, name) VALUES (11, '唯一师傅'), (12, '重名师傅'), (13, '重名师傅')");
+  db.run("CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT DEFAULT 'worker', status TEXT DEFAULT 'active')");
+  db.run(`CREATE TABLE staff_profiles (
+    id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, manager_id INTEGER,
+    employment_status TEXT DEFAULT 'active'
+  )`);
+  db.run("INSERT INTO users (id) VALUES (1), (11), (12), (13), (14), (15), (16)");
+  db.run("UPDATE users SET role = 'guest' WHERE id = 16");
+  db.run(`INSERT INTO staff_profiles
+    (id, user_id, name, manager_id, employment_status) VALUES
+    (1, 1, '主管', NULL, 'active'),
+    (2, 11, '唯一师傅', 1, 'active'),
+    (3, 12, '重名师傅', 1, 'active'),
+    (4, 13, '重名师傅', 1, 'active'),
+    (5, 14, '离职师傅', 1, 'departed'),
+    (6, 15, '外部师傅', NULL, 'active'),
+    (7, 16, '非处理岗位', 1, 'active')`);
 
-  assert.equal(resolveAssigneeUserId(db, '唯一师傅'), 11);
-  assert.equal(resolveAssigneeUserId(db, '重名师傅'), null);
-  assert.equal(resolveAssigneeUserId(db, '不存在'), null);
-  assert.equal(resolveAssigneeUserId(db, ''), null);
+  assert.deepEqual(resolveAssignee(db, '唯一师傅', 1), {
+    assigneeUserId: 11,
+    assigneeStaffProfileId: 2,
+    displayName: '唯一师傅',
+  });
+  for (const name of ['重名师傅', '离职师傅', '外部师傅', '非处理岗位', '不存在', '']) {
+    assert.throws(
+      () => resolveAssignee(db, name, 1),
+      (error) => error.status === 409 && error.code === 'ASSIGNEE_NOT_ELIGIBLE',
+      name
+    );
+  }
 });
 
 test('recordTicketActivity inserts a parameterized activity row', async () => {
@@ -90,6 +112,9 @@ async function apiFixture(t) {
       (1, '主管', '2026-07-30T00:00:00.000Z', '2026-07-30T00:00:00.000Z'),
       (2, '唯一师傅', '2026-07-30T00:00:00.000Z', '2026-07-30T00:00:00.000Z')
   `);
+  db.run(`UPDATE staff_profiles
+    SET manager_id = (SELECT id FROM staff_profiles WHERE user_id = 1)
+    WHERE user_id = 2`);
   db.run(`
     INSERT INTO tickets (id, worker, status, metadata) VALUES
       ('WX1', '', 'wait', '{}'),
@@ -131,8 +156,8 @@ test('Bearer PATCH records actor activity and keeps _action out of ticket SQL', 
   );
   assert.equal(assigned.response.status, 200);
   assert.deepEqual(
-    firstRow(db, "SELECT worker, assignee_user_id, assigned_at IS NOT NULL FROM tickets WHERE id = 'WX1'"),
-    ['唯一师傅', 2, 1]
+    firstRow(db, "SELECT worker, assignee_user_id, assignee_staff_profile_id, assigned_at IS NOT NULL FROM tickets WHERE id = 'WX1'"),
+    ['唯一师傅', 2, 2, 1]
   );
   assert.deepEqual(
     firstRow(db, 'SELECT actor_user_id, action FROM ticket_activity_logs ORDER BY id'),
@@ -152,7 +177,7 @@ test('Bearer PATCH records actor activity and keeps _action out of ticket SQL', 
   );
 });
 
-test('anonymous PATCH is rejected and authenticated updates clear stable assignment', async (t) => {
+test('anonymous PATCH is rejected and staff cannot clear stable assignment', async (t) => {
   const { db, server } = await apiFixture(t);
 
   const suspended = await patchTicket(server, 'WX2', { status: 'pending' });
@@ -161,10 +186,11 @@ test('anonymous PATCH is rejected and authenticated updates clear stable assignm
   assert.equal(firstRow(db, 'SELECT COUNT(*) FROM ticket_activity_logs')[0], 0);
 
   const cleared = await patchTicket(server, 'WX2', { worker: '' }, authHeader({ id: 2, role: 'worker', name: '唯一师傅' }));
-  assert.equal(cleared.response.status, 200);
+  assert.equal(cleared.response.status, 403);
+  assert.equal(cleared.body.code, 'TICKET_SCOPE_FORBIDDEN');
   assert.deepEqual(
     firstRow(db, "SELECT worker, assignee_user_id, assigned_at FROM tickets WHERE id = 'WX2'"),
-    ['', null, null]
+    ['唯一师傅', 2, '2026-07-30T01:00:00.000Z']
   );
   assert.equal(firstRow(db, 'SELECT COUNT(*) FROM ticket_activity_logs')[0], 0);
 });

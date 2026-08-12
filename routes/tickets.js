@@ -11,13 +11,18 @@ const config = require('../config');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
   detectTicketAction,
-  resolveAssigneeUserId,
+  resolveAssignee,
   recordTicketActivity
 } = require('../services/ticket-activity');
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
 const { isSupervisorUser } = require('../services/roles');
-const { ticketReadScope, canReadTicket } = require('../services/ticket-access');
+const {
+  STAFF_TICKET_TYPES,
+  ticketReadScope,
+  canReadTicket,
+  assertTicketMutation,
+} = require('../services/ticket-access');
 
 // 上传配置
 if (!fs.existsSync(config.UPLOAD_DIR)) fs.mkdirSync(config.UPLOAD_DIR, { recursive: true });
@@ -68,6 +73,10 @@ function tableExists(name) {
   return Boolean(queryOne("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name]));
 }
 
+function tableHasColumn(table, column) {
+  return queryAll(`PRAGMA table_info(${table})`).some((row) => row.name === column);
+}
+
 function safeTicketId(value) {
   const id = String(value || '');
   if (!id || id === '.' || id === '..' || id.includes('\0') || id.includes('/') || id.includes('\\')) return null;
@@ -101,7 +110,10 @@ function assertCommunityAccess(req, communityId) {
 }
 
 function canAccessTicket(req, ticketId) {
-  const row = queryOne('SELECT community_id, assignee_user_id FROM tickets WHERE id = ?', [ticketId]);
+  // Legacy installations may not have the stable assignee columns until the
+  // startup migration completes. SELECT * keeps this guard non-throwing; the
+  // missing identity is then rejected by canReadTicket for ordinary staff.
+  const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
   return canReadTicket(req, row);
 }
 
@@ -145,7 +157,9 @@ router.get('/', requireAuth, (req, res) => {
       params.push(value);
     }
   }
-  const scope = ticketReadScope(req);
+  // A pre-migration ticket table can lack `type`; preserve its historical
+  // repair-like list behavior while current schemas enforce the type scope.
+  const scope = ticketReadScope(req, '', { hasTypeColumn: tableHasColumn('tickets', 'type') });
   const where = filters.length ? filters.join(' AND ') : '1 = 1';
   const rows = queryAll(
     `SELECT * FROM tickets WHERE ${where}${scope.sql} ORDER BY created DESC`,
@@ -165,13 +179,18 @@ router.get('/:id', requireAuth, (req, res) => {
 
 // POST /api/tickets
 router.post('/', requireAuth, async (req, res) => {
-  const t = req.body;
+  const t = req.body || {};
+  const supervisor = isSupervisorUser(req.user);
+  const type = String(t.type || 'repair').trim().toLowerCase();
+  if (!STAFF_TICKET_TYPES.has(type)) {
+    return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
+  }
   let community;
   try { community = resolveCommunity(getDB(), t); }
   catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
   try { assertCommunityAccess(req, community.id); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
-  const rawId = t.id ? String(t.id).trim() : '';
+  const rawId = supervisor && t.id ? String(t.id).trim() : '';
   const invalidIds = ['测试', 'test', ''];
   let id;
   if (rawId && !invalidIds.includes(rawId.toLowerCase())) { id = rawId; }
@@ -180,11 +199,27 @@ router.post('/', requireAuth, async (req, res) => {
     const maxNum = maxRow ? parseInt(maxRow.id.replace('WX', '')) || 0 : 0;
     id = 'WX' + String(maxNum + 1).padStart(4, '0');
   }
-  const now = t.created || new Date().toISOString();
+  const now = supervisor && t.created ? t.created : new Date().toISOString();
   const communityId = community.id;
-  const type = t.type || 'repair';
   const cat = t.cat || '其他';
   const loc = t.loc || '';
+  const requestedStatus = supervisor ? String(t.status || 'wait') : 'wait';
+  if (!['wait', 'doing'].includes(requestedStatus)) {
+    return res.status(400).json({ error: '工单初始状态不合法', code: 'INVALID_TICKET_INITIAL_STATE' });
+  }
+  const requestedPriority = supervisor ? String(t.priority || 'normal') : 'normal';
+  if (!['low', 'normal', 'high', 'urgent'].includes(requestedPriority)) {
+    return res.status(400).json({ error: '工单优先级不合法', code: 'INVALID_TICKET_PRIORITY' });
+  }
+  let assignee = null;
+  const requestedWorker = supervisor ? String(t.worker || '').trim() : '';
+  if (requestedWorker) {
+    try { assignee = resolveAssignee(getDB(), requestedWorker, req.user.id); }
+    catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+  }
+  if (requestedStatus === 'doing' && !assignee) {
+    return res.status(400).json({ error: '处理中工单必须指定处理人', code: 'INVALID_TICKET_INITIAL_STATE' });
+  }
   const repeatKey = buildRepeatKey(type, cat, loc);
   const issueSignature = identifyIssueSignature(cat, t.desc, t.message);
   const matches = getRepeatMatches(communityId, repeatKey, issueSignature);
@@ -212,13 +247,24 @@ router.post('/', requireAuth, async (req, res) => {
   const repeatCount = completedMatches.length + 1;
   const isRecurring = Boolean(repeatOf);
   const recurrenceNote = isRecurring ? `近30天同类问题复发${repeatCount}次，关联历史工单${repeatOf}` : '';
-  const priority = isRecurring ? raiseRecurringPriority(t.priority || 'normal') : (t.priority || 'normal');
+  const priority = isRecurring ? raiseRecurringPriority(requestedPriority) : requestedPriority;
 
   try {
     run(
-      `INSERT INTO tickets (id, type, cat, desc, loc, priority, status, worker, message, created, estimated_hours, session_id, community_id, repeat_key, repeat_of, repeat_count, is_recurring, recurrence_note, feedback_count, performance_rule_version_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, type, cat, t.desc || '', loc, priority, t.status || 'wait', t.worker || '', t.message || '', now, t.estimated_hours || 0, t.sessionId || '', communityId, repeatKey, repeatOf, repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1, getActiveRule(getDB())?.id || null]
+      `INSERT INTO tickets (id, type, cat, desc, loc, priority, status, worker, message,
+        created, estimated_hours, session_id, community_id, repeat_key, repeat_of,
+        repeat_count, is_recurring, recurrence_note, feedback_count,
+        performance_rule_version_id, assignee_user_id, assignee_staff_profile_id, assigned_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, type, cat, t.desc || '', loc, priority, requestedStatus,
+        assignee ? assignee.displayName : '', t.message || '', now,
+        supervisor ? (t.estimated_hours || 0) : 0,
+        supervisor ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
+        repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1,
+        getActiveRule(getDB())?.id || null,
+        assignee ? assignee.assigneeUserId : null,
+        assignee ? assignee.assigneeStaffProfileId : null,
+        assignee ? now : '']
     );
     await saveDB();
     const row = queryOne('SELECT * FROM tickets WHERE id = ?', [id]);
@@ -238,21 +284,32 @@ router.patch('/:id', requireAuth, async (req, res) => {
   const db = getDB();
   const before = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
   if (!before) return res.status(404).json({ error: '工单不存在' });
-  try { assertCommunityAccess(req, before.community_id || 'default'); }
+  try { assertTicketMutation(req, before, updates); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
   const action = detectTicketAction(before, updates);
-  const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', metadata: 'metadata' };
+  const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', metadata: 'metadata', performance_rule_version_id: 'performance_rule_version_id' };
   const sets = [], values = [];
   for (const [key, col] of Object.entries(allowed)) {
     if (updates[key] !== undefined) { sets.push(`${col} = ?`); values.push(updates[key]); }
   }
-  if (updates.worker !== undefined && updates.worker !== before.worker) {
+  if (updates.worker !== undefined &&
+      (updates.worker !== before.worker || before.assignee_user_id == null || before.assignee_staff_profile_id == null)) {
     const workerName = String(updates.worker || '').trim();
-    sets.push('assignee_user_id = ?', 'assigned_at = ?');
+    let assignee = null;
+    if (workerName) {
+      try { assignee = resolveAssignee(db, workerName, req.user.id); }
+      catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+    }
+    sets.push('assignee_user_id = ?', 'assignee_staff_profile_id = ?', 'assigned_at = ?');
     values.push(
-      resolveAssigneeUserId(db, workerName),
-      workerName ? new Date().toISOString() : null
+      assignee ? assignee.assigneeUserId : null,
+      assignee ? assignee.assigneeStaffProfileId : null,
+      assignee ? new Date().toISOString() : null
     );
+    if (assignee && updates.worker !== assignee.displayName) {
+      const workerSetIndex = sets.indexOf('worker = ?');
+      if (workerSetIndex >= 0) values[workerSetIndex] = assignee.displayName;
+    }
     if (workerName && before.performance_rule_version_id == null) {
       sets.push('performance_rule_version_id = ?');
       values.push(getActiveRule(db)?.id || null);

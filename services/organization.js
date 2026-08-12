@@ -1,3 +1,6 @@
+const { MANAGER_ROLES } = require('./roles');
+const { assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
+
 function normalizeId(value) {
   if (value === null || value === undefined || value === '') return null;
   const id = Number(value);
@@ -101,21 +104,23 @@ function rowsFrom(db, sql, params = []) {
   return rows;
 }
 
-function updateManager(db, staffId, managerId) {
+function updateManager(db, staffId, managerId, options = {}) {
   const staff = normalizeId(staffId);
   const manager = normalizeId(managerId);
-  const profiles = rowsFrom(db, 'SELECT id, manager_id FROM staff_profiles');
-  if (!profiles.some((profile) => normalizeId(profile.id) === staff)) {
+  const profiles = rowsFrom(
+    db,
+    'SELECT id, position, manager_id, employment_status FROM staff_profiles'
+  );
+  const existingProfile = profiles.find((profile) => normalizeId(profile.id) === staff);
+  if (!existingProfile) {
     const error = new Error('人员档案不存在');
     error.status = 404;
     error.code = 'PROFILE_NOT_FOUND';
     error.details = { staffId: staff };
     throw error;
   }
-  if (
-    manager !== null
-    && !profiles.some((profile) => normalizeId(profile.id) === manager)
-  ) {
+  const managerProfile = profiles.find((profile) => normalizeId(profile.id) === manager);
+  if (manager !== null && !managerProfile) {
     const error = new Error('直属上级档案不存在');
     error.status = 404;
     error.code = 'MANAGER_NOT_FOUND';
@@ -129,6 +134,42 @@ function updateManager(db, staffId, managerId) {
     error.code = 'ORGANIZATION_CYCLE';
     error.details = { staffId: staff, managerId: manager, path };
     throw error;
+  }
+  const candidate = { ...existingProfile, ...(options.profile || {}), manager_id: manager };
+  const staffRole = normalizedStaffRole(candidate.position);
+  if (candidate.employment_status === 'active' && manager !== null && !staffRole) {
+    const isSupervisor = MANAGER_ROLES.has(
+      String(candidate.position || '').trim().toLowerCase()
+    );
+    if (!isSupervisor) {
+      const error = new Error('在职直属人员必须使用维修或管家岗位');
+      error.status = 400;
+      error.code = 'INVALID_STAFF_ROLE';
+      error.details = { role: candidate.position };
+      throw error;
+    }
+  }
+  const isActiveStaff = candidate.employment_status === 'active' && staffRole;
+  if (isActiveStaff && manager === null) {
+    const error = new Error('在职普通员工必须绑定直属主管');
+    error.status = 409;
+    error.code = 'ACTIVE_STAFF_MANAGER_REQUIRED';
+    error.details = { staffId: staff };
+    throw error;
+  }
+  if (isActiveStaff) {
+    const managerIsActive = managerProfile.employment_status === 'active';
+    const managerIsSupervisor = MANAGER_ROLES.has(
+      String(managerProfile.position || '').trim().toLowerCase()
+    );
+    if (!managerIsActive || !managerIsSupervisor) {
+      const error = new Error('直属上级必须是在职主管');
+      error.status = 409;
+      error.code = 'INVALID_ACTIVE_MANAGER';
+      error.details = { managerId: manager };
+      throw error;
+    }
+    assertTeamCapacity(db, manager, staffRole, { excludeProfileId: staff });
   }
   db.run(
     'UPDATE staff_profiles SET manager_id = ?, updated_at = ? WHERE id = ?',

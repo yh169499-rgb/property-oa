@@ -12,12 +12,15 @@ const {
   normalizedImportPayload,
   previewProfileImport,
 } = require('../services/workforce-migration');
-const { positionForRole } = require('../services/roles');
+const { MANAGER_ROLES, positionForRole } = require('../services/roles');
+const {
+  assertTeamCapacity,
+  normalizedStaffRole,
+} = require('../services/team-capacity');
 
 const router = express.Router();
 const SELF_FIELDS = new Set(['phone', 'birth_month']);
 const ADMIN_FIELDS = new Set([
-  'user_id',
   'name',
   'birth_month',
   'join_date',
@@ -25,8 +28,9 @@ const ADMIN_FIELDS = new Set([
   'position',
   'skill',
   'manager_id',
-  'employment_status',
 ]);
+const CREATE_FIELDS = new Set([...ADMIN_FIELDS, 'employment_status']);
+const IMPORT_BLOCKED_FIELDS = new Set(['employmentStatus', 'employment_status']);
 
 function apiError(message, status, code, details = {}) {
   const error = new Error(message);
@@ -95,12 +99,61 @@ function withTransaction(work) {
   }
 }
 
+function candidateProfile(current, body) {
+  return { ...current, ...(body || {}) };
+}
+
+function rowFrom(db, sql, params = []) {
+  const statement = db.prepare(sql);
+  statement.bind(params);
+  const row = statement.step() ? statement.getAsObject() : null;
+  statement.free();
+  return row;
+}
+
+function assertActiveProfileAssignment(db, current, body, options = {}) {
+  const candidate = candidateProfile(current || {}, body);
+  const role = normalizedStaffRole(candidate.position);
+  if (candidate.employment_status !== 'active') return;
+  if (!role) {
+    const isSupervisor = MANAGER_ROLES.has(String(candidate.position || '').trim().toLowerCase());
+    if (isSupervisor && (candidate.manager_id === null || candidate.manager_id === undefined || candidate.manager_id === '')) return;
+    throw apiError('在职直属人员必须使用维修或管家岗位', 400, 'INVALID_STAFF_ROLE', {
+      role: candidate.position,
+    });
+  }
+  if (candidate.manager_id === null || candidate.manager_id === undefined || candidate.manager_id === '') {
+    throw apiError('在职普通员工必须绑定直属主管', 409, 'ACTIVE_STAFF_MANAGER_REQUIRED');
+  }
+  const manager = rowFrom(
+    db,
+    'SELECT id, position, employment_status FROM staff_profiles WHERE id = ?',
+    [candidate.manager_id]
+  );
+  const managerIsActive = manager && manager.employment_status === 'active';
+  const managerIsSupervisor = manager && MANAGER_ROLES.has(
+    String(manager.position || '').trim().toLowerCase()
+  );
+  if (!managerIsActive || !managerIsSupervisor) {
+    throw apiError('直属上级必须是在职主管', 409, 'INVALID_ACTIVE_MANAGER', {
+      managerId: candidate.manager_id,
+    });
+  }
+  assertTeamCapacity(db, candidate.manager_id, role, {
+    excludeProfileId: options.excludeProfileId,
+  });
+}
+
 function updateProfile(id, body, allowed) {
   const fields = validateFields(body, allowed);
   const result = withTransaction((db) => {
+    const current = profileById(id);
+    if (fields.some((field) => ['manager_id', 'position', 'employment_status'].includes(field))) {
+      assertActiveProfileAssignment(db, current, body, { excludeProfileId: id });
+    }
     const regularFields = fields.filter((field) => field !== 'manager_id');
     if (fields.includes('manager_id')) {
-      updateManager(db, id, body.manager_id);
+      updateManager(db, id, body.manager_id, { profile: candidateProfile(current, body) });
     }
     if (regularFields.length) {
       const assignments = regularFields.map((field) => `${field} = ?`).join(', ');
@@ -205,6 +258,13 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (
         const match = matched.get(index);
         if (!match) throw apiError('勾选项未匹配到唯一档案', 409, 'IMPORT_MATCH_CONFLICT', { index });
         const fields = Array.isArray(selection.fields) ? [...new Set(selection.fields)] : [];
+        const blocked = fields.find((field) => IMPORT_BLOCKED_FIELDS.has(field));
+        if (blocked) {
+          throw apiError('该字段必须通过人员生命周期接口修改', 400, 'INVALID_IMPORT_FIELD', {
+            index,
+            field: blocked,
+          });
+        }
         const assignments = [];
         const values = [];
         fields.forEach((requested) => {
@@ -217,6 +277,16 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (
           fieldsUpdated[column] = (fieldsUpdated[column] || 0) + 1;
         });
         if (!assignments.length) return;
+        const body = fields.reduce((result, requested) => {
+          const column = IMPORT_FIELD_ALIASES[requested];
+          result[column] = profiles[index][requested];
+          return result;
+        }, {});
+        if (Object.keys(body).some((field) => ['position', 'employment_status'].includes(field))) {
+          assertActiveProfileAssignment(db, match.profile, body, {
+            excludeProfileId: match.profile.id,
+          });
+        }
         db.run(`UPDATE staff_profiles SET ${assignments.join(', ')}, updated_at = ? WHERE id = ?`,
           [...values, new Date().toISOString(), match.profile.id]);
         updated += 1;
@@ -274,18 +344,30 @@ router.get('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
 
 router.post('/staff/profiles', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const fields = validateFields(req.body, ADMIN_FIELDS);
+    const fields = validateFields(req.body, CREATE_FIELDS);
+    if (fields.includes('employment_status') && req.body.employment_status !== 'active') {
+      throw apiError('新建档案只允许 active 状态', 400, 'INVALID_EMPLOYMENT_STATUS');
+    }
     const now = new Date().toISOString();
     const columns = [...fields, 'created_at', 'updated_at'];
     const placeholders = columns.map(() => '?').join(', ');
     const created = withTransaction((db) => {
+      const candidate = {
+        position: req.body.position || '',
+        manager_id: req.body.manager_id ?? null,
+        employment_status: req.body.employment_status || 'active',
+      };
       db.run(
         `INSERT INTO staff_profiles (${columns.join(', ')}) VALUES (${placeholders})`,
         [...fields.map((field) => field === 'manager_id' ? null : req.body[field]), now, now]
       );
       const inserted = queryOne('SELECT * FROM staff_profiles WHERE id = last_insert_rowid()');
       if (fields.includes('manager_id')) {
-        updateManager(db, inserted.id, req.body.manager_id);
+        updateManager(db, inserted.id, req.body.manager_id, { profile: candidate });
+      } else {
+        assertActiveProfileAssignment(db, inserted, candidate, {
+          excludeProfileId: inserted.id,
+        });
       }
       return profileById(inserted.id);
     });

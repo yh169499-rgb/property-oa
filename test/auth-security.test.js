@@ -71,3 +71,12 @@ test('注册审核通过和拒绝也必须由主管操作', async (t) => {
     );
   }
 });
+
+test('users 表存在时，数据库中已删除账号的旧 token 必须返回 401', async (t) => {
+  const { server } = await fixture(t);
+  const response = await request(server, '/api/users', {
+    headers: authHeader({ id: 999, role: '主管', name: '已删除主管' }),
+  });
+  assert.equal(response.response.status, 401);
+  assert.equal(response.body.code, 'AUTH_REQUIRED');
+});

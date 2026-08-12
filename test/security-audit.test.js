@@ -39,12 +39,21 @@ async function fixture(t) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER UNIQUE,
       name TEXT,
-      employment_status TEXT DEFAULT 'active'
+      phone TEXT DEFAULT '',
+      position TEXT DEFAULT '',
+      skill TEXT DEFAULT '',
+      manager_id INTEGER,
+      employment_status TEXT DEFAULT 'active',
+      departed_at TEXT DEFAULT '',
+      departed_by_user_id INTEGER,
+      created_at TEXT DEFAULT '',
+      updated_at TEXT DEFAULT ''
     );
     CREATE TABLE community_memberships (community_id TEXT, staff_profile_id INTEGER);
     CREATE TABLE shift_assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, work_date TEXT);
     CREATE TABLE attendance_records (id INTEGER PRIMARY KEY AUTOINCREMENT, staff_id INTEGER, work_date TEXT);
-    CREATE TABLE ticket_activity_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, actor_user_id INTEGER);
+    CREATE TABLE staff_status (name TEXT PRIMARY KEY, status TEXT, updated TEXT);
+    CREATE TABLE ticket_activity_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, actor_user_id INTEGER, actor_staff_id INTEGER);
     ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
     INSERT INTO users (id, phone, password, name, role, status) VALUES
       (1, '13800000001', 'x', '主管', '主管', 'active'),
@@ -52,9 +61,11 @@ async function fixture(t) {
       (3, '13800000003', 'x', '师傅', 'worker', 'active');
     INSERT INTO invite_codes (code, community_id, created) VALUES ('ABC123', 'default', '2026-08-11T00:00:00.000Z');
     INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', '2026-08-11T00:00:00.000Z');
-    INSERT INTO staff_profiles (id, user_id, name) VALUES (3, 3, '师傅');
+    INSERT INTO staff_profiles (id, user_id, name, phone, position) VALUES
+      (1, 1, '主管', '13800000001', '主管'),
+      (3, 3, '师傅', '13800000003', '维修师傅');
     INSERT INTO community_memberships (community_id, staff_profile_id) VALUES ('default', 3);
-    INSERT INTO shift_assignments (staff_id, work_date) VALUES (3, '2026-08-11');
+    INSERT INTO shift_assignments (staff_id, work_date) VALUES (3, '2099-08-11');
     INSERT INTO attendance_records (staff_id, work_date) VALUES (3, '2026-08-11');
     INSERT INTO ticket_activity_logs (ticket_id, actor_user_id) VALUES ('ticket-1', 3);
   `);
@@ -81,24 +92,31 @@ test('注册申请不能通过客户端 role 提升为主管', async (t) => {
   assert.equal(db.exec("SELECT role FROM pending_registrations WHERE phone = '13800000004'")[0].values[0][0], 'worker');
 });
 
-test('停用账号后旧 token 立即失效且人员关联排班/考勤被清理，历史操作日志保留', async (t) => {
+test('人员离职后账号删除且旧 token 立即失效，历史操作日志保留人员档案引用', async (t) => {
   const { server, db } = await fixture(t);
+  db.run('ALTER TABLE tickets ADD COLUMN assignee_user_id INTEGER');
+  db.run('ALTER TABLE tickets ADD COLUMN assignee_staff_profile_id INTEGER');
+  db.run("INSERT INTO tickets (id, worker, assignee_user_id) VALUES ('ticket-1', '师傅', 3)");
   const result = await request(server, '/api/users/3', {
     method: 'DELETE',
     headers: authHeader({ id: 1, role: '主管' }),
   });
   assert.equal(result.response.status, 200);
-  assert.equal(db.exec("SELECT status FROM users WHERE id = 3")[0].values[0][0], 'disabled');
-  assert.equal(db.exec('SELECT employment_status FROM staff_profiles WHERE user_id = 3')[0].values[0][0], 'inactive');
+  assert.equal(result.body.departed, true);
+  assert.equal(db.exec('SELECT COUNT(*) FROM users WHERE id = 3')[0].values[0][0], 0);
+  assert.equal(db.exec('SELECT employment_status FROM staff_profiles WHERE id = 3')[0].values[0][0], 'departed');
+  assert.equal(db.exec('SELECT user_id FROM staff_profiles WHERE id = 3')[0].values[0][0], null);
   assert.equal(db.exec('SELECT COUNT(*) FROM community_memberships WHERE staff_profile_id = 3')[0].values[0][0], 0);
   assert.equal(db.exec('SELECT COUNT(*) FROM shift_assignments WHERE staff_id = 3')[0].values[0][0], 0);
-  assert.equal(db.exec('SELECT COUNT(*) FROM attendance_records WHERE staff_id = 3')[0].values[0][0], 0);
-  assert.equal(db.exec('SELECT COUNT(*) FROM ticket_activity_logs WHERE actor_user_id = 3')[0].values[0][0], 1);
+  assert.equal(db.exec('SELECT COUNT(*) FROM ticket_activity_logs WHERE actor_user_id = 3')[0].values[0][0], 0);
+  assert.equal(db.exec("SELECT COUNT(*) FROM ticket_activity_logs WHERE ticket_id = 'ticket-1'")[0].values[0][0], 1);
+  assert.equal(db.exec("SELECT actor_staff_id FROM ticket_activity_logs WHERE ticket_id = 'ticket-1'")[0].values[0][0], 3);
+  assert.deepEqual(db.exec("SELECT assignee_user_id, assignee_staff_profile_id FROM tickets WHERE id = 'ticket-1'")[0].values[0], [null, 3]);
   const login = await request(server, '/api/login', {
     method: 'POST',
     body: JSON.stringify({ phone: '13800000003', password: 'pass1234' }),
   });
-  assert.equal(login.response.status, 403);
+  assert.equal(login.response.status, 401);
   assert.equal((await request(server, '/api/users', { headers: authHeader({ id: 3, role: 'worker' }) })).response.status, 401);
 });
 

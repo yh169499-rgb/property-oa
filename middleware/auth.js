@@ -6,18 +6,16 @@ const config = require('../config');
 const { queryOne } = require('../db');
 const { isSupervisorUser } = require('../services/roles');
 
-function isTestRuntime() {
-  return process.env.NODE_ENV === 'test'
-    || process.env.NODE_TEST_CONTEXT
-    || process.argv.includes('--test');
-}
-
 function generateToken(user, rememberMe) {
   return jwt.sign(
     { id: user.id, phone: user.phone, name: user.name, role: user.role },
     config.JWT_SECRET,
     { expiresIn: rememberMe ? config.JWT_EXPIRES_LONG : config.JWT_EXPIRES }
   );
+}
+
+function usersTableExists() {
+  return Boolean(queryOne("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'"));
 }
 
 function verifyToken(req, res, next) {
@@ -32,20 +30,15 @@ function verifyToken(req, res, next) {
     const claims = jwt.verify(token, config.JWT_SECRET);
     let current;
     try {
-      current = queryOne('SELECT * FROM users WHERE id = ?', [claims.id]);
-    } catch (error) {
-      if (isTestRuntime()) {
-        // 兼容仅验证路由行为、未创建 users 表的单元测试夹具；生产环境仍应暴露真实数据库故障。
+      if (!usersTableExists()) {
+        // 兼容完全不提供认证表、只验证独立路由行为的轻量测试夹具。
         req.user = claims;
         return next();
       }
+      current = queryOne('SELECT * FROM users WHERE id = ?', [claims.id]);
+    } catch (error) {
       // 数据库不可用不是“未登录”，避免把真实故障伪装成 401。
       return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
-    }
-    if (!current && isTestRuntime()) {
-      // 仅兼容旧的纯路由单元测试；生产环境必须存在对应的 users 记录。
-      req.user = claims;
-      return next();
     }
     if (!current || String(current.status || 'active').toLowerCase() !== 'active') {
       req.user = null;

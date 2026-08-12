@@ -77,3 +77,88 @@ test('确认只写勾选字段，相同规范化内容幂等且普通用户无�
   const denied = { response: deniedResponse };
   assert.equal(denied.response.status, 403);
 });
+
+test('批量导入在职状态字段时整批拒绝并回滚', async (t) => {
+  const { db, server } = await fixture(t);
+  db.run("UPDATE staff_profiles SET manager_id = 1, position = '维修师傅', employment_status = 'active' WHERE user_id IN (2, 3, 4)");
+  db.run(`
+    INSERT INTO users (id, phone, password, name, role) VALUES
+      (5, '13800112205', 'x', '在职管家', 'keeper'),
+      (6, '13800112206', 'x', '离职师傅', 'worker')
+  `);
+  db.run(`
+    INSERT INTO staff_profiles
+      (user_id, name, phone, position, manager_id, employment_status) VALUES
+      (5, '在职管家', '13800112205', '物业管家', 1, 'active'),
+      (6, '离职师傅', '13800112206', '维修师傅', 1, 'inactive')
+  `);
+
+  const result = await post(server, '/api/staff/profiles/import-confirm', {
+    profiles: [
+      { phone: '13800112201', skill: '电梯' },
+      { phone: '13800112206', employmentStatus: 'active' },
+    ],
+    selections: [
+      { index: 0, fields: ['skill'] },
+      { index: 1, fields: ['employmentStatus'] },
+    ],
+  });
+
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.code, 'INVALID_IMPORT_FIELD');
+  assert.deepEqual(
+    db.exec("SELECT skill FROM staff_profiles WHERE phone = '13800112201'")[0].values[0],
+    ['']
+  );
+  assert.deepEqual(
+    db.exec("SELECT employment_status FROM staff_profiles WHERE phone = '13800112206'")[0].values[0],
+    ['inactive']
+  );
+  assert.equal(db.exec('SELECT COUNT(*) FROM workforce_import_batches')[0].values[0][0], 0);
+});
+
+test('批量导入纯资料字段不会被已满团队误判', async (t) => {
+  const { db, server } = await fixture(t);
+  db.run("UPDATE staff_profiles SET manager_id = 1, position = '维修师傅', employment_status = 'active' WHERE user_id IN (2, 3, 4)");
+  db.run(`INSERT INTO staff_profiles
+    (name, phone, position, manager_id, employment_status)
+    VALUES ('在职管家', '13800112205', '物业管家', 1, 'active')`);
+
+  const result = await post(server, '/api/staff/profiles/import-confirm', {
+    profiles: [{ phone: '13800112201', skill: '电梯' }],
+    selections: [{ index: 0, fields: ['skill'] }],
+  });
+
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.data.summary.updated, 1);
+  assert.equal(
+    db.exec("SELECT skill FROM staff_profiles WHERE phone = '13800112201'")[0].values[0][0],
+    '电梯'
+  );
+});
+
+test('批量导入禁止选择 employment_status 并整批不写', async (t) => {
+  const { db, server } = await fixture(t);
+  const result = await post(server, '/api/staff/profiles/import-confirm', {
+    profiles: [
+      { phone: '13800112201', skill: '电梯' },
+      { phone: '13800112203', employmentStatus: 'departed' },
+    ],
+    selections: [
+      { index: 0, fields: ['skill'] },
+      { index: 1, fields: ['employmentStatus'] },
+    ],
+  });
+
+  assert.equal(result.response.status, 400);
+  assert.equal(result.body.code, 'INVALID_IMPORT_FIELD');
+  assert.deepEqual(
+    db.exec("SELECT skill FROM staff_profiles WHERE phone = '13800112201'")[0].values[0],
+    ['']
+  );
+  assert.deepEqual(
+    db.exec("SELECT employment_status FROM staff_profiles WHERE phone = '13800112203'")[0].values[0],
+    ['active']
+  );
+  assert.equal(db.exec('SELECT COUNT(*) FROM workforce_import_batches')[0].values[0][0], 0);
+});

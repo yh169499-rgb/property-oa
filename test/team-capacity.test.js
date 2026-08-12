@@ -47,6 +47,17 @@ test('岗位规范化只识别维修师傅和管家岗位', () => {
   assert.equal(normalizedStaffRole(''), null);
 });
 
+test('中文自定义维修和管家岗位仍计入对应容量', () => {
+  for (const value of ['高级维修师傅', '维修主管', '综合维修技工']) {
+    assert.equal(normalizedStaffRole(value), 'worker');
+  }
+  for (const value of ['招商主管家', '客服管家', '物业招商主管家']) {
+    assert.equal(normalizedStaffRole(value), 'keeper');
+  }
+  assert.equal(normalizedStaffRole('高级 worker'), null);
+  assert.equal(normalizedStaffRole('主管'), null);
+});
+
 test('团队用量只统计主管直属 active 人员并支持排除本人', async () => {
   const db = await fixture();
   assert.deepEqual(teamUsage(db, 10), {
