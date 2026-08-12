@@ -10,7 +10,7 @@ const {
   getAllStaffReport,
   getManagerReport,
 } = require('../services/reporting');
-const { isManagerRole, isGlobalManagerRole, positionForRole } = require('../services/roles');
+const { isManagerRole, isGlobalManagerRole, isSupervisorUser, positionForRole } = require('../services/roles');
 
 const router = express.Router();
 const BUSINESS_ERROR_CODES = new Set([
@@ -76,7 +76,7 @@ function assertStaffScope(req, requestedId, options = {}) {
     throw error;
   }
   const target = Number(requestedId);
-  const allowed = isGlobalManagerRole(req.user.role)
+  const allowed = isSupervisorUser(req.user)
     || target === Number(own.id)
     || (isManagerRole(req.user.role)
       && descendantIds(profiles, own.id).map(Number).includes(target));

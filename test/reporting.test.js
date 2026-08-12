@@ -201,16 +201,13 @@ test('报告路由要求登录并限制本人或递归团队范围', async (t) =
   assert.deepEqual(attendance.body.data, []);
 });
 
-test('旧 /api/report 匿名无 staff_id 保持兼容，staff_id 分支要求登录', async (t) => {
+test('旧 /api/report 也必须登录，避免匿名读取全量统计', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
   t.after(() => server.close());
 
   const legacy = await fetch(`${server.url}/api/report`);
-  const legacyBody = await legacy.json();
-  assert.equal(legacy.status, 200);
-  assert.equal(legacyBody.success, true);
-  assert.deepEqual(Object.keys(legacyBody.stats).sort(), ['avgHours', 'done', 'total']);
+  assert.equal(legacy.status, 401);
 
   const scoped = await fetch(`${server.url}/api/report?staff_id=3`);
   const scopedBody = await scoped.json();
@@ -241,7 +238,9 @@ test('历史完成列参与完成统计，负耗时和无效时间不进入耗�
 
   const server = await startHttpServer(db);
   t.after(() => server.close());
-  const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`);
+  const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`, {
+    headers: authHeader({ id: 1, role: '主管' }),
+  });
   assert.equal((await legacy.json()).stats.done, 3);
 });
 

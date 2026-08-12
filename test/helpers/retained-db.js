@@ -42,4 +42,3 @@ async function writeFixtureDatabase() {
 }
 
 module.exports = { writeFixtureDatabase };
-

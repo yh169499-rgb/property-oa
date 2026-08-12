@@ -1,6 +1,6 @@
 /* ============================================================
    物业 OA 工单审批系统 —— 应用逻辑
-   后端 API 模式（飞书多维表格）+ localStorage 人员管理
+   后端 API 模式；服务端数据库是人员、工单和权限的唯一事实来源
    ============================================================ */
 
 const LS_KEY = 'juzi_oa_demo_v1';
@@ -30,11 +30,8 @@ let useApi = true; // 是否使用后端 API
    数据加载与持久化
    ============================================================ */
 async function load() {
-  // 人员仍用 localStorage
-  const raw = localStorage.getItem(LS_KEY);
-  if (raw) {
-    try { var parsed = JSON.parse(raw); state.staff = parsed.staff || JSON.parse(JSON.stringify(SEED.staff)); } catch(e) { state.staff = JSON.parse(JSON.stringify(SEED.staff)); }
-  } else { state.staff = JSON.parse(JSON.stringify(SEED.staff)); }
+  // 不再从浏览器恢复人员/工单明细，避免旧缓存绕过服务端权限；服务端 API 成功后再填充内存状态。
+  state.staff = JSON.parse(JSON.stringify(SEED.staff));
   currentRole = localStorage.getItem(LS_ROLE) || 'eng_lead';
   currentCommunity = localStorage.getItem(LS_COMMUNITY) || 'default';
 
@@ -44,7 +41,7 @@ async function load() {
       var isLead = currentRole === 'eng_lead';
       var myName = currentRole.replace(/^worker_|^pm_keeper_/, '');
       var communityUrl = API_BASE + '/api/communities' + (!isLead && myName ? '?staff_name=' + encodeURIComponent(myName) : '');
-      var cResp = await fetch(communityUrl);
+      var cResp = await fetch(communityUrl, { headers: authHeaders() });
       var cJson = await cResp.json();
       if (cJson.data) state.communities = cJson.data;
     } catch(e) { console.warn('小区列表加载失败', e); state.communities = [{ id: 'default', name: '默认小区', address: '' }]; }
@@ -54,7 +51,7 @@ async function load() {
   if (useApi) {
     // 加载人员状态
     try {
-      var stResp = await fetch(API_BASE + '/api/staff/status');
+      var stResp = await fetch(API_BASE + '/api/staff/status', { headers: authHeaders() });
       var stJson = await stResp.json();
       if (stJson.data) {
         stJson.data.forEach(function(r) {
@@ -64,22 +61,24 @@ async function load() {
       }
     } catch(e) { /* ignore */ }
     try {
-      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity));
+      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
       if (json.data) {
         state.tickets = json.data.filter(t => t.id && t.type);
         saveLocal();
         return;
       }
-    } catch(e) { console.warn('API 不可用，回退到本地数据', e); }
+    } catch(e) { console.warn('API 不可用，暂不加载业务数据', e); }
   }
-  // 回退：使用本地数据
-  var localRaw = localStorage.getItem(LS_KEY);
-  if (localRaw) { try { state.tickets = JSON.parse(localRaw).tickets || []; } catch(e) { state.tickets = []; } }
-  else { state.tickets = []; }
+  // API 不可用时只保留空状态，不能使用可能过期或越权的浏览器工单缓存。
+  state.tickets = [];
+  saveLocal();
 }
 
-function saveLocal() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function saveLocal() {
+  // 仅保存非敏感 UI 偏好；人员、工单、手机号和权限全部由服务端持久化。
+  localStorage.setItem(LS_KEY, JSON.stringify({ version: 2, preferences: { community: currentCommunity } }));
+}
 function save() { saveLocal(); }
 
 async function apiPatch(recordId, updates) {
@@ -242,7 +241,7 @@ async function reloadCommunities() {
     var isLead = currentRole === 'eng_lead';
     var myName = currentRole.replace(/^worker_|^pm_keeper_/, '');
     var url = API_BASE + '/api/communities' + (!isLead && myName ? '?staff_name=' + encodeURIComponent(myName) : '');
-    var resp = await fetch(url);
+    var resp = await fetch(url, { headers: authHeaders() });
     var json = await resp.json();
     if (json.data) state.communities = json.data;
   } catch(e) { /* keep existing */ }
@@ -255,7 +254,7 @@ async function reloadCommunities() {
 let openTicketId = null;
 
 function loadDrawerPhotos(ticketId) {
-  fetch(API_BASE + '/api/tickets/' + ticketId + '/photos')
+  fetch(API_BASE + '/api/tickets/' + ticketId + '/photos', { headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(json) {
       var container = $('#drawer-photos');
@@ -312,6 +311,7 @@ function uploadPhoto(id) {
     toast('正在上传 ' + input.files.length + ' 张照片...');
     fetch(API_BASE + '/api/tickets/' + id + '/photos', {
       method: 'POST',
+      headers: authHeaders(),
       body: formData
     }).then(r => r.json()).then(d => {
       if (d.success) {
@@ -390,6 +390,10 @@ function saveStaff() {
     dutyEnd: $('#f-duty-end').value || '18:00',
     joinDate: $('#f-join-date').value || '',
   };
+  if (!editingStaffId && data.role === '主管') {
+    toast('主管最高权限账号由系统初始化，其他人员请提交注册申请');
+    return;
+  }
 
   // 状态校验：编辑已有人员时检查工单状态
   if (editingStaffId) {
@@ -434,11 +438,21 @@ function saveStaff() {
   }
   save(); renderStaff(); closeStaffModal();
 }
-function deleteStaff(id) {
+async function deleteStaff(id) {
   const s = state.staff.find(x => x.id === id);
-  if (confirm(`确定删除「${s.name}」？`)) {
+  if (!s || !confirm(`确定删除「${s.name}」？`)) return;
+  try {
+    const users = await fetch(API_BASE + '/api/users', { headers: authHeaders(true) }).then(r => r.json());
+    const account = (users.data || []).find(u => String(u.phone) === String(s.phone));
+    if (!account) { toast('未找到对应登录账号，未删除人员'); return; }
+    const result = await fetch(API_BASE + '/api/users/' + encodeURIComponent(account.id), {
+      method: 'DELETE', headers: authHeaders(true),
+    }).then(r => r.json());
+    if (!result.success) { toast(result.error || '删除失败'); return; }
     state.staff = state.staff.filter(x => x.id !== id);
-    save(); renderStaff(); toast('已删除');
+    save(); renderStaff(); toast('人员已停用，登录权限已撤销');
+  } catch (error) {
+    toast('删除失败，请检查网络后重试');
   }
 }
 
@@ -482,7 +496,7 @@ function updateLogo() {
 async function reloadTickets() {
   if (useApi) {
     try {
-      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity));
+      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
       if (json.data) {
         state.tickets = json.data.filter(function(t) { return t.id && t.type; });
@@ -1227,7 +1241,7 @@ window.onload=async function(){
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };
 
-function startAutoSync(){setInterval(async function(){try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity));var json=await resp.json();if(json.data&&json.data.length){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
+function startAutoSync(){setInterval(async function(){try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
 
 /* ============================================================
    师傅日程 · 时间轴排班与冲突检测
@@ -1498,12 +1512,16 @@ function doResetPassword() {
   var pwd2 = $('#reset-password2').value;
   $('#reset-error').textContent = '';
   $('#reset-success').textContent = '';
+  if (!API || !API.token) {
+    $('#reset-error').textContent = '忘记密码请联系主管重置，登录后可修改自己的密码';
+    return;
+  }
   if (!phone || !/^1[3-9]\d{9}$/.test(phone)) { $('#reset-error').textContent = '请输入正确的11位手机号'; return; }
   if (!pwd || pwd.length < 4) { $('#reset-error').textContent = '新密码至少4位'; return; }
   if (pwd !== pwd2) { $('#reset-error').textContent = '两次输入密码不一致'; return; }
   fetch(API_BASE + '/api/reset-password', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(true),
     body: JSON.stringify({ phone: phone, newPassword: pwd })
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.success) {

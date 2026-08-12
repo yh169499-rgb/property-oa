@@ -59,6 +59,7 @@ test('人员报告提供按需千问润色并固定展示六类管理解读', ()
   assert.match(report, /后续建议/);
   assert.match(report, /AI 建议，仅供管理参考/);
   assert.match(workforceApi, /ai-analysis/);
+  assert.match(workforceApi, /reports\/staff\/all\/ai-analysis/);
   assert.match(workforceApi, /reports\/ai\/status/);
   assert.doesNotMatch(report, /analysis\.summary[^\n]*innerHTML/);
 });

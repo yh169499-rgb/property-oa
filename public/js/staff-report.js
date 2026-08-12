@@ -192,16 +192,13 @@
     container.innerHTML = reportHtml(report, filters, analysis);
     var actions = document.createElement('div');
     actions.className = 'staff-report-actions';
-    var isAggregate = String((report.staff || {}).id) === 'all';
     var aiButton = document.createElement('button');
     aiButton.type = 'button';
     aiButton.className = 'btn sm staff-report-ai-action';
-    aiButton.textContent = isAggregate
-      ? '团队汇总暂不调用 AI'
-      : (aiStatus && aiStatus.enabled ? (analysis ? '重新查看 AI 润色' : 'AI 优化并润色') : 'AI 报告未配置');
-    aiButton.disabled = isAggregate || !(aiStatus && aiStatus.enabled);
+    aiButton.textContent = aiStatus && aiStatus.enabled
+      ? (analysis ? '重新查看 AI 润色' : 'AI 优化并润色') : 'AI 报告未配置';
+    aiButton.disabled = !(aiStatus && aiStatus.enabled);
     aiButton.addEventListener('click', function () {
-      if (isAggregate) return;
       aiButton.disabled = true;
       aiButton.textContent = '千问正在整理报告…';
       root.WorkforceAPI.aiStaffReport((report.staff || {}).id, {

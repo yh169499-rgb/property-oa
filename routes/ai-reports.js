@@ -4,8 +4,8 @@ const database = require('../db');
 const defaultConfig = require('../config');
 const { requireAuth } = require('../middleware/auth');
 const { descendantIds } = require('../services/organization');
-const { getStaffReport } = require('../services/reporting');
-const { isManagerRole, isGlobalManagerRole } = require('../services/roles');
+const { getStaffReport, getAllStaffReport } = require('../services/reporting');
+const { isManagerRole, isGlobalManagerRole, isSupervisorUser } = require('../services/roles');
 const aiReportService = require('../services/ai-report');
 
 const SAFE_CODES = new Set([
@@ -45,7 +45,7 @@ function scopedTarget(db, user, requestedId) {
     error.code = 'PROFILE_NOT_FOUND';
     throw error;
   }
-  const allowed = isGlobalManagerRole(user.role)
+  const allowed = isSupervisorUser(user)
     || Number(own.id) === targetId
     || (isManagerRole(user.role)
       && descendantIds(profiles, own.id).map(Number).includes(targetId));
@@ -69,7 +69,7 @@ function assertCommunityScope(db, user, target, communityId) {
       throw error;
     }
   }
-  if (isGlobalManagerRole(user.role)) return;
+  if (isSupervisorUser(user)) return;
   const member = tableExists(db, 'community_memberships') && rows(db, `
     SELECT 1 present FROM community_memberships
      WHERE community_id = ? AND staff_profile_id = ? LIMIT 1`,
@@ -118,6 +118,51 @@ function createAiReportRouter(options = {}) {
       enabled: aiReportService.configured(config),
       model: config.AI_MODEL || 'qwen3.6-flash',
     } });
+  });
+
+  router.post('/reports/staff/all/ai-analysis', requireAuth, limiter, async (req, res) => {
+    try {
+      if (!isSupervisorUser(req.user)) {
+        const error = new Error('无权分析全部人员报告');
+        error.status = 403;
+        error.code = 'REPORT_SCOPE_FORBIDDEN';
+        throw error;
+      }
+      if (!aiReportService.configured(config)) {
+        const error = new Error('AI 报告尚未配置，原始报告仍可正常使用');
+        error.status = 503;
+        error.code = 'AI_REPORT_NOT_CONFIGURED';
+        throw error;
+      }
+      const { from, to } = req.body || {};
+      if (!from || !to) {
+        const error = new Error('开始日期和结束日期必须同时提供');
+        error.status = 400;
+        error.code = 'INVALID_DATE_RANGE';
+        throw error;
+      }
+      const db = database.getDB();
+      const profiles = rows(db, `
+        SELECT id FROM staff_profiles
+         WHERE COALESCE(employment_status, 'active') <> 'inactive'
+         ORDER BY id
+      `);
+      const communityId = String(req.body.community_id || req.body.communityId || '');
+      const filters = { from, to, communityId };
+      const report = getAllStaffReport(db, filters, profiles.map((profile) => profile.id));
+      const result = await analyzeReport({
+        db,
+        report,
+        filters: { ...filters, community_id: communityId },
+        staffProfileId: null,
+        actorUserId: req.user.id,
+        config,
+        persist: database.saveDB,
+      });
+      res.json({ data: result });
+    } catch (error) {
+      fail(res, error);
+    }
   });
 
   router.post('/reports/staff/:staff_id/ai-analysis', requireAuth, limiter, async (req, res) => {

@@ -183,7 +183,7 @@ router.post('/staff/profiles/import-preview', requireAuth, requireAdmin, (req, r
   }
 });
 
-router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, (req, res) => {
+router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (req, res) => {
   try {
     const profiles = importProfiles(req.body);
     if (!Array.isArray(req.body.selections)) {
@@ -227,7 +227,7 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, (req, r
       [key, req.user.id, new Date().toISOString(), JSON.stringify(result)]);
       return result;
     });
-    saveDB();
+    await saveDB();
     res.json({ data: { already_imported: false, import_key: key, summary } });
   } catch (error) {
     handleError(res, error);
@@ -272,7 +272,7 @@ router.get('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-router.post('/staff/profiles', requireAuth, requireAdmin, (req, res) => {
+router.post('/staff/profiles', requireAuth, requireAdmin, async (req, res) => {
   try {
     const fields = validateFields(req.body, ADMIN_FIELDS);
     const now = new Date().toISOString();
@@ -289,7 +289,7 @@ router.post('/staff/profiles', requireAuth, requireAdmin, (req, res) => {
       }
       return profileById(inserted.id);
     });
-    saveDB();
+    await saveDB();
     res.status(201).json({ data: created });
   } catch (error) {
     handleError(res, error);
@@ -316,7 +316,7 @@ router.get('/organization/tree', requireAuth, requireAdmin, (req, res) => {
   }
 });
 
-router.patch('/staff/profiles/:id/manager', requireAuth, requireAdmin, (req, res) => {
+router.patch('/staff/profiles/:id/manager', requireAuth, requireAdmin, async (req, res) => {
   try {
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'manager_id')) {
       throw apiError('缺少 manager_id', 400, 'INVALID_MANAGER');
@@ -325,7 +325,7 @@ router.patch('/staff/profiles/:id/manager', requireAuth, requireAdmin, (req, res
       throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     }
     const profile = updateManager(getDB(), req.params.id, req.body.manager_id);
-    saveDB();
+    await saveDB();
     res.json({ data: profile });
   } catch (error) {
     handleError(res, error);

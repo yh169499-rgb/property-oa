@@ -71,6 +71,9 @@ test('确认只写勾选字段，相同规范化内容幂等且普通用户无�
   assert.equal(second.body.data.already_imported, true);
   assert.equal(db.exec('SELECT COUNT(*) FROM workforce_import_batches')[0].values[0][0], 1);
 
-  const denied = await post(server, '/api/staff/profiles/import-preview', { profiles }, 'worker');
+  const deniedResponse = await fetch(`${server.url}/api/staff/profiles/import-preview`, {
+    headers: { 'Content-Type': 'application/json', ...authHeader({ id: 2, role: 'worker' }) },
+  });
+  const denied = { response: deniedResponse };
   assert.equal(denied.response.status, 403);
 });

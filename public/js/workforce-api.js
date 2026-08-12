@@ -30,7 +30,9 @@
       return API.get('/api/reports/ai/status');
     },
     aiStaffReport: function (staffId, body) {
-      var path = '/api/reports/staff/' + utils.requiredPathSegment(staffId, 'staffId') + '/ai-analysis';
+      var path = String(staffId) === 'all'
+        ? '/api/reports/staff/all/ai-analysis'
+        : '/api/reports/staff/' + utils.requiredPathSegment(staffId, 'staffId') + '/ai-analysis';
       return API.post(path, body || {});
     }
   };

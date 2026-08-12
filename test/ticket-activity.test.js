@@ -152,15 +152,15 @@ test('Bearer PATCH records actor activity and keeps _action out of ticket SQL', 
   );
 });
 
-test('anonymous PATCH remains compatible, writes no activity, and clearing worker clears stable assignment', async (t) => {
+test('anonymous PATCH is rejected and authenticated updates clear stable assignment', async (t) => {
   const { db, server } = await apiFixture(t);
 
   const suspended = await patchTicket(server, 'WX2', { status: 'pending' });
-  assert.equal(suspended.response.status, 200);
-  assert.deepEqual(firstRow(db, "SELECT status FROM tickets WHERE id = 'WX2'"), ['pending']);
+  assert.equal(suspended.response.status, 401);
+  assert.deepEqual(firstRow(db, "SELECT status FROM tickets WHERE id = 'WX2'"), ['doing']);
   assert.equal(firstRow(db, 'SELECT COUNT(*) FROM ticket_activity_logs')[0], 0);
 
-  const cleared = await patchTicket(server, 'WX2', { worker: '' });
+  const cleared = await patchTicket(server, 'WX2', { worker: '' }, authHeader({ id: 2, role: 'worker', name: '唯一师傅' }));
   assert.equal(cleared.response.status, 200);
   assert.deepEqual(
     firstRow(db, "SELECT worker, assignee_user_id, assigned_at FROM tickets WHERE id = 'WX2'"),
