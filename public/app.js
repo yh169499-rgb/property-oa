@@ -217,6 +217,9 @@ function roleWorkerName() {
   if (currentRole.startsWith('worker_')) return currentRole.replace('worker_', '');
   return null;
 }
+function roleStaffName() {
+  return roleWorkerName() || (currentRole.startsWith('pm_keeper_') ? currentRole.replace('pm_keeper_', '') : null);
+}
 function applyRoleView() {
   var isWorker = currentRole.startsWith('worker_');
   var isKeeper = currentRole.startsWith('pm_keeper_');
@@ -769,7 +772,7 @@ function renderTickets(type) {
   var tbody = $(`#tbody-${type}`); if (!tbody) return;
   var rows = state.tickets.filter(t => t.type === type && t.status !== 'done');
   // 师傅/管家视图：只看自己负责的工单
-  var myName = roleWorkerName();
+  var myName = roleStaffName();
   if ((currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_')) && myName) rows = rows.filter(t => t.worker === myName);
   var fs=$(`#filter-status-${type}`).value, fc=$(`#filter-cat-${type}`).value, fp=$(`#filter-priority-${type}`).value, sort=$(`#sort-${type}`).value;
   if(fs) rows=rows.filter(t=>t.status===fs); if(fc) rows=rows.filter(t=>t.cat===fc); if(fp) rows=rows.filter(t=>t.priority===fp);
@@ -1046,7 +1049,7 @@ function renderAll(){['repair','complaint','help'].forEach(renderTickets);render
 function updateNavBadges() {
   var counts = { repair: 0, complaint: 0, help: 0 };
   var isLead = currentRole === 'eng_lead';
-  var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
+  var myName = roleStaffName();
   state.tickets.forEach(function(t) {
     if (t.status !== 'wait' || counts[t.type] === undefined) return;
     if (isLead) { counts[t.type]++; }
@@ -1070,7 +1073,7 @@ function renderDone(){
   var tbody=$('#tbody-done');if(!tbody)return;
   var rows=state.tickets.filter(t=>t.status==='done');
   // 师傅/管家视图：只看自己已完成的工单
-  var myName=roleWorkerName();
+  var myName=roleStaffName();
   if((currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&myName) rows=rows.filter(t=>t.worker===myName);
   // 搜索工单号
   var search=($('#search-done')||{}).value;
@@ -1277,7 +1280,7 @@ function initSchedule() {
     sel.style.display = '';
   } else {
     // 非主管只能看自己
-    var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
+    var myName = roleStaffName();
     sel.innerHTML = `<option value="${esc(myName)}">我的</option>`;
     sel.value = myName;
     sel.disabled = true;
