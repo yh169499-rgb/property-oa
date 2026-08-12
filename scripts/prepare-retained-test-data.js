@@ -4,6 +4,7 @@ const initSqlJs = require('sql.js');
 const { migrateRetainedTestData } = require('../services/retained-test-data');
 
 const CONFIRM_PHRASE = 'RETAINED-TEST-DATA';
+const WORKSPACE_DATABASE = path.resolve(__dirname, '..', 'data.db');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const values = {};
@@ -24,6 +25,9 @@ function validateOptions(options) {
   if (!path.isAbsolute(options.source)) throw new Error('source 必须是绝对路径');
   if (options.apply && options.confirm !== CONFIRM_PHRASE) {
     throw new Error(`执行写入必须提供确认口令 ${CONFIRM_PHRASE}`);
+  }
+  if (options.apply && path.resolve(options.source) === WORKSPACE_DATABASE) {
+    throw new Error('禁止直接修改工作区本地开发 data.db；请先复制到独立候选路径');
   }
   if (!fs.existsSync(options.source)) throw new Error('source 数据库文件不存在');
   const stat = fs.statSync(options.source);
@@ -69,6 +73,9 @@ async function prepareRetainedTestData(options = {}) {
     source: path.resolve(options.source),
     retainedAccounts: Number(migration.summary.retainedAccounts),
     disabledAccounts: Number(migration.summary.disabledAccounts),
+    mockTickets: Number(migration.summary.mockTickets),
+    mockAssignments: Number(migration.summary.mockAssignments),
+    mockActivities: Number(migration.summary.mockActivities),
   };
   if (!options.apply) return { mode: 'dry-run', backupPath: null, ...common };
   const backupPath = backupName(options.source, options.now);

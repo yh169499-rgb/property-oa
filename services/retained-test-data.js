@@ -35,6 +35,29 @@ function tableExists(db, table) {
   return Boolean(one(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]));
 }
 
+function columnExists(db, table, column) {
+  return rows(db, `PRAGMA table_info(${table})`).some(item => item.name === column);
+}
+
+function addColumn(db, table, definition) {
+  const column = definition.trim().split(/\s+/)[0];
+  if (!columnExists(db, table, column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+}
+
+function ensureRetainedMigrationSchema(db) {
+  addColumn(db, 'users', "status TEXT NOT NULL DEFAULT 'active'");
+  for (const definition of [
+    "community_id TEXT DEFAULT 'default'",
+    "repeat_key TEXT DEFAULT ''",
+    "repeat_of TEXT DEFAULT ''",
+    'repeat_count INTEGER DEFAULT 1',
+    'is_recurring INTEGER DEFAULT 0',
+    "recurrence_note TEXT DEFAULT ''",
+    'feedback_count INTEGER DEFAULT 1',
+    "metadata TEXT DEFAULT '{}'",
+  ]) addColumn(db, 'tickets', definition);
+}
+
 function planRetainedTestData(db) {
   const retainedPhones = new Set(RETAINED_ACCOUNTS.map(account => account.phone));
   const users = tableExists(db, 'users') ? rows(db, 'SELECT phone FROM users') : [];
@@ -74,7 +97,7 @@ function upsertRetainedUsers(db, password) {
   return users;
 }
 
-function disableOtherUsers(db, retainedPhones, nowIso) {
+function disableOtherUsers(db, retainedPhones, nowIso, today) {
   const inactiveUsers = rows(
     db,
     `SELECT id, name FROM users WHERE phone NOT IN (${retainedPhones.map(() => '?').join(', ')})`,
@@ -91,7 +114,8 @@ function disableOtherUsers(db, retainedPhones, nowIso) {
   db.run(`UPDATE staff_profiles SET employment_status = 'inactive', updated_at = ?
     WHERE id IN (${profilePlaceholders})`, [nowIso, ...profileIds]);
   db.run(`DELETE FROM community_memberships WHERE staff_profile_id IN (${profilePlaceholders})`, profileIds);
-  db.run(`DELETE FROM shift_assignments WHERE staff_id IN (${profilePlaceholders})`, profileIds);
+  db.run(`DELETE FROM shift_assignments
+    WHERE staff_id IN (${profilePlaceholders}) AND work_date >= ?`, [...profileIds, today]);
   db.run(`DELETE FROM attendance_records WHERE staff_id IN (${profilePlaceholders})`, profileIds);
   if (tableExists(db, 'attendance_change_logs')) {
     db.run('DELETE FROM attendance_change_logs WHERE attendance_id NOT IN (SELECT id FROM attendance_records)');
@@ -409,13 +433,14 @@ function seedMockTickets(db, users, profiles, now) {
 
 function migrateRetainedTestData(db, rawOptions = {}) {
   const options = requireMigrationOptions(rawOptions);
+  ensureRetainedMigrationSchema(db);
   ensureWorkforceSchema(db);
   const planned = planRetainedTestData(db);
   db.run('BEGIN TRANSACTION');
   try {
     const phones = RETAINED_ACCOUNTS.map(account => account.phone);
     const users = upsertRetainedUsers(db, options.password);
-    disableOtherUsers(db, phones, options.nowIso);
+    disableOtherUsers(db, phones, options.nowIso, shanghaiDate(options.now));
     const profiles = upsertProfiles(db, users, options.nowIso);
     const supervisorUserId = Number(users.get(phones[0]).id);
     upsertCommunitiesAndMemberships(db, profiles, supervisorUserId, options.nowIso);
@@ -427,7 +452,20 @@ function migrateRetainedTestData(db, rawOptions = {}) {
     try { db.run('ROLLBACK'); } catch (_) { /* 保留原始错误 */ }
     throw error;
   }
-  return { summary: planned.summary };
+  return {
+    summary: {
+      ...planned.summary,
+      mockTickets: Number(one(db,
+        "SELECT COUNT(*) AS total FROM tickets WHERE id LIKE 'MOCK-E2E-%'"
+      ).total),
+      mockAssignments: Number(one(db,
+        "SELECT COUNT(*) AS total FROM shift_assignments WHERE note LIKE 'MOCK-E2E%'"
+      ).total),
+      mockActivities: Number(one(db,
+        "SELECT COUNT(*) AS total FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%'"
+      ).total),
+    },
+  };
 }
 
 module.exports = {

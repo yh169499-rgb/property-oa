@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const { writeFixtureDatabase } = require('./helpers/retained-db');
 
 test('默认只预演且不修改源文件', async () => {
@@ -14,7 +15,18 @@ test('默认只预演且不修改源文件', async () => {
   assert.equal(result.mode, 'dry-run');
   assert.deepEqual(fs.readFileSync(source), before);
   assert.equal(result.backupPath, null);
+  assert.ok(result.mockTickets >= 38);
+  assert.ok(result.mockAssignments >= 12);
+  assert.ok(result.mockActivities >= 60);
   assert.doesNotMatch(JSON.stringify(result), /runtime-secret|password|hash|token/i);
+});
+
+test('apply 拒绝直接修改工作区开发数据库', async () => {
+  const { prepareRetainedTestData } = require('../scripts/prepare-retained-test-data');
+  await assert.rejects(prepareRetainedTestData({
+    source: path.resolve('data.db'), apply: true,
+    confirm: 'RETAINED-TEST-DATA', password: 'runtime-secret',
+  }), /本地开发 data\.db/);
 });
 
 test('apply 必须有绝对路径、确认口令和密码', async () => {

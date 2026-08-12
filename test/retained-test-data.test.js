@@ -97,6 +97,7 @@ function createFixture() {
   const legacyProfile = Number(one(db, 'SELECT id FROM staff_profiles WHERE user_id = ?', [legacyUser]).id);
   db.run("INSERT INTO community_memberships (community_id, staff_profile_id, created_at) VALUES ('default', ?, '2025-01-01')", [legacyProfile]);
   db.run("INSERT INTO shift_assignments (staff_id, work_date, note) VALUES (?, '2026-08-12', '旧排班')", [legacyProfile]);
+  db.run("INSERT INTO shift_assignments (staff_id, work_date, note) VALUES (?, '2025-01-01', '历史排班')", [legacyProfile]);
   db.run("INSERT INTO attendance_records (staff_id, work_date, status) VALUES (?, '2026-08-12', 'normal')", [legacyProfile]);
   db.run("INSERT INTO staff_status (name, status) VALUES ('历史人员', 'on')");
   db.run(`INSERT INTO tickets
@@ -156,6 +157,7 @@ test('只激活固定账号并停用其他账号但保留历史工单和活动',
   ]);
   assert.equal(one(db, "SELECT status FROM users WHERE phone = '13900000000'").status, 'disabled');
   assert.equal(rows(db, "SELECT id FROM shift_assignments WHERE note = '旧排班'").length, 0);
+  assert.equal(rows(db, "SELECT id FROM shift_assignments WHERE note = '历史排班'").length, 1);
   assert.equal(rows(db, "SELECT id FROM attendance_records WHERE status = 'normal'").length, 0);
   assert.equal(rows(db, "SELECT name FROM staff_status WHERE name = '历史人员'").length, 0);
   assert.deepEqual(one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'"), historyBefore);
