@@ -17,12 +17,18 @@ async function fixture() {
       community_id TEXT DEFAULT 'default', reject_reason TEXT DEFAULT '',
       is_recurring INTEGER DEFAULT 0, feedback_count INTEGER DEFAULT 1
     );
-    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, password TEXT, role TEXT);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, password TEXT, role TEXT,
+      status TEXT NOT NULL DEFAULT 'active');
   `);
   ensureWorkforceSchema(db);
   db.run(`
     INSERT INTO staff_profiles (id, user_id, name, manager_id) VALUES
       (1, 1, '主管', NULL), (2, 2, '组长', 1), (3, 3, '师傅', 2), (4, 4, '树外', NULL);
+    INSERT INTO users (id, name, phone, password, role, status) VALUES
+      (1, '主管', '13800000001', 'fixture', '主管', 'active'),
+      (2, '组长', '13800000002', 'fixture', 'lead', 'active'),
+      (3, '师傅', '13800000003', 'fixture', 'worker', 'active'),
+      (4, '树外', '13800000004', 'fixture', 'lead', 'active');
   `);
   return db;
 }
@@ -282,11 +288,11 @@ test('主管看板只统计本人递归团队并拒绝跨树社区', async (t) =
   assert.equal(other.status, 200);
   assert.equal((await other.json()).data.monthTotal, 1);
 
-  const forbidden = await fetch(`${server.url}/api/dashboard/stats?community_id=team-b`, {
+  // 当前系统仅保留一个最高权限主管；主管可查看全部授权小区统计。
+  const global = await fetch(`${server.url}/api/dashboard/stats?community_id=team-b`, {
     headers: leadOne,
   });
-  assert.equal(forbidden.status, 403);
-  assert.equal((await forbidden.json()).code, 'REPORT_SCOPE_FORBIDDEN');
+  assert.equal(global.status, 200);
 });
 
 test('报告路由对未知数据库异常返回通用 500 且不回显 SQL', async (t) => {
