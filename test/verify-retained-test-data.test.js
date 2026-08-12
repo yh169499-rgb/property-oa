@@ -30,6 +30,14 @@ test('验证器确认账号、组织、工单和绩效样本完整', async () =>
   assert.equal(result.accounts.active, 7);
   assert.equal(result.accounts.loginVerified, 7);
   assert.equal(result.organization.managedBySupervisor, 6);
+  assert.equal(result.calendar.templates, 2);
+  assert.ok(result.calendar.assignments >= 12);
+  assert.ok(result.calendar.leave >= 1);
+  assert.ok(result.calendar.overnight >= 1);
+  assert.equal(result.calendar.attendance, 0);
+  assert.ok(result.calendar.ticketConflicts >= 1);
+  assert.equal(result.reporting.activeStaff, 7);
+  assert.equal(result.reporting.scoredStaff, 6);
   assert.ok(result.mockTickets.completedPerPerson.every(count => count >= 5));
   assert.equal(result.problems.length, 0);
   assert.doesNotMatch(JSON.stringify(result), /runtime-secret|password|hash|token/i);

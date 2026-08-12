@@ -42,3 +42,20 @@ test('apply 先生成同目录备份再原子写回', async () => {
   assert.notDeepEqual(fs.readFileSync(source), before);
   assert.equal(fs.existsSync(`${source}.tmp`), false);
 });
+
+test('package 暴露预演、执行和验证命令且文档不泄露运行时密码', () => {
+  const pkg = require('../package.json');
+  assert.equal(pkg.scripts['retained:dry-run'], 'node scripts/prepare-retained-test-data.js');
+  assert.equal(pkg.scripts['retained:apply'],
+    'node scripts/prepare-retained-test-data.js --apply --confirm=RETAINED-TEST-DATA');
+  assert.equal(pkg.scripts['retained:verify'], 'node scripts/verify-retained-test-data.js');
+  const docs = [
+    fs.readFileSync('README.md', 'utf8'),
+    fs.readFileSync('docs/SECURITY-AUDIT.md', 'utf8'),
+    fs.readFileSync('docs/API.md', 'utf8'),
+  ].join('\n');
+  assert.match(docs, /RETAINED_TEST_PASSWORD/);
+  assert.match(docs, /Render.*备份|备份.*Render/s);
+  assert.match(docs, /回滚/);
+  assert.doesNotMatch(docs, /RETAINED_TEST_PASSWORD\s*=\s*['"]?[A-Za-z0-9@._-]{8,}/);
+});

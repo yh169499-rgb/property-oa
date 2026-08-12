@@ -217,6 +217,19 @@ test('模拟排班覆盖白班、跨夜班、请假且不生成考勤', () => {
   assert.equal(Number(one(db, 'SELECT COUNT(*) AS total FROM attendance_records').total), 0);
 });
 
+test('重复迁移也会清空保留人员残留的全部历史考勤和变更日志', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const profile = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000002'");
+  db.run("INSERT INTO attendance_records (staff_id, work_date, status) VALUES (?, '2026-08-01', 'late')", [profile.id]);
+  const attendance = one(db, 'SELECT id FROM attendance_records WHERE staff_id = ?', [profile.id]);
+  db.run("INSERT INTO attendance_change_logs (attendance_id, reason) VALUES (?, '历史补卡')", [attendance.id]);
+  migrateRetainedTestData(db, options());
+  assert.equal(Number(one(db, 'SELECT COUNT(*) AS total FROM attendance_records').total), 0);
+  assert.equal(Number(one(db, 'SELECT COUNT(*) AS total FROM attendance_change_logs').total), 0);
+});
+
 test('每名普通测试人员均有完整已完成样本和当前工单', () => {
   const { migrateRetainedTestData } = require('../services/retained-test-data');
   const db = createFixture();
@@ -248,6 +261,26 @@ test('模拟工单覆盖状态、复发、多人反馈、紧急、多小区和�
   assert.ok(Number(one(db,
     "SELECT COUNT(*) AS total FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%'"
   ).total) >= 60);
+});
+
+test('主管日历能识别同人重叠工单并展示请假日工单', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const { buildDayCalendar } = require('../services/calendar');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const zhang = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000002'");
+  const zhao = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000005'");
+  const zhangCalendar = buildDayCalendar(db, {
+    date: '2026-08-12', staffId: zhang.id, communityId: 'mock-e2e-community', viewerUserId: 1,
+  });
+  assert.ok(zhangCalendar.conflicts.length >= 1);
+  assert.ok(zhangCalendar.conflicts.some(conflict => conflict.ticketIds
+    .includes('MOCK-E2E-02-CONFLICT')));
+  const zhaoCalendar = buildDayCalendar(db, {
+    date: '2026-08-12', staffId: zhao.id, communityId: 'default', viewerUserId: 1,
+  });
+  assert.equal(zhaoCalendar.people[0].shift.assignmentType, 'leave');
+  assert.ok(zhaoCalendar.events.some(event => event.ticketId === 'MOCK-E2E-05-CURRENT'));
 });
 
 test('完整模拟数据重复迁移后记录数稳定且非 MOCK 历史不变', () => {

@@ -3,6 +3,8 @@ const path = require('node:path');
 const initSqlJs = require('sql.js');
 const bcrypt = require('bcryptjs');
 const { RETAINED_ACCOUNTS, MOCK_COMMUNITY } = require('../services/retained-test-data');
+const { detectCalendarConflicts } = require('../services/calendar');
+const { getAllStaffReport } = require('../services/reporting');
 
 function rows(db, sql, params = []) {
   const statement = db.prepare(sql);
@@ -70,6 +72,38 @@ function inspectDatabase(db, password) {
     problem(problems, 'COMMUNITY_SCOPE_MISMATCH', '固定账号的小区成员关系不完整');
   }
 
+  const calendarCounts = one(db, `SELECT
+    (SELECT COUNT(*) FROM shift_templates WHERE name IN ('模拟白班', '模拟夜班')) AS templates,
+    (SELECT COUNT(*) FROM shift_assignments WHERE note LIKE 'MOCK-E2E%') AS assignments,
+    (SELECT COUNT(*) FROM shift_assignments WHERE note LIKE 'MOCK-E2E%' AND assignment_type = 'leave') AS leave,
+    (SELECT COUNT(*) FROM shift_assignments WHERE note = 'MOCK-E2E-OVERNIGHT'
+      AND julianday(end_at) > julianday(start_at)) AS overnight,
+    (SELECT COUNT(*) FROM attendance_records) AS attendance`);
+  const conflictRows = rows(db, `SELECT t.id, sp.id AS staff_id, t.assigned_at, t.created, t.estimated_hours
+    FROM tickets t JOIN staff_profiles sp ON sp.user_id = t.assignee_user_id
+    WHERE t.id IN ('MOCK-E2E-02-CURRENT', 'MOCK-E2E-02-CONFLICT')`);
+  const ticketConflicts = detectCalendarConflicts(conflictRows.map(ticket => {
+    const startAt = ticket.assigned_at || ticket.created;
+    return {
+      ticketId: ticket.id,
+      staffId: Number(ticket.staff_id),
+      startAt,
+      endAt: new Date(Date.parse(startAt) + Number(ticket.estimated_hours) * 3600000).toISOString(),
+    };
+  })).length;
+  const calendar = {
+    templates: Number(calendarCounts.templates),
+    assignments: Number(calendarCounts.assignments),
+    leave: Number(calendarCounts.leave),
+    overnight: Number(calendarCounts.overnight),
+    attendance: Number(calendarCounts.attendance),
+    ticketConflicts,
+  };
+  if (calendar.templates !== 2 || calendar.assignments < 12 || calendar.leave < 1
+      || calendar.overnight < 1 || calendar.attendance !== 0 || calendar.ticketConflicts < 1) {
+    problem(problems, 'CALENDAR_SCENARIO_MISSING', '白班、跨夜班、请假、零考勤或工单冲突场景不完整');
+  }
+
   const completedRows = rows(db, `SELECT u.phone,
     SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS completed,
     SUM(CASE WHEN t.status <> 'done' THEN 1 ELSE 0 END) AS current_count
@@ -105,11 +139,31 @@ function inspectDatabase(db, password) {
   ).total);
   if (activityCount < 60) problem(problems, 'ACTIVITY_FLOW_MISSING', '工单活动链数量不足');
 
+  let reporting = { activeStaff: 0, scoredStaff: 0 };
+  try {
+    const report = getAllStaffReport(db, {}, profiles.map(profile => Number(profile.id)));
+    reporting = {
+      activeStaff: Array.isArray(report.staffReports) ? report.staffReports.length : 0,
+      scoredStaff: Array.isArray(report.staffReports)
+        ? report.staffReports.filter(item => item.staff.id !== Number(supervisor?.id)
+          && item.performance?.status === 'scored'
+          && Number.isFinite(Number(item.performance?.score))).length
+        : 0,
+    };
+  } catch (_) {
+    problem(problems, 'REPORT_GENERATION_FAILED', '服务端全员报告生成失败');
+  }
+  if (reporting.activeStaff !== 7 || reporting.scoredStaff !== 6) {
+    problem(problems, 'REPORT_SAMPLE_MISSING', '全员报告或普通人员绩效样本不完整');
+  }
+
   return {
     ok: problems.length === 0,
     accounts: { active: activeUsers.length, loginVerified },
     organization: { profiles: profiles.length, managedBySupervisor, defaultMemberships, mockMemberships },
+    calendar,
     mockTickets: { completedPerPerson, currentPerPerson, activityCount },
+    reporting,
     problems,
   };
 }
@@ -158,4 +212,3 @@ if (require.main === module) {
 }
 
 module.exports = { inspectDatabase, verifyRetainedTestData, parseArgs };
-

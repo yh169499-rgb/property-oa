@@ -252,6 +252,11 @@ function seedMockCalendar(db, profiles, supervisorUserId, now, nowIso) {
   });
 }
 
+function clearAttendanceHistory(db) {
+  if (tableExists(db, 'attendance_change_logs')) db.run('DELETE FROM attendance_change_logs');
+  if (tableExists(db, 'attendance_records')) db.run('DELETE FROM attendance_records');
+}
+
 function upsertMockTicket(db, ticket) {
   const existing = one(db, 'SELECT id FROM tickets WHERE id = ?', [ticket.id]);
   const columns = [
@@ -328,7 +333,9 @@ function seedMockTickets(db, users, profiles, now) {
         action: event.action, createdAt: event.at,
       }));
     }
-    const workDate = offsetDate(now, accountIndex % 2);
+    const workDate = account.phone === '13800000005'
+      ? offsetDate(now, 0)
+      : offsetDate(now, accountIndex % 2);
     const assignedAt = isoAtShanghai(workDate, 9 + accountIndex, 0);
     const ticketId = `MOCK-E2E-${account.phone.slice(-2)}-CURRENT`;
     upsertMockTicket(db, {
@@ -354,6 +361,33 @@ function seedMockTickets(db, users, profiles, now) {
       action: event.action, createdAt: new Date(Date.parse(assignedAt) + index * 5 * 60000).toISOString(),
     }));
   });
+  const conflictAccount = RETAINED_ACCOUNTS.find(account => account.phone === '13800000002');
+  const conflictUser = users.get(conflictAccount.phone);
+  const conflictProfile = profiles.get(conflictAccount.phone);
+  const conflictDate = offsetDate(now, 0);
+  const conflictAssignedAt = isoAtShanghai(conflictDate, 10, 0);
+  const conflictId = 'MOCK-E2E-02-CONFLICT';
+  upsertMockTicket(db, {
+    id: conflictId, type: 'repair', cat: '电路', desc: '全流程模拟日程冲突工单',
+    loc: '测试小区-配电间', priority: 'high', status: 'doing',
+    worker: conflictAccount.name, message: '与当前工单时间重叠',
+    created: new Date(Date.parse(conflictAssignedAt) - 10 * 60000).toISOString(),
+    finished: '', reject_reason: '', estimated_hours: 2,
+    community_id: MOCK_COMMUNITY.id, repeat_key: '', repeat_of: '', repeat_count: 1,
+    is_recurring: 0, recurrence_note: '', feedback_count: 1,
+    metadata: JSON.stringify({ mock: true, scenario: 'calendar-conflict' }),
+    assignee_user_id: Number(conflictUser.id), assigned_at: conflictAssignedAt,
+    performance_rule_version_id: Number(rule.id),
+  });
+  [
+    { key: `${conflictId}:assign`, action: 'assign', actorUserId: Number(supervisor.id), actorStaffId: Number(supervisorProfile.id) },
+    { key: `${conflictId}:accept`, action: 'accept', actorUserId: Number(conflictUser.id), actorStaffId: Number(conflictProfile.id) },
+  ].forEach((event, index) => upsertMockActivity(db, {
+    ticketId: conflictId, key: event.key, scenario: 'calendar-conflict',
+    actorUserId: event.actorUserId, actorStaffId: event.actorStaffId,
+    action: event.action,
+    createdAt: new Date(Date.parse(conflictAssignedAt) + index * 5 * 60000).toISOString(),
+  }));
   const waitDate = offsetDate(now, 0);
   const waitCreated = isoAtShanghai(waitDate, 10, 0);
   upsertMockTicket(db, {
@@ -385,6 +419,7 @@ function migrateRetainedTestData(db, rawOptions = {}) {
     const profiles = upsertProfiles(db, users, options.nowIso);
     const supervisorUserId = Number(users.get(phones[0]).id);
     upsertCommunitiesAndMemberships(db, profiles, supervisorUserId, options.nowIso);
+    clearAttendanceHistory(db);
     seedMockCalendar(db, profiles, supervisorUserId, options.now, options.nowIso);
     seedMockTickets(db, users, profiles, options.now);
     db.run('COMMIT');
