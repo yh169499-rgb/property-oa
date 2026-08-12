@@ -1,4 +1,5 @@
 const { descendantIds } = require('./organization');
+const { isManagerRole } = require('./roles');
 
 function queryAll(db, sql, params = []) {
   const statement = db.prepare(sql);
@@ -99,6 +100,10 @@ function buildDayCalendar(db, {
     `SELECT id, user_id, name, position, manager_id, employment_status
      FROM staff_profiles WHERE employment_status = 'active' ORDER BY id`
   );
+  const viewer = viewerUserId === undefined || viewerUserId === null
+    ? null
+    : queryAll(db, 'SELECT role FROM users WHERE id = ?', [viewerUserId])[0] || null;
+  const allowLegacyNameFallback = Boolean(viewer && isManagerRole(viewer.role));
   let selected = profiles;
   if (staffId !== undefined && staffId !== null && staffId !== '') {
     selected = profiles.filter((profile) => Number(profile.id) === Number(staffId));
@@ -171,7 +176,7 @@ function buildDayCalendar(db, {
     const identityClauses = [];
     const identityParams = [];
     const userIds = selected.filter((profile) => profile.user_id !== null).map((profile) => profile.user_id);
-    const names = [...uniqueProfileByName.keys()];
+    const names = allowLegacyNameFallback ? [...uniqueProfileByName.keys()] : [];
     if (userIds.length) {
       identityClauses.push(`assignee_user_id IN (${userIds.map(() => '?').join(', ')})`);
       identityParams.push(...userIds);
@@ -209,7 +214,7 @@ function buildDayCalendar(db, {
   const userIds = selected
     .filter((profile) => profile.user_id !== null)
     .map((profile) => profile.user_id);
-  const uniqueNames = [...uniqueProfileByName.keys()];
+  const uniqueNames = allowLegacyNameFallback ? [...uniqueProfileByName.keys()] : [];
   const aggregateQueries = [];
   const aggregateParams = [];
   const averageExpression = `(julianday(finished)

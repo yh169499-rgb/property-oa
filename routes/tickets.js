@@ -17,6 +17,7 @@ const {
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
 const { isSupervisorUser } = require('../services/roles');
+const { ticketReadScope, canReadTicket } = require('../services/ticket-access');
 
 // 上传配置
 if (!fs.existsSync(config.UPLOAD_DIR)) fs.mkdirSync(config.UPLOAD_DIR, { recursive: true });
@@ -67,10 +68,6 @@ function tableExists(name) {
   return Boolean(queryOne("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [name]));
 }
 
-function columnExists(table, column) {
-  return tableExists(table) && queryAll(`PRAGMA table_info(${table})`).some(item => item.name === column);
-}
-
 function safeTicketId(value) {
   const id = String(value || '');
   if (!id || id === '.' || id === '..' || id.includes('\0') || id.includes('/') || id.includes('\\')) return null;
@@ -93,19 +90,6 @@ function accessibleCommunityIds(req) {
   return [...new Set(ids.length ? ids : ['default'])];
 }
 
-function scopeClause(req, alias = '') {
-  const ids = accessibleCommunityIds(req);
-  if (ids === null) return { sql: '', params: [] };
-  const prefix = alias ? `${alias}.` : '';
-  const placeholders = ids.map(() => '?').join(',');
-  const assignee = columnExists('tickets', 'assignee_user_id')
-    ? ` OR ${prefix}assignee_user_id = ?` : '';
-  return {
-    sql: ` AND (${prefix}community_id IN (${placeholders})${assignee} OR ${prefix}worker = ?)`,
-    params: [...ids, ...(assignee ? [req.user.id] : []), req.user.name],
-  };
-}
-
 function assertCommunityAccess(req, communityId) {
   const ids = accessibleCommunityIds(req);
   if (ids !== null && !ids.includes(String(communityId))) {
@@ -117,14 +101,8 @@ function assertCommunityAccess(req, communityId) {
 }
 
 function canAccessTicket(req, ticketId) {
-  const row = queryOne('SELECT community_id FROM tickets WHERE id = ?', [ticketId]);
-  if (!row) return false;
-  try {
-    assertCommunityAccess(req, row.community_id || 'default');
-    return true;
-  } catch (_) {
-    return false;
-  }
+  const row = queryOne('SELECT community_id, assignee_user_id FROM tickets WHERE id = ?', [ticketId]);
+  return canReadTicket(req, row);
 }
 
 // ============ 重复/复发识别工具 ============
@@ -154,13 +132,25 @@ function raiseRecurringPriority(p) {
 
 // GET /api/tickets
 router.get('/', requireAuth, (req, res) => {
-  const communityId = req.query.community_id;
-  const worker = req.query.worker;
-  const scope = scopeClause(req);
-  let rows;
-  if (worker) { rows = queryAll(`SELECT * FROM tickets WHERE worker = ?${scope.sql} ORDER BY created DESC`, [worker, ...scope.params]); }
-  else if (communityId) { rows = queryAll(`SELECT * FROM tickets WHERE community_id = ?${scope.sql} ORDER BY created DESC`, [communityId, ...scope.params]); }
-  else { rows = queryAll(`SELECT * FROM tickets WHERE 1 = 1${scope.sql} ORDER BY created DESC`, scope.params); }
+  const communityId = req.query.community_id || req.query.communityId || req.query.community;
+  const filters = [];
+  const params = [];
+  for (const [column, value] of [
+    ['type', req.query.type],
+    ['worker', req.query.worker],
+    ['community_id', communityId],
+  ]) {
+    if (value !== undefined && value !== '') {
+      filters.push(`${column} = ?`);
+      params.push(value);
+    }
+  }
+  const scope = ticketReadScope(req);
+  const where = filters.length ? filters.join(' AND ') : '1 = 1';
+  const rows = queryAll(
+    `SELECT * FROM tickets WHERE ${where}${scope.sql} ORDER BY created DESC`,
+    [...params, ...scope.params]
+  );
   res.json({ data: rows.map(rowToTicket) });
 });
 
@@ -169,9 +159,7 @@ router.get('/:id', requireAuth, (req, res) => {
   const row = req.query.community_id
     ? queryOne('SELECT * FROM tickets WHERE id = ? AND community_id = ?', [req.params.id, req.query.community_id])
     : queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
-  if (!row) return res.status(404).json({ error: '工单不存在' });
-  try { assertCommunityAccess(req, row.community_id || 'default'); }
-  catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+  if (!row || !canReadTicket(req, row)) return res.status(404).json({ error: '工单不存在' });
   res.json({ data: rowToTicket(row) });
 });
 
@@ -329,13 +317,12 @@ router.post('/:id/photos', requireAuth, (req, res, next) => {
   const ticketId = req.params.id;
   if (!safeTicketId(ticketId)) return res.status(400).json({ error: '工单编号不合法', code: 'INVALID_TICKET_ID' });
   const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
-  if (!row) return res.status(404).json({ error: '工单不存在' });
-  try { assertCommunityAccess(req, row.community_id || 'default'); }
-  catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+  if (!row || !canReadTicket(req, row)) return res.status(404).json({ error: '工单不存在' });
   req.ticketRow = row;
   next();
 }, upload.array('photos', 10), (req, res) => {
   if (!req.files || !req.files.length) return res.status(400).json({ error: '没有上传文件' });
+  const ticketId = req.params.id;
   const photos = req.files.map(f => ({
     filename: f.filename, originalName: f.originalname,
     url: `/uploads/${ticketId}/${f.filename}`, size: f.size, uploadedAt: new Date().toISOString()
@@ -351,10 +338,8 @@ router.post('/:id/photos', requireAuth, (req, res, next) => {
 // GET /api/tickets/:id/photos
 router.get('/:id/photos', requireAuth, (req, res) => {
   if (!safeTicketId(req.params.id)) return res.status(400).json({ error: '工单编号不合法', code: 'INVALID_TICKET_ID' });
-  const ticket = queryOne('SELECT community_id FROM tickets WHERE id = ?', [req.params.id]);
-  if (!ticket) return res.status(404).json({ error: '工单不存在' });
-  try { assertCommunityAccess(req, ticket.community_id || 'default'); }
-  catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+  const ticket = queryOne('SELECT community_id, assignee_user_id FROM tickets WHERE id = ?', [req.params.id]);
+  if (!ticket || !canReadTicket(req, ticket)) return res.status(404).json({ error: '工单不存在' });
   const photoFile = path.join(config.UPLOAD_DIR, `${req.params.id}.json`);
   if (!fs.existsSync(photoFile)) return res.json({ data: [] });
   try { res.json({ data: JSON.parse(fs.readFileSync(photoFile, 'utf-8')) }); }
