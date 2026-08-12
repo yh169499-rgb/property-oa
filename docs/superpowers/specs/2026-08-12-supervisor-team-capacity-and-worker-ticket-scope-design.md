@@ -110,7 +110,7 @@ tickets.assignee_staff_profile_id   指向 staff_profiles.id，可空
 
 1. 校验操作者为唯一主管，目标不是主管本人。
 2. 查询并锁定目标账号与人员档案；已离职请求按幂等结果返回。
-3. 将历史工单的稳定档案 ID补齐，并清空 `assignee_user_id`。
+3. 将历史工单的稳定档案 ID 补齐，并清空 `assignee_user_id`。
 4. 将历史活动的 `actor_staff_id` 补齐，并清空 `actor_user_id`。
 5. 将档案标记为 `departed`，记录离职时间和操作人，手机号脱敏，`user_id` 置空。
 6. 删除当前小区成员关系、当前/未来排班和人员实时状态。
@@ -163,7 +163,7 @@ tickets.assignee_user_id = 当前登录用户 ID
 - 管家维持相同的“仅本人名下”操作约束。
 - 非主管不能修改 `worker`、`assignee_user_id`、`assignee_staff_profile_id`、`community_id` 或直接把工单设为最终完成。
 - 已离职账号不存在，不能继续读取或操作历史工单。
-- 每次状态变更写入活动日志，记录操作者的用户 ID和稳定人员档案 ID。
+- 每次状态变更写入活动日志，记录操作者的用户 ID 和稳定人员档案 ID。
 
 ### 6.3 前端
 
