@@ -217,6 +217,20 @@ test('重复迁移不会重复创建档案、小区和成员关系', () => {
   assert.deepEqual(second, first);
 });
 
+test('被分配到模拟小区的人员都具有该小区成员权限', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const missing = rows(db, `SELECT DISTINCT u.phone FROM tickets t
+    JOIN users u ON u.id = t.assignee_user_id
+    JOIN staff_profiles sp ON sp.user_id = u.id
+    LEFT JOIN community_memberships cm
+      ON cm.staff_profile_id = sp.id AND cm.community_id = t.community_id
+    WHERE t.id LIKE 'MOCK-E2E-%' AND t.assignee_user_id IS NOT NULL
+      AND cm.staff_profile_id IS NULL`);
+  assert.deepEqual(missing, []);
+});
+
 test('模拟排班覆盖白班、跨夜班、请假且不生成考勤', () => {
   const { migrateRetainedTestData } = require('../services/retained-test-data');
   const db = createFixture();

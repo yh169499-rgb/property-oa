@@ -31,6 +31,21 @@ test('apply 拒绝直接修改工作区开发数据库', async () => {
   }), /本地开发 data\.db/);
 });
 
+test('apply 不能通过符号链接绕过工作区数据库保护', async () => {
+  const { prepareRetainedTestData } = require('../scripts/prepare-retained-test-data');
+  const directory = fs.mkdtempSync('/tmp/retained-symlink-');
+  const linked = path.join(directory, 'candidate.db');
+  try {
+    fs.symlinkSync(path.resolve('data.db'), linked);
+    await assert.rejects(prepareRetainedTestData({
+      source: linked, apply: true,
+      confirm: 'RETAINED-TEST-DATA', password: 'runtime-secret',
+    }), /本地开发 data\.db/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('apply 必须有绝对路径、确认口令和密码', async () => {
   const { prepareRetainedTestData } = require('../scripts/prepare-retained-test-data');
   await assert.rejects(prepareRetainedTestData({

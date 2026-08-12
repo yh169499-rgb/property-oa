@@ -31,7 +31,13 @@ function validateOptions(options) {
   if (options.apply && options.confirm !== CONFIRM_PHRASE) {
     throw new Error(`执行写入必须提供确认口令 ${CONFIRM_PHRASE}`);
   }
-  if (options.apply && path.resolve(options.source) === WORKSPACE_DATABASE) {
+  const resolvedSource = fs.existsSync(options.source)
+    ? fs.realpathSync(options.source)
+    : path.resolve(options.source);
+  const resolvedWorkspace = fs.existsSync(WORKSPACE_DATABASE)
+    ? fs.realpathSync(WORKSPACE_DATABASE)
+    : WORKSPACE_DATABASE;
+  if (options.apply && resolvedSource === resolvedWorkspace) {
     throw new Error('禁止直接修改工作区本地开发 data.db；请先复制到独立候选路径');
   }
   if (!fs.existsSync(options.source)) throw new Error('source 数据库文件不存在');

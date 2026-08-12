@@ -200,7 +200,7 @@ function upsertCommunitiesAndMemberships(db, profiles, supervisorUserId, nowIso)
       (community_id, staff_profile_id, created_at, created_by_user_id)
       VALUES ('default', ?, ?, ?)`, [profileId, nowIso, supervisorUserId]);
   }
-  for (const phone of ['13800000001', '13800000002', '13800000006']) {
+  for (const phone of ['13800000001', '13800000002', '13800000004', '13800000006']) {
     db.run(`INSERT OR IGNORE INTO community_memberships
       (community_id, staff_profile_id, created_at, created_by_user_id)
       VALUES (?, ?, ?, ?)`, [MOCK_COMMUNITY.id, profiles.get(phone).id, nowIso, supervisorUserId]);
