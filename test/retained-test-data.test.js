@@ -95,14 +95,19 @@ function createFixture() {
     (user_id, name, phone, position, employment_status, created_at, updated_at)
     VALUES (?, '历史人员', '13900000000', '旧主管', 'active', '2025-01-01', '2025-01-01')`, [legacyUser]);
   const legacyProfile = Number(one(db, 'SELECT id FROM staff_profiles WHERE user_id = ?', [legacyUser]).id);
+  db.run(`INSERT INTO staff_profiles
+    (user_id, name, phone, position, employment_status, created_at, updated_at)
+    VALUES (NULL, '无账号旧档案', '', '旧人员', 'active', '2025-01-01', '2025-01-01')`);
+  const orphanProfile = Number(one(db, "SELECT id FROM staff_profiles WHERE name = '无账号旧档案'").id);
   db.run("INSERT INTO community_memberships (community_id, staff_profile_id, created_at) VALUES ('default', ?, '2025-01-01')", [legacyProfile]);
+  db.run("INSERT INTO community_memberships (community_id, staff_profile_id, created_at) VALUES ('default', ?, '2025-01-01')", [orphanProfile]);
   db.run("INSERT INTO shift_assignments (staff_id, work_date, note) VALUES (?, '2026-08-12', '旧排班')", [legacyProfile]);
   db.run("INSERT INTO shift_assignments (staff_id, work_date, note) VALUES (?, '2025-01-01', '历史排班')", [legacyProfile]);
   db.run("INSERT INTO attendance_records (staff_id, work_date, status) VALUES (?, '2026-08-12', 'normal')", [legacyProfile]);
   db.run("INSERT INTO staff_status (name, status) VALUES ('历史人员', 'on')");
   db.run(`INSERT INTO tickets
     (id, desc, created, worker, assignee_user_id, performance_rule_version_id)
-    VALUES ('REAL-HISTORY-001', '历史工单', '2025-01-01T00:00:00.000Z', '历史人员', ?, 1)`, [legacyUser]);
+    VALUES ('REAL-HISTORY-001', '历史工单', '2025-01-01T00:00:00.000Z', '历史人员', ?, NULL)`, [legacyUser]);
   db.run(`INSERT INTO ticket_activity_logs
     (ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)
     VALUES ('REAL-HISTORY-001', ?, ?, 'assign', '{}', '2025-01-01T01:00:00.000Z')`, [legacyUser, legacyProfile]);
@@ -156,6 +161,9 @@ test('只激活固定账号并停用其他账号但保留历史工单和活动',
     ['13800000007', 'keeper', 'active'],
   ]);
   assert.equal(one(db, "SELECT status FROM users WHERE phone = '13900000000'").status, 'disabled');
+  assert.equal(one(db, "SELECT employment_status FROM staff_profiles WHERE name = '无账号旧档案'").employment_status, 'inactive');
+  assert.equal(Number(one(db, `SELECT COUNT(*) AS total FROM community_memberships cm
+    JOIN staff_profiles sp ON sp.id = cm.staff_profile_id WHERE sp.name = '无账号旧档案'`).total), 0);
   assert.equal(rows(db, "SELECT id FROM shift_assignments WHERE note = '旧排班'").length, 0);
   assert.equal(rows(db, "SELECT id FROM shift_assignments WHERE note = '历史排班'").length, 1);
   assert.equal(rows(db, "SELECT id FROM attendance_records WHERE status = 'normal'").length, 0);
@@ -181,6 +189,16 @@ test('固定账号各有一个 active 档案并统一归主管管理', () => {
   assert.equal(profiles[0].manager_phone, null);
   assert.ok(profiles.slice(1).every(profile => profile.manager_phone === '13800000001'));
   assert.ok(profiles.every(profile => profile.employment_status === 'active'));
+});
+
+test('即使没有额外账号也会停用无账号旧档案', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  db.run("DELETE FROM users WHERE phone = '13900000000'");
+  migrateRetainedTestData(db, options());
+  assert.equal(one(db,
+    "SELECT employment_status FROM staff_profiles WHERE name = '无账号旧档案'"
+  ).employment_status, 'inactive');
 });
 
 test('重复迁移不会重复创建档案、小区和成员关系', () => {
@@ -263,6 +281,12 @@ test('模拟工单覆盖状态、复发、多人反馈、紧急、多小区和�
   assert.ok(Number(one(db,
     "SELECT COUNT(*) AS total FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%'"
   ).total) >= 60);
+  assert.ok(Number(one(db,
+    "SELECT COUNT(*) AS total FROM ticket_activity_logs logs "
+      + "JOIN users u ON u.id = logs.actor_user_id "
+      + "WHERE logs.ticket_id LIKE 'MOCK-E2E-%' AND u.role = 'keeper' "
+      + "AND logs.action IN ('approve_complete', 'reject')"
+  ).total) >= 2);
 });
 
 test('主管日历能识别同人重叠工单并展示请假日工单', () => {

@@ -9,7 +9,7 @@ async function migratedFixtureDatabase() {
   const source = await writeFixtureDatabase();
   await prepareRetainedTestData({
     source, apply: true, confirm: 'RETAINED-TEST-DATA', password: 'runtime-secret',
-    now: new Date('2026-08-12T02:00:00.000Z'),
+    now: new Date('2025-03-10T02:00:00.000Z'),
   });
   return source;
 }
@@ -30,6 +30,7 @@ test('验证器确认账号、组织、工单和绩效样本完整', async () =>
   assert.equal(result.accounts.active, 7);
   assert.equal(result.accounts.loginVerified, 7);
   assert.equal(result.organization.managedBySupervisor, 6);
+  assert.equal(result.organization.activeProfiles, 7);
   assert.equal(result.calendar.templates, 2);
   assert.ok(result.calendar.assignments >= 12);
   assert.ok(result.calendar.leave >= 1);

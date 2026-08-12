@@ -18,6 +18,8 @@ test('默认只预演且不修改源文件', async () => {
   assert.ok(result.mockTickets >= 38);
   assert.ok(result.mockAssignments >= 12);
   assert.ok(result.mockActivities >= 60);
+  assert.ok(result.tableDiffs.tickets.after > result.tableDiffs.tickets.before);
+  assert.equal(result.tableDiffs.attendance_records.after, 0);
   assert.doesNotMatch(JSON.stringify(result), /runtime-secret|password|hash|token/i);
 });
 

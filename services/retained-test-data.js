@@ -103,27 +103,46 @@ function disableOtherUsers(db, retainedPhones, nowIso, today) {
     `SELECT id, name FROM users WHERE phone NOT IN (${retainedPhones.map(() => '?').join(', ')})`,
     retainedPhones
   );
-  if (!inactiveUsers.length) return;
-  const userIds = inactiveUsers.map(user => Number(user.id));
-  const placeholders = userIds.map(() => '?').join(', ');
-  const profiles = rows(db, `SELECT id, name FROM staff_profiles WHERE user_id IN (${placeholders})`, userIds);
-  db.run(`UPDATE users SET status = 'disabled' WHERE id IN (${placeholders})`, userIds);
-  if (!profiles.length) return;
-  const profileIds = profiles.map(profile => Number(profile.id));
-  const profilePlaceholders = profileIds.map(() => '?').join(', ');
-  db.run(`UPDATE staff_profiles SET employment_status = 'inactive', updated_at = ?
-    WHERE id IN (${profilePlaceholders})`, [nowIso, ...profileIds]);
-  db.run(`DELETE FROM community_memberships WHERE staff_profile_id IN (${profilePlaceholders})`, profileIds);
-  db.run(`DELETE FROM shift_assignments
-    WHERE staff_id IN (${profilePlaceholders}) AND work_date >= ?`, [...profileIds, today]);
-  db.run(`DELETE FROM attendance_records WHERE staff_id IN (${profilePlaceholders})`, profileIds);
-  if (tableExists(db, 'attendance_change_logs')) {
-    db.run('DELETE FROM attendance_change_logs WHERE attendance_id NOT IN (SELECT id FROM attendance_records)');
+  if (inactiveUsers.length) {
+    const userIds = inactiveUsers.map(user => Number(user.id));
+    const placeholders = userIds.map(() => '?').join(', ');
+    const profiles = rows(db, `SELECT id, name FROM staff_profiles WHERE user_id IN (${placeholders})`, userIds);
+    db.run(`UPDATE users SET status = 'disabled' WHERE id IN (${placeholders})`, userIds);
+    if (profiles.length) {
+      const profileIds = profiles.map(profile => Number(profile.id));
+      const profilePlaceholders = profileIds.map(() => '?').join(', ');
+      db.run(`UPDATE staff_profiles SET employment_status = 'inactive', updated_at = ?
+        WHERE id IN (${profilePlaceholders})`, [nowIso, ...profileIds]);
+      db.run(`DELETE FROM community_memberships WHERE staff_profile_id IN (${profilePlaceholders})`, profileIds);
+      db.run(`DELETE FROM shift_assignments
+        WHERE staff_id IN (${profilePlaceholders}) AND work_date >= ?`, [...profileIds, today]);
+      db.run(`DELETE FROM attendance_records WHERE staff_id IN (${profilePlaceholders})`, profileIds);
+      if (tableExists(db, 'attendance_change_logs')) {
+        db.run('DELETE FROM attendance_change_logs WHERE attendance_id NOT IN (SELECT id FROM attendance_records)');
+      }
+      if (tableExists(db, 'staff_status')) {
+        const names = profiles.map(profile => String(profile.name || '')).filter(Boolean);
+        if (names.length) {
+          db.run(`DELETE FROM staff_status WHERE name IN (${names.map(() => '?').join(', ')})`, names);
+        }
+      }
+    }
   }
-  if (tableExists(db, 'staff_status')) {
-    const names = profiles.map(profile => String(profile.name || '')).filter(Boolean);
-    if (names.length) {
-      db.run(`DELETE FROM staff_status WHERE name IN (${names.map(() => '?').join(', ')})`, names);
+  const orphanProfiles = rows(db, 'SELECT id, name FROM staff_profiles WHERE user_id IS NULL');
+  if (orphanProfiles.length) {
+    const orphanIds = orphanProfiles.map(profile => Number(profile.id));
+    const orphanPlaceholders = orphanIds.map(() => '?').join(', ');
+    db.run(`UPDATE staff_profiles SET employment_status = 'inactive', updated_at = ?
+      WHERE id IN (${orphanPlaceholders})`, [nowIso, ...orphanIds]);
+    db.run(`DELETE FROM community_memberships
+      WHERE staff_profile_id IN (${orphanPlaceholders})`, orphanIds);
+    db.run(`DELETE FROM shift_assignments
+      WHERE staff_id IN (${orphanPlaceholders}) AND work_date >= ?`, [...orphanIds, today]);
+    if (tableExists(db, 'staff_status')) {
+      const names = orphanProfiles.map(profile => String(profile.name || '')).filter(Boolean);
+      if (names.length) {
+        db.run(`DELETE FROM staff_status WHERE name IN (${names.map(() => '?').join(', ')})`, names);
+      }
     }
   }
 }
@@ -356,6 +375,14 @@ function seedMockTickets(db, users, profiles, now) {
         actorUserId: event.actorUserId, actorStaffId: event.actorStaffId,
         action: event.action, createdAt: event.at,
       }));
+      if (account.role === 'keeper') {
+        upsertMockActivity(db, {
+          ticketId, key: `${ticketId}:keeper-review`, scenario: 'completed-flow',
+          actorUserId: Number(user.id), actorStaffId: Number(profile.id),
+          action: index === 4 ? 'reject' : 'approve_complete',
+          createdAt: new Date(Date.parse(finished) + 5 * 60000).toISOString(),
+        });
+      }
     }
     const workDate = account.phone === '13800000005'
       ? offsetDate(now, 0)
@@ -434,6 +461,9 @@ function seedMockTickets(db, users, profiles, now) {
 function migrateRetainedTestData(db, rawOptions = {}) {
   const options = requireMigrationOptions(rawOptions);
   ensureRetainedMigrationSchema(db);
+  const historicalRuleVersions = columnExists(db, 'tickets', 'performance_rule_version_id')
+    ? rows(db, "SELECT id, performance_rule_version_id FROM tickets WHERE id NOT LIKE 'MOCK-E2E-%'")
+    : [];
   ensureWorkforceSchema(db);
   const planned = planRetainedTestData(db);
   db.run('BEGIN TRANSACTION');
@@ -447,6 +477,11 @@ function migrateRetainedTestData(db, rawOptions = {}) {
     clearAttendanceHistory(db);
     seedMockCalendar(db, profiles, supervisorUserId, options.now, options.nowIso);
     seedMockTickets(db, users, profiles, options.now);
+    for (const ticket of historicalRuleVersions) {
+      db.run('UPDATE tickets SET performance_rule_version_id = ? WHERE id = ?', [
+        ticket.performance_rule_version_id, ticket.id,
+      ]);
+    }
     db.run('COMMIT');
   } catch (error) {
     try { db.run('ROLLBACK'); } catch (_) { /* 保留原始错误 */ }

@@ -5,6 +5,11 @@ const { migrateRetainedTestData } = require('../services/retained-test-data');
 
 const CONFIRM_PHRASE = 'RETAINED-TEST-DATA';
 const WORKSPACE_DATABASE = path.resolve(__dirname, '..', 'data.db');
+const SUMMARY_TABLES = [
+  'users', 'staff_profiles', 'communities', 'community_memberships',
+  'shift_templates', 'shift_assignments', 'attendance_records',
+  'tickets', 'ticket_activity_logs',
+];
 
 function parseArgs(argv = process.argv.slice(2)) {
   const values = {};
@@ -56,6 +61,15 @@ function atomicWrite(source, bytes) {
   }
 }
 
+function tableCounts(db) {
+  const existing = new Set((db.exec("SELECT name FROM sqlite_master WHERE type = 'table'")[0]?.values || [])
+    .map(row => String(row[0])));
+  return Object.fromEntries(SUMMARY_TABLES.map(table => [
+    table,
+    existing.has(table) ? Number(db.exec(`SELECT COUNT(*) FROM ${table}`)[0].values[0][0]) : 0,
+  ]));
+}
+
 async function prepareRetainedTestData(options = {}) {
   validateOptions(options);
   const original = fs.readFileSync(options.source);
@@ -63,8 +77,12 @@ async function prepareRetainedTestData(options = {}) {
   const db = new SQL.Database(original);
   let migration;
   let migrated;
+  let beforeCounts;
+  let afterCounts;
   try {
+    beforeCounts = tableCounts(db);
     migration = migrateRetainedTestData(db, options);
+    afterCounts = tableCounts(db);
     migrated = Buffer.from(db.export());
   } finally {
     db.close();
@@ -76,6 +94,10 @@ async function prepareRetainedTestData(options = {}) {
     mockTickets: Number(migration.summary.mockTickets),
     mockAssignments: Number(migration.summary.mockAssignments),
     mockActivities: Number(migration.summary.mockActivities),
+    tableDiffs: Object.fromEntries(SUMMARY_TABLES.map(table => [table, {
+      before: beforeCounts[table], after: afterCounts[table],
+      delta: afterCounts[table] - beforeCounts[table],
+    }])),
   };
   if (!options.apply) return { mode: 'dry-run', backupPath: null, ...common };
   const backupPath = backupName(options.source, options.now);

@@ -54,6 +54,12 @@ function inspectDatabase(db, password) {
   if (profiles.length !== 7 || profiles.some(profile => profile.employment_status !== 'active')) {
     problem(problems, 'PROFILE_SCOPE_MISMATCH', '保留账号的 active 档案不完整');
   }
+  const activeProfiles = Number(one(db,
+    "SELECT COUNT(*) AS total FROM staff_profiles WHERE COALESCE(employment_status, 'active') = 'active'"
+  ).total);
+  if (activeProfiles !== 7) {
+    problem(problems, 'UNEXPECTED_ACTIVE_PROFILE', 'active 人员档案必须恰好为固定 7 人');
+  }
   const supervisor = profiles.find(profile => profile.phone === '13800000001');
   const managedBySupervisor = supervisor
     ? profiles.filter(profile => profile.phone !== '13800000001'
@@ -141,7 +147,14 @@ function inspectDatabase(db, password) {
 
   let reporting = { activeStaff: 0, scoredStaff: 0 };
   try {
-    const report = getAllStaffReport(db, {}, profiles.map(profile => Number(profile.id)));
+    const mockRange = one(db, `SELECT
+      MIN(substr(datetime(created, '+8 hours'), 1, 10)) AS from_date,
+      MAX(substr(datetime(COALESCE(NULLIF(finished, ''), created), '+8 hours'), 1, 10)) AS to_date
+      FROM tickets WHERE id LIKE 'MOCK-E2E-%'`);
+    const report = getAllStaffReport(db, {
+      from: mockRange.from_date,
+      to: mockRange.to_date,
+    }, profiles.map(profile => Number(profile.id)));
     reporting = {
       activeStaff: Array.isArray(report.staffReports) ? report.staffReports.length : 0,
       scoredStaff: Array.isArray(report.staffReports)
@@ -160,7 +173,10 @@ function inspectDatabase(db, password) {
   return {
     ok: problems.length === 0,
     accounts: { active: activeUsers.length, loginVerified },
-    organization: { profiles: profiles.length, managedBySupervisor, defaultMemberships, mockMemberships },
+    organization: {
+      profiles: profiles.length, activeProfiles, managedBySupervisor,
+      defaultMemberships, mockMemberships,
+    },
     calendar,
     mockTickets: { completedPerPerson, currentPerPerson, activityCount },
     reporting,
