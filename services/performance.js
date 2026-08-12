@@ -288,14 +288,22 @@ function scoreStaff(db, staffId, filters = {}) {
   const columns = ticketColumns(db);
   const range = dateRange(filters);
   const assignedExpr = columns.has('assigned_at') ? "COALESCE(NULLIF(t.assigned_at, ''), t.created)" : 't.created';
-  const staffPredicate = columns.has('assignee_user_id')
-    ? '(t.assignee_user_id = ? OR (NULLIF(t.worker, \'\') IS NOT NULL AND t.worker = ?))'
-    : '(NULLIF(t.worker, \'\') IS NOT NULL AND t.worker = ?)';
+  const identity = [];
+  const identityParams = [];
+  if (columns.has('assignee_user_id') && profile.user_id != null) {
+    identity.push('t.assignee_user_id = ?');
+    identityParams.push(profile.user_id);
+  }
+  if (columns.has('assignee_staff_profile_id')) {
+    identity.push('t.assignee_staff_profile_id = ?');
+    identityParams.push(id);
+  }
+  identity.push('(NULLIF(t.worker, \'\') IS NOT NULL AND t.worker = ?)');
+  identityParams.push(profile.name);
+  const staffPredicate = `(${identity.join(' OR ')})`;
   const communityId = filters.communityId || filters.community_id;
   const communityPredicate = communityId && columns.has('community_id') ? ' AND t.community_id = ?' : '';
-  const params = columns.has('assignee_user_id')
-    ? [profile.user_id, profile.name, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive]
-    : [profile.name, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive];
+  const params = [...identityParams, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive];
   const tickets = rows(db, `
     SELECT t.* FROM tickets t
     WHERE ${staffPredicate}${communityPredicate} AND ${assignedExpr} >= ? AND ${assignedExpr} < ?

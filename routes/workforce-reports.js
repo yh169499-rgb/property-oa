@@ -96,6 +96,10 @@ function tableExists(name) {
   ).length > 0;
 }
 
+function communityQuery(req) {
+  return req.query.community_id || req.query.communityId;
+}
+
 function dashboardScope(req, communityId) {
   let profiles = all('SELECT id, user_id, name, manager_id FROM staff_profiles');
   let own = ownProfile(profiles, req.user.id);
@@ -182,7 +186,7 @@ router.get('/calendar/day', requireAuth, (req, res) => {
       date: req.query.date,
       staffId,
       managerId,
-      communityId: req.query.community_id,
+      communityId: communityQuery(req),
       viewerUserId: req.user.id,
     }));
   } catch (error) {
@@ -198,9 +202,9 @@ router.get('/dashboard/stats', requireAuth, (req, res) => {
       error.code = 'REPORT_SCOPE_FORBIDDEN';
       throw error;
     }
-    const staffIds = dashboardScope(req, req.query.community_id);
+    const staffIds = dashboardScope(req, communityQuery(req));
     res.json({ data: getDashboardStats(database.getDB(), {
-      communityId: req.query.community_id,
+      communityId: communityQuery(req),
       range: req.query.range,
       staffIds,
     }) });
@@ -217,15 +221,12 @@ router.get('/reports/staff/all', requireAuth, (req, res) => {
       error.code = 'REPORT_SCOPE_FORBIDDEN';
       throw error;
     }
-    const profiles = all(`
-      SELECT id FROM staff_profiles
-       WHERE COALESCE(employment_status, 'active') <> 'inactive'
-       ORDER BY id
-    `);
+    // 主管的团队历史报告包含已离职人员，确保其历史工单与绩效仍可追溯。
+    const profiles = all('SELECT id FROM staff_profiles ORDER BY id');
     res.json({ data: getAllStaffReport(database.getDB(), {
       from: req.query.from,
       to: req.query.to,
-      communityId: req.query.community_id,
+      communityId: communityQuery(req),
     }, profiles.map((profile) => profile.id)) });
   } catch (error) {
     fail(res, error);
@@ -238,7 +239,7 @@ router.get('/reports/staff/:staff_id', requireAuth, (req, res) => {
     res.json({ data: getStaffReport(database.getDB(), req.params.staff_id, {
       from: req.query.from,
       to: req.query.to,
-      communityId: req.query.community_id,
+      communityId: communityQuery(req),
     }) });
   } catch (error) {
     fail(res, error);
@@ -268,7 +269,7 @@ router.get('/me/stats', requireAuth, (req, res) => {
       error.code = 'PROFILE_NOT_FOUND';
       throw error;
     }
-    let filters = { communityId: req.query.community_id };
+    let filters = { communityId: communityQuery(req) };
     if (req.query.period === 'day') {
       const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
       filters = { ...filters, from: today, to: today };

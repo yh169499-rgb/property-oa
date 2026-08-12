@@ -82,6 +82,22 @@ test('人员报告兼容只有 worker 名称的历史工单', async () => {
   assert.deepEqual(report.categories, [{ category: '其他', total: 1 }]);
 });
 
+test('离职人员报告保留稳定身份和历史工单并标记已离职', async () => {
+  const db = await fixture();
+  db.run("UPDATE staff_profiles SET employment_status = 'departed', user_id = NULL WHERE id = 3");
+  db.run(`INSERT INTO tickets
+    (id, type, status, worker, created, assigned_at, assignee_staff_profile_id)
+    VALUES ('departed-history', 'repair', 'done', '师傅', '2026-07-15T00:00:00Z',
+      '2026-07-15T00:00:00Z', 3)`);
+  const { getStaffReport, getAllStaffReport } = require('../services/reporting');
+  const report = getStaffReport(db, 3, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(report.staff.name, '师傅（已离职）');
+  assert.equal(report.staff.raw_name, '师傅');
+  assert.equal(report.received.total, 1);
+  const all = getAllStaffReport(db, { from: '2026-07-01', to: '2026-07-31' }, [3]);
+  assert.equal(all.staffReports[0].staff.name, '师傅（已离职）');
+});
+
 test('全部人员报告聚合团队指标并保留人员明细', async () => {
   const db = await fixture();
   db.run(`

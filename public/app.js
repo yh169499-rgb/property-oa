@@ -225,7 +225,9 @@ function applyRoleView() {
     if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
     if (b.dataset.page === 'dashboard') b.style.display = '';
     if (b.dataset.page === 'repair') b.style.display = isKeeper ? 'none' : '';
-    if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = isWorker ? 'none' : '';
+    // 维修师傅也需要处理自己被派发的投诉/帮助工单；服务端仍按账号身份
+    // 过滤数据，因此这里只控制入口显示，不承担权限判断。
+    if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = '';
   });
   // 重新加载小区列表（按角色权限过滤）
   reloadCommunities();
@@ -768,8 +770,7 @@ function renderTickets(type) {
   var rows = state.tickets.filter(t => t.type === type && t.status !== 'done');
   // 师傅/管家视图：只看自己负责的工单
   var myName = roleWorkerName();
-  if (currentRole.startsWith('worker_') && myName) rows = rows.filter(t => t.worker === myName);
-  if (currentRole.startsWith('pm_keeper_')) { var keeperName = currentRole.replace('pm_keeper_',''); rows = rows.filter(t => t.worker === keeperName); }
+  if ((currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_')) && myName) rows = rows.filter(t => t.worker === myName);
   var fs=$(`#filter-status-${type}`).value, fc=$(`#filter-cat-${type}`).value, fp=$(`#filter-priority-${type}`).value, sort=$(`#sort-${type}`).value;
   if(fs) rows=rows.filter(t=>t.status===fs); if(fc) rows=rows.filter(t=>t.cat===fc); if(fp) rows=rows.filter(t=>t.priority===fp);
   rows.sort((a,b) => sort==='newest' ? new Date(b.created)-new Date(a.created) : sort==='oldest' ? new Date(a.created)-new Date(b.created) : (PRIORITY_ORDER[b.priority]-PRIORITY_ORDER[a.priority] || new Date(a.created)-new Date(b.created)));
@@ -809,7 +810,9 @@ function openDrawer(id) {
   loadDrawerPhotos(id);
 }
 function buildActions(t) {
-  var repair=t.type==='repair', keeper=!repair, mine=repair&&currentRole.startsWith('worker_')&&t.worker===roleWorkerName();
+  var repair=t.type==='repair', keeper=!repair;
+  var employee = currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_');
+  var mine = employee && t.worker === (roleWorkerName() || currentRole.replace('pm_keeper_', ''));
   var noteBtn = `<button class="btn sm ghost" onclick="addTicketNote('${t.id}')">📝 备注</button>`;
   var urgeBtn = (isLead(t) && t.status === 'pending') ? `<button class="btn sm" style="background:var(--warning);color:#fff" onclick="urgeTicket('${t.id}')">⚡ 催办</button>` : '';
 
@@ -822,7 +825,6 @@ function buildActions(t) {
   }
   if(t.status==='doing'){
     if(mine) return `<button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
-    if(keeper&&currentRole.startsWith('pm_keeper_')) return `<button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
     return hint(`已指派给 ${esc(t.worker||'处理人')}。`) + ` ${urgeBtn} ${noteBtn}`;
   }
   if(t.status==='pending'){
@@ -892,10 +894,10 @@ function checkAssignConflicts(workerName, newTicket, estHours){
   });
   return results;
 }
-function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
+function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
 function confirmDone(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可确认待审核工单');return;}t.status='done';t.finished=new Date().toISOString();pushStep(t,'主管确认完成',roleObj().name);save();apiPatch(t.id,{status:'done',finished:t.finished});afterAction(id,'工单已确认完成');}
 function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回给原负责人，不允许转单');}
-function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
+function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
 function afterAction(id,msg){toast(msg);enhanceState();renderAll();renderDashboard();if(id)openDrawer(id);}
 
 /* ============================================================
@@ -1069,8 +1071,7 @@ function renderDone(){
   var rows=state.tickets.filter(t=>t.status==='done');
   // 师傅/管家视图：只看自己已完成的工单
   var myName=roleWorkerName();
-  if(currentRole.startsWith('worker_')&&myName) rows=rows.filter(t=>t.worker===myName);
-  if(currentRole.startsWith('pm_keeper_')){var keeperName=currentRole.replace('pm_keeper_','');rows=rows.filter(t=>t.worker===keeperName);}
+  if((currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&myName) rows=rows.filter(t=>t.worker===myName);
   // 搜索工单号
   var search=($('#search-done')||{}).value;
   if(search)rows=rows.filter(t=>t.id.toLowerCase().includes(search.toLowerCase()));
