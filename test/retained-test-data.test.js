@@ -168,7 +168,10 @@ test('只激活固定账号并停用其他账号但保留历史工单和活动',
   assert.equal(rows(db, "SELECT id FROM shift_assignments WHERE note = '历史排班'").length, 1);
   assert.equal(rows(db, "SELECT id FROM attendance_records WHERE status = 'normal'").length, 0);
   assert.equal(rows(db, "SELECT name FROM staff_status WHERE name = '历史人员'").length, 0);
-  assert.deepEqual(one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'"), historyBefore);
+  const migratedHistory = one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'");
+  assert.equal(migratedHistory.assignee_staff_profile_id, 1);
+  assert.deepEqual({ ...migratedHistory, assignee_staff_profile_id: null },
+    { ...historyBefore, assignee_staff_profile_id: null });
   assert.deepEqual(one(db, "SELECT * FROM ticket_activity_logs WHERE ticket_id = 'REAL-HISTORY-001'"), activityBefore);
   for (const user of rows(db, "SELECT password FROM users WHERE status = 'active'")) {
     assert.equal(bcrypt.compareSync('runtime-secret', user.password), true);
@@ -338,5 +341,8 @@ test('完整模拟数据重复迁移后记录数稳定且非 MOCK 历史不变',
     (SELECT COUNT(*) FROM tickets WHERE id LIKE 'MOCK-E2E-%') AS tickets,
     (SELECT COUNT(*) FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%') AS activities`)[0];
   assert.deepEqual(second, first);
-  assert.deepEqual(one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'"), history);
+  const migratedHistory = one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'");
+  assert.equal(migratedHistory.assignee_staff_profile_id, 1);
+  assert.deepEqual({ ...migratedHistory, assignee_staff_profile_id: null },
+    { ...history, assignee_staff_profile_id: null });
 });
