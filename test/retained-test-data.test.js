@@ -49,6 +49,12 @@ function createFixture() {
       reject_reason TEXT DEFAULT '',
       estimated_hours REAL DEFAULT 0,
       community_id TEXT DEFAULT 'default',
+      repeat_key TEXT DEFAULT '',
+      repeat_of TEXT DEFAULT '',
+      repeat_count INTEGER DEFAULT 1,
+      is_recurring INTEGER DEFAULT 0,
+      recurrence_note TEXT DEFAULT '',
+      feedback_count INTEGER DEFAULT 1,
       metadata TEXT DEFAULT '{}'
     );
     CREATE TABLE communities (
@@ -191,3 +197,73 @@ test('重复迁移不会重复创建档案、小区和成员关系', () => {
   assert.deepEqual(second, first);
 });
 
+test('模拟排班覆盖白班、跨夜班、请假且不生成考勤', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  assert.equal(Number(one(db,
+    "SELECT COUNT(*) AS total FROM shift_templates WHERE name IN ('模拟白班', '模拟夜班')"
+  ).total), 2);
+  assert.ok(Number(one(db,
+    "SELECT COUNT(*) AS total FROM shift_assignments WHERE note LIKE 'MOCK-E2E%'"
+  ).total) >= 12);
+  assert.ok(Number(one(db,
+    "SELECT COUNT(*) AS total FROM shift_assignments WHERE note LIKE 'MOCK-E2E%' AND assignment_type = 'leave'"
+  ).total) >= 1);
+  const overnight = one(db,
+    "SELECT start_at, end_at FROM shift_assignments WHERE note = 'MOCK-E2E-OVERNIGHT'"
+  );
+  assert.ok(Date.parse(overnight.end_at) > Date.parse(overnight.start_at));
+  assert.equal(Number(one(db, 'SELECT COUNT(*) AS total FROM attendance_records').total), 0);
+});
+
+test('每名普通测试人员均有完整已完成样本和当前工单', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const perPerson = rows(db, `SELECT u.phone,
+    SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS completed,
+    SUM(CASE WHEN t.status <> 'done' THEN 1 ELSE 0 END) AS current_count
+    FROM users u JOIN tickets t ON t.assignee_user_id = u.id
+    WHERE u.phone BETWEEN '13800000002' AND '13800000007'
+      AND t.id LIKE 'MOCK-E2E-%'
+    GROUP BY u.phone ORDER BY u.phone`);
+  assert.equal(perPerson.length, 6);
+  assert.ok(perPerson.every(row => Number(row.completed) >= 5 && Number(row.current_count) >= 1));
+});
+
+test('模拟工单覆盖状态、复发、多人反馈、紧急、多小区和活动日志', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const tickets = rows(db, "SELECT * FROM tickets WHERE id LIKE 'MOCK-E2E-%'");
+  assert.deepEqual([...new Set(tickets.map(row => row.status))].sort(),
+    ['confirm', 'doing', 'done', 'pending', 'wait']);
+  assert.ok(tickets.some(row => row.priority === 'urgent'));
+  assert.ok(tickets.some(row => Number(row.is_recurring) === 1));
+  assert.ok(tickets.some(row => Number(row.feedback_count) > 1));
+  assert.ok(tickets.some(row => row.community_id === 'mock-e2e-community'));
+  assert.ok(tickets.filter(row => row.assignee_user_id != null)
+    .every(row => row.performance_rule_version_id != null));
+  assert.ok(Number(one(db,
+    "SELECT COUNT(*) AS total FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%'"
+  ).total) >= 60);
+});
+
+test('完整模拟数据重复迁移后记录数稳定且非 MOCK 历史不变', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  const history = one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'");
+  migrateRetainedTestData(db, options());
+  const first = rows(db, `SELECT
+    (SELECT COUNT(*) FROM shift_assignments WHERE note LIKE 'MOCK-E2E%') AS shifts,
+    (SELECT COUNT(*) FROM tickets WHERE id LIKE 'MOCK-E2E-%') AS tickets,
+    (SELECT COUNT(*) FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%') AS activities`)[0];
+  migrateRetainedTestData(db, options());
+  const second = rows(db, `SELECT
+    (SELECT COUNT(*) FROM shift_assignments WHERE note LIKE 'MOCK-E2E%') AS shifts,
+    (SELECT COUNT(*) FROM tickets WHERE id LIKE 'MOCK-E2E-%') AS tickets,
+    (SELECT COUNT(*) FROM ticket_activity_logs WHERE ticket_id LIKE 'MOCK-E2E-%') AS activities`)[0];
+  assert.deepEqual(second, first);
+  assert.deepEqual(one(db, "SELECT * FROM tickets WHERE id = 'REAL-HISTORY-001'"), history);
+});
