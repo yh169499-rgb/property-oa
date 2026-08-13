@@ -8,6 +8,14 @@ const { createServerApp } = require('./server-app');
 // 启动
 async function start() {
   await initDB();
+  const { runStartupRetainedMigration } = require('./services/startup-retained-migration');
+  const retainedMigration = await runStartupRetainedMigration({
+    db: getDB(),
+    persist: saveDB,
+  });
+  if (retainedMigration.applied) {
+    console.log('✅ 保留测试数据已写入:', JSON.stringify(retainedMigration.summary));
+  }
   if (process.env.SEED_WORKFORCE_DEMO === 'true') {
     const { seedDemo } = require('./scripts/seed-workforce-demo');
     const seeded = seedDemo(getDB());
