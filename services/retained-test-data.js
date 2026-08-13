@@ -409,6 +409,37 @@ function seedMockTickets(db, users, profiles, now) {
       actorUserId: event.actorUserId, actorStaffId: event.actorStaffId,
       action: event.action, createdAt: new Date(Date.parse(assignedAt) + index * 5 * 60000).toISOString(),
     }));
+
+    ['repair', 'complaint', 'help'].forEach((type, typeIndex) => {
+      const ticketId = `MOCK-E2E-${account.phone.slice(-2)}-${type.toUpperCase()}-SCOPE`;
+      const scopeDate = offsetDate(now, -(8 + accountIndex + typeIndex));
+      const scopeAssignedAt = isoAtShanghai(scopeDate, 9 + typeIndex, 15);
+      const scopeFinishedAt = new Date(Date.parse(scopeAssignedAt) + (45 + typeIndex * 15) * 60000).toISOString();
+      upsertMockTicket(db, {
+        id: ticketId, type,
+        cat: type === 'repair' ? '公共设施' : type === 'complaint' ? '服务投诉' : '社区帮助',
+        desc: `三类工单权限模拟 ${account.name}-${type}`,
+        loc: `${accountIndex + 1}栋-测试区域`, priority: 'normal', status: 'done',
+        worker: account.name, message: '模拟三类工单完整处理',
+        created: new Date(Date.parse(scopeAssignedAt) - 15 * 60000).toISOString(),
+        finished: scopeFinishedAt, reject_reason: '', estimated_hours: 2,
+        community_id: accountIndex % 2 ? 'default' : MOCK_COMMUNITY.id,
+        repeat_key: '', repeat_of: '', repeat_count: 1, is_recurring: 0,
+        recurrence_note: '', feedback_count: 1,
+        metadata: JSON.stringify({ mock: true, scenario: 'three-type-scope' }),
+        assignee_user_id: Number(user.id), assigned_at: scopeAssignedAt,
+        performance_rule_version_id: Number(rule.id),
+      });
+      [
+        { key: `${ticketId}:assign`, action: 'assign', actorUserId: Number(supervisor.id), actorStaffId: Number(supervisorProfile.id), at: scopeAssignedAt },
+        { key: `${ticketId}:accept`, action: 'accept', actorUserId: Number(user.id), actorStaffId: Number(profile.id), at: new Date(Date.parse(scopeAssignedAt) + 5 * 60000).toISOString() },
+        { key: `${ticketId}:complete`, action: 'complete', actorUserId: Number(user.id), actorStaffId: Number(profile.id), at: scopeFinishedAt },
+      ].forEach(event => upsertMockActivity(db, {
+        ticketId, key: event.key, scenario: 'three-type-scope',
+        actorUserId: event.actorUserId, actorStaffId: event.actorStaffId,
+        action: event.action, createdAt: event.at,
+      }));
+    });
   });
   const conflictAccount = RETAINED_ACCOUNTS.find(account => account.phone === '13800000002');
   const conflictUser = users.get(conflictAccount.phone);
