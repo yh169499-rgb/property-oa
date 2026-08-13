@@ -51,6 +51,6 @@ test('只有主管可通过一次性部署令牌写入完整模拟数据', async
     body: JSON.stringify({ token: 'one-time-deploy-token' }),
   });
   assert.equal(applied.response.status, 200);
-  assert.equal(applied.body.data.summary.retainedAccounts, 7);
+  assert.equal(applied.body.data.summary.retainedAccounts, 5);
   assert.ok(applied.body.data.summary.mockTickets >= 1);
 });

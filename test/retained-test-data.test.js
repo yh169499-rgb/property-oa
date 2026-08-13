@@ -121,24 +121,22 @@ function options() {
   };
 }
 
-test('固定清单只包含一个主管、四个师傅和两个管家', () => {
+test('固定清单只包含一个主管、三个师傅和一个管家', () => {
   const { RETAINED_ACCOUNTS } = require('../services/retained-test-data');
   assert.deepEqual(RETAINED_ACCOUNTS.map(({ phone, role }) => [phone, role]), [
     ['13800000001', '主管'],
     ['13800000002', 'worker'],
     ['13800000003', 'worker'],
     ['13800000004', 'worker'],
-    ['13800000005', 'worker'],
     ['13800000006', 'keeper'],
-    ['13800000007', 'keeper'],
   ]);
 });
 
 test('预演摘要不包含密码、哈希或令牌', () => {
   const { planRetainedTestData } = require('../services/retained-test-data');
   const result = planRetainedTestData(createFixture(), options());
-  assert.equal(result.summary.retainedAccounts, 7);
-  assert.equal(result.summary.disabledAccounts, 1);
+  assert.equal(result.summary.retainedAccounts, 5);
+  assert.equal(result.summary.disabledAccounts, 3);
   assert.doesNotMatch(JSON.stringify(result.summary), /runtime-secret|password|hash|token/i);
 });
 
@@ -156,9 +154,7 @@ test('只激活固定账号并停用其他账号但保留历史工单和活动',
     ['13800000002', 'worker', 'active'],
     ['13800000003', 'worker', 'active'],
     ['13800000004', 'worker', 'active'],
-    ['13800000005', 'worker', 'active'],
     ['13800000006', 'keeper', 'active'],
-    ['13800000007', 'keeper', 'active'],
   ]);
   assert.equal(one(db, "SELECT status FROM users WHERE phone = '13900000000'").status, 'disabled');
   assert.equal(one(db, "SELECT employment_status FROM staff_profiles WHERE name = '无账号旧档案'").employment_status, 'inactive');
@@ -188,7 +184,7 @@ test('固定账号各有一个 active 档案并统一归主管管理', () => {
     LEFT JOIN staff_profiles manager_profile ON manager_profile.id = sp.manager_id
     LEFT JOIN users manager ON manager.id = manager_profile.user_id
     WHERE u.status = 'active' ORDER BY u.phone`);
-  assert.equal(profiles.length, 7);
+  assert.equal(profiles.length, 5);
   assert.equal(profiles[0].manager_phone, null);
   assert.ok(profiles.slice(1).every(profile => profile.manager_phone === '13800000001'));
   assert.ok(profiles.every(profile => profile.employment_status === 'active'));
@@ -275,10 +271,10 @@ test('每名普通测试人员均有完整已完成样本和当前工单', () =>
     SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS completed,
     SUM(CASE WHEN t.status <> 'done' THEN 1 ELSE 0 END) AS current_count
     FROM users u JOIN tickets t ON t.assignee_user_id = u.id
-    WHERE u.phone BETWEEN '13800000002' AND '13800000007'
+    WHERE u.phone IN ('13800000002', '13800000003', '13800000004', '13800000006')
       AND t.id LIKE 'MOCK-E2E-%'
     GROUP BY u.phone ORDER BY u.phone`);
-  assert.equal(perPerson.length, 6);
+  assert.equal(perPerson.length, 4);
   assert.ok(perPerson.every(row => Number(row.completed) >= 5 && Number(row.current_count) >= 1));
 });
 
@@ -312,18 +308,18 @@ test('主管日历能识别同人重叠工单并展示请假日工单', () => {
   const db = createFixture();
   migrateRetainedTestData(db, options());
   const zhang = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000002'");
-  const zhao = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000005'");
+  const li = one(db, "SELECT id FROM staff_profiles WHERE phone = '13800000003'");
   const zhangCalendar = buildDayCalendar(db, {
     date: '2026-08-12', staffId: zhang.id, communityId: 'mock-e2e-community', viewerUserId: 1,
   });
   assert.ok(zhangCalendar.conflicts.length >= 1);
   assert.ok(zhangCalendar.conflicts.some(conflict => conflict.ticketIds
     .includes('MOCK-E2E-02-CONFLICT')));
-  const zhaoCalendar = buildDayCalendar(db, {
-    date: '2026-08-12', staffId: zhao.id, communityId: 'default', viewerUserId: 1,
+  const liCalendar = buildDayCalendar(db, {
+    date: '2026-08-12', staffId: li.id, communityId: 'default', viewerUserId: 1,
   });
-  assert.equal(zhaoCalendar.people[0].shift.assignmentType, 'leave');
-  assert.ok(zhaoCalendar.events.some(event => event.ticketId === 'MOCK-E2E-05-CURRENT'));
+  assert.equal(liCalendar.people[0].shift.assignmentType, 'leave');
+  assert.ok(liCalendar.events.some(event => event.ticketId === 'MOCK-E2E-03-CURRENT'));
 });
 
 test('完整模拟数据重复迁移后记录数稳定且非 MOCK 历史不变', () => {
