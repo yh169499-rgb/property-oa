@@ -278,6 +278,21 @@ test('每名普通测试人员均有完整已完成样本和当前工单', () =>
   assert.ok(perPerson.every(row => Number(row.completed) >= 5 && Number(row.current_count) >= 1));
 });
 
+test('每名维修师傅和管家都具备报修、投诉、帮助三类本人模拟工单', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  migrateRetainedTestData(db, options());
+  const coverage = rows(db, `SELECT u.phone, t.type, COUNT(*) AS total
+    FROM users u JOIN tickets t ON t.assignee_user_id = u.id
+    WHERE u.phone IN ('13800000002', '13800000003', '13800000004', '13800000006')
+      AND t.id LIKE 'MOCK-E2E-%'
+    GROUP BY u.phone, t.type ORDER BY u.phone, t.type`);
+  for (const phone of ['13800000002', '13800000003', '13800000004', '13800000006']) {
+    assert.deepEqual(coverage.filter(row => row.phone === phone).map(row => row.type).sort(),
+      ['complaint', 'help', 'repair']);
+  }
+});
+
 test('模拟工单覆盖状态、复发、多人反馈、紧急、多小区和活动日志', () => {
   const { migrateRetainedTestData } = require('../services/retained-test-data');
   const db = createFixture();
