@@ -93,6 +93,26 @@
     hero.appendChild(myButton);
     rootNode.appendChild(hero);
 
+    var ticketLinks = element('section', 'card worker-ticket-links');
+    ticketLinks.appendChild(element('h3', '', '我的工单'));
+    var ticketLinkGrid = element('div', 'worker-ticket-link-grid');
+    [
+      { page: 'repair', title: '报修工单', detail: '查看分配给我的报修任务' },
+      { page: 'complaint', title: '投诉工单', detail: '查看分配给我的投诉任务' },
+      { page: 'help', title: '帮助工单', detail: '查看分配给我的帮助任务' },
+    ].forEach(function (entry) {
+      var button = element('button', 'worker-ticket-link');
+      button.type = 'button';
+      button.appendChild(element('strong', '', entry.title));
+      button.appendChild(element('span', '', entry.detail));
+      button.addEventListener('click', function () {
+        if (typeof navTo === 'function') navTo(entry.page);
+      });
+      ticketLinkGrid.appendChild(button);
+    });
+    ticketLinks.appendChild(ticketLinkGrid);
+    rootNode.appendChild(ticketLinks);
+
     var metrics = element('div', 'worker-kpi-grid');
     metrics.appendChild(metric('本月接单', model.metrics.received + ' 张', '本人负责工单'));
     metrics.appendChild(metric('本月完成', model.metrics.completed + ' 张', '已完成并归档'));
