@@ -144,7 +144,8 @@ async function initDB() {
       phone TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
       name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'worker'
+      role TEXT NOT NULL DEFAULT 'worker',
+      status TEXT NOT NULL DEFAULT 'active'
     )
   `);
 
@@ -159,6 +160,7 @@ async function initDB() {
 
   // 兼容旧数据库的列迁移
   const migrations = [
+    `ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
     `ALTER TABLE tickets ADD COLUMN session_id TEXT DEFAULT ''`,
     `ALTER TABLE tickets ADD COLUMN community_id TEXT DEFAULT 'default'`,
     `ALTER TABLE tickets ADD COLUMN repeat_key TEXT DEFAULT ''`,
@@ -170,6 +172,9 @@ async function initDB() {
     `ALTER TABLE tickets ADD COLUMN metadata TEXT DEFAULT '{}'`,
   ];
   migrations.forEach(sql => { try { db.run(sql); } catch(e) { /* 已存在 */ } });
+
+  // 旧版本把 lead 当作主管别名；迁移为明确的最高权限角色，避免旧账号被误判为普通人员。
+  try { db.run("UPDATE users SET role = '主管' WHERE LOWER(TRIM(role)) = 'lead'"); } catch (e) { /* 旧测试库或异常旧表忽略 */ }
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_recurrence ON tickets (community_id, repeat_key, created)`);
   ensureWorkforceSchema(db);

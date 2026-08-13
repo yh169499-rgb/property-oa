@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 const { startHttpServer } = require('./helpers/http-server');
+const { authHeader } = require('./helpers/auth');
 
 async function fixture(communities) {
   const SQL = await initSqlJs();
@@ -30,7 +31,7 @@ async function fixture(communities) {
 
 async function create(server, body) {
   const response = await fetch(`${server.url}/api/tickets`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader({ id: 1, role: '主管', name: '主管' }) }, body: JSON.stringify(body),
   });
   return { response, body: await response.json() };
 }

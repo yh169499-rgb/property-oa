@@ -52,3 +52,11 @@ test('主管首页和我的页面不再渲染考勤模块', () => {
   assert.doesNotMatch(app, /renderDashboardAttendanceDetails|dashboard-team-attendance|dashboard-attendance/);
   assert.doesNotMatch(myPage, /本月实际考勤|考勤 ·|my-attendance-panel|\/api\/me\/attendance|团队迟到/);
 });
+
+test('主管导航和注册审核页签会显示待审核红点并定时刷新', () => {
+  assert.match(app, /function updatePendingRegistrationBadge\s*\(/);
+  assert.match(app, /\.nav button\[data-page="management"\]/);
+  assert.match(app, /\.management-tab\[data-tab="registrations"\]/);
+  assert.match(app, /pending_count/);
+  assert.match(app, /loadPendingRegistrations\(\)/);
+});

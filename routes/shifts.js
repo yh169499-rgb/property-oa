@@ -69,7 +69,7 @@ router.get('/shift-templates', requireAuth, (req, res) => {
   res.json({ data: all('SELECT * FROM shift_templates ORDER BY id') });
 });
 
-router.post('/shift-templates', requireAuth, (req, res) => {
+router.post('/shift-templates', requireAuth, requireAdmin, async (req, res) => {
   try {
     const value = templateInput(req.body);
     database.run(
@@ -79,14 +79,14 @@ router.post('/shift-templates', requireAuth, (req, res) => {
       [value.name, value.startTime, value.endTime, value.color,
         Number(value.graceMinutes), req.user.id]
     );
-    database.saveDB();
+    await database.saveDB();
     res.status(201).json({ data: one('SELECT * FROM shift_templates WHERE id = last_insert_rowid()') });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-router.patch('/shift-templates/:id', requireAuth, (req, res) => {
+router.patch('/shift-templates/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const current = one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
@@ -97,14 +97,14 @@ router.patch('/shift-templates/:id', requireAuth, (req, res) => {
       [value.name, value.startTime, value.endTime, value.color,
         Number(value.graceMinutes), req.params.id]
     );
-    database.saveDB();
+    await database.saveDB();
     res.json({ data: one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-router.delete('/shift-templates/:id', requireAuth, (req, res) => {
+router.delete('/shift-templates/:id', requireAuth, requireAdmin, async (req, res) => {
   const current = one('SELECT id FROM shift_templates WHERE id = ?', [req.params.id]);
   if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
   const references = one(
@@ -119,7 +119,7 @@ router.delete('/shift-templates/:id', requireAuth, (req, res) => {
     });
   }
   database.run('DELETE FROM shift_templates WHERE id = ?', [req.params.id]);
-  database.saveDB();
+  await database.saveDB();
   return res.json({ success: true });
 });
 
@@ -131,27 +131,27 @@ router.get('/shifts', requireAuth, (req, res) => {
   }
 });
 
-router.post('/shifts', requireAuth, requireAdmin, (req, res) => {
+router.post('/shifts', requireAuth, requireAdmin, async (req, res) => {
   try {
     const row = createAssignment(database.getDB(), req.body, req.user.id);
-    database.saveDB();
+    await database.saveDB();
     res.status(201).json({ data: row });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-router.post('/shifts/batch', requireAuth, requireAdmin, (req, res) => {
+router.post('/shifts/batch', requireAuth, requireAdmin, async (req, res) => {
   try {
     const rows = createBatchAssignments(database.getDB(), req.body, req.user.id);
-    database.saveDB();
+    await database.saveDB();
     res.status(201).json({ data: rows });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-router.patch('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
+router.patch('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const current = one('SELECT * FROM shift_assignments WHERE id = ?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
@@ -168,18 +168,18 @@ router.patch('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
       note: req.body.note ?? current.note,
     });
     const updated = updateAssignment(database.getDB(), current.id, value, req.user.id);
-    database.saveDB();
+    await database.saveDB();
     res.json({ data: updated });
   } catch (error) {
     sendError(res, error);
   }
 });
 
-router.delete('/shifts/:id', requireAuth, requireAdmin, (req, res) => {
+router.delete('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
   const current = one('SELECT id FROM shift_assignments WHERE id = ?', [req.params.id]);
   if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
   database.run('DELETE FROM shift_assignments WHERE id = ?', [req.params.id]);
-  database.saveDB();
+  await database.saveDB();
   res.json({ success: true });
 });
 
