@@ -24,9 +24,10 @@ test('只有主管可通过一次性部署令牌写入完整模拟数据', async
   const db = await fixture();
   const server = await startHttpServer(db, {
     deployment: {
-      token: 'one-time-deploy-token',
-      password: 'runtime-only-password',
+      token: '',
+      password: '',
       now: new Date('2026-08-13T06:00:00.000Z'),
+      backup: async () => 'data.db.before-retained-test.db',
     },
   });
   t.after(() => server.close());
@@ -34,23 +35,24 @@ test('只有主管可通过一次性部署令牌写入完整模拟数据', async
   const worker = await jsonRequest(server, '/api/admin/mock-data/apply', {
     method: 'POST',
     headers: { ...authHeader({ id: 2, role: 'worker' }), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'one-time-deploy-token' }),
+    body: JSON.stringify({ confirm: 'RETAINED-TEST-DATA', password: 'runtime-only-password' }),
   });
   assert.equal(worker.response.status, 403);
 
   const badToken = await jsonRequest(server, '/api/admin/mock-data/apply', {
     method: 'POST',
     headers: { ...authHeader({ id: 99, role: '主管' }), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'wrong' }),
+    body: JSON.stringify({ confirm: 'wrong', password: 'runtime-only-password' }),
   });
   assert.equal(badToken.response.status, 403);
 
   const applied = await jsonRequest(server, '/api/admin/mock-data/apply', {
     method: 'POST',
     headers: { ...authHeader({ id: 99, role: '主管' }), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'one-time-deploy-token' }),
+    body: JSON.stringify({ confirm: 'RETAINED-TEST-DATA', password: 'runtime-only-password' }),
   });
   assert.equal(applied.response.status, 200);
   assert.equal(applied.body.data.summary.retainedAccounts, 5);
   assert.ok(applied.body.data.summary.mockTickets >= 1);
+  assert.equal(applied.body.data.backup, 'data.db.before-retained-test.db');
 });
