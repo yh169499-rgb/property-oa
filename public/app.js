@@ -227,9 +227,9 @@ function applyRoleView() {
   $$('.nav button').forEach(b => {
     if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
     if (b.dataset.page === 'dashboard') b.style.display = '';
-    if (b.dataset.page === 'repair') b.style.display = isKeeper ? 'none' : '';
-    // 维修师傅也需要处理自己被派发的投诉/帮助工单；服务端仍按账号身份
+    // 维修师傅和物业管家都需要处理自己被派发的报修、投诉、帮助工单；服务端仍按账号身份
     // 过滤数据，因此这里只控制入口显示，不承担权限判断。
+    if (b.dataset.page === 'repair') b.style.display = '';
     if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = '';
   });
   // 重新加载小区列表（按角色权限过滤）
@@ -1172,9 +1172,10 @@ function renderAdminProfile() {
 function loadPendingRegistrations() {
   var listEl = $('#pending-reg-list');
   var countEl = $('#pending-count');
-  if (!listEl) return;
   fetch(API_BASE + '/api/pending-registrations', { headers: authHeaders() }).then(function(r) { return r.json(); }).then(function(json) {
     var data = json.data || [];
+    updatePendingRegistrationBadge(Number(json.pending_count == null ? data.length : json.pending_count));
+    if (!listEl) return;
     if (countEl) countEl.textContent = data.length ? '(' + data.length + '条待审核)' : '';
     if (!data.length) {
       listEl.innerHTML = '<span style="color:var(--muted)">暂无待审核申请</span>';
@@ -1197,7 +1198,31 @@ function loadPendingRegistrations() {
         '</div>';
     }).join('');
   }).catch(function() {
-    listEl.innerHTML = '<span style="color:var(--muted)">加载失败</span>';
+    if (listEl) listEl.innerHTML = '<span style="color:var(--muted)">加载失败</span>';
+  });
+}
+
+function updatePendingRegistrationBadge(count) {
+  var pending = Math.max(0, Number(count) || 0);
+  [
+    document.querySelector('.nav button[data-page="management"]'),
+    document.querySelector('#management-workspace .management-tab[data-tab="registrations"]')
+  ].forEach(function(target) {
+    if (!target) return;
+    var badge = target.querySelector('.pending-registration-badge');
+    if (!pending) {
+      if (badge) badge.remove();
+      target.removeAttribute('aria-label');
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-badge pending-registration-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      target.appendChild(badge);
+    }
+    badge.textContent = pending > 99 ? '99+' : String(pending);
+    target.setAttribute('aria-label', '管理工作台，' + pending + '条注册申请待审核');
   });
 }
 
@@ -1245,7 +1270,7 @@ window.onload=async function(){
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };
 
-function startAutoSync(){setInterval(async function(){try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
+function startAutoSync(){setInterval(async function(){if(currentRole==='eng_lead')loadPendingRegistrations();try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
 
 /* ============================================================
    师傅日程 · 时间轴排班与冲突检测
@@ -1573,6 +1598,8 @@ function enterApp(user){
   } else if(user.role==='keeper'){
     currentRole='pm_keeper_'+user.name;
   }
+  if(currentRole==='eng_lead')loadPendingRegistrations();
+  else updatePendingRegistrationBadge(0);
   localStorage.setItem('juzi_oa_role_v1',currentRole);
   var sel=$('#roleSelect');
   if(sel){

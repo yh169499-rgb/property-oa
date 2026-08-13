@@ -56,7 +56,11 @@ test('人员与注册审核管理接口必须由主管登录后访问', async (t
 
   const lead = { headers: authHeader({ id: 1, role: 'lead' }) };
   assert.equal((await request(server, '/api/users', lead)).response.status, 200);
-  assert.equal((await request(server, '/api/pending-registrations', lead)).response.status, 200);
+  const pending = await request(server, '/api/pending-registrations', lead);
+  assert.equal(pending.response.status, 200);
+  assert.equal(pending.body.pending_count, 1);
+  assert.equal(pending.body.data.length, 1);
+  assert.equal(Object.hasOwn(pending.body.data[0], 'password'), false, '审核列表不应返回密码哈希');
 });
 
 test('注册审核通过和拒绝也必须由主管操作', async (t) => {

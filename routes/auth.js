@@ -67,8 +67,9 @@ router.post('/register', async (req, res) => {
 
 // GET /api/pending-registrations
 router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
-  const rows = queryAll("SELECT * FROM pending_registrations WHERE status = 'pending' ORDER BY created DESC");
-  res.json({ data: rows });
+  const rows = queryAll(`SELECT id, phone, name, role, skill, community_id, status, created
+    FROM pending_registrations WHERE status = 'pending' ORDER BY created DESC`);
+  res.json({ data: rows, pending_count: rows.length });
 });
 
 // POST /api/pending-registrations/:id/approve

@@ -107,6 +107,10 @@
       button.addEventListener('click', function () { activate(tab); });
       tabs.appendChild(button);
     });
+    if (typeof window.updatePendingRegistrationBadge === 'function') {
+      var badge = document.querySelector('.nav button[data-page="management"] .pending-registration-badge');
+      window.updatePendingRegistrationBadge(badge ? Number(badge.textContent) : 0);
+    }
     container.appendChild(tabs);
     MANAGEMENT_TABS.forEach(function (tab) {
       var panel = node('section', 'management-panel');
