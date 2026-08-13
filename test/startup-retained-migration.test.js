@@ -58,9 +58,8 @@ test('启动迁移必须同时提供运行时密码，且成功后持久化一�
     persist: async () => { saves += 1; },
   });
   assert.equal(result.applied, true);
-  assert.equal(result.summary.retainedAccounts, 7);
+  assert.equal(result.summary.retainedAccounts, 5);
   assert.ok(result.summary.mockTickets >= 1);
   assert.equal(saves, 1);
-  assert.equal(db.exec("SELECT COUNT(*) FROM users WHERE status = 'active'")[0].values[0][0], 7);
+  assert.equal(db.exec("SELECT COUNT(*) FROM users WHERE status = 'active'")[0].values[0][0], 5);
 });
-

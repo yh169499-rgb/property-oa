@@ -7,9 +7,7 @@ const RETAINED_ACCOUNTS = Object.freeze([
   { phone: '13800000002', name: '张师傅', role: 'worker', position: '维修师傅', birthMonth: '1985-02', joinDate: '2022-04-08', skill: '水暖' },
   { phone: '13800000003', name: '李师傅', role: 'worker', position: '维修师傅', birthMonth: '1987-07', joinDate: '2022-07-18', skill: '电路' },
   { phone: '13800000004', name: '王师傅', role: 'worker', position: '维修师傅', birthMonth: '1990-11', joinDate: '2023-02-10', skill: '电器' },
-  { phone: '13800000005', name: '赵师傅', role: 'worker', position: '维修师傅', birthMonth: '1989-09', joinDate: '2023-06-20', skill: '门窗' },
   { phone: '13800000006', name: '陈管家', role: 'keeper', position: '物业管家', birthMonth: '1992-03', joinDate: '2022-09-12', skill: '客户服务' },
-  { phone: '13800000007', name: '周管家', role: 'keeper', position: '物业管家', birthMonth: '1993-12', joinDate: '2024-01-08', skill: '社区协调' },
 ]);
 
 const MOCK_COMMUNITY = Object.freeze({
@@ -274,7 +272,7 @@ function seedMockCalendar(db, profiles, supervisorUserId, now, nowIso) {
   ordinary.forEach((account, accountIndex) => {
     [-2, -1, 0].forEach((offset, dayIndex) => {
       const workDate = offsetDate(now, offset + (accountIndex % 2));
-      const isLeave = account.phone === '13800000005' && dayIndex === 1;
+      const isLeave = account.phone === '13800000003' && dayIndex === 1;
       const isOvernight = account.phone === '13800000004' && dayIndex === 0;
       if (isLeave) {
         insertMockAssignment(db, {
@@ -384,7 +382,7 @@ function seedMockTickets(db, users, profiles, now) {
         });
       }
     }
-    const workDate = account.phone === '13800000005'
+    const workDate = account.phone === '13800000003'
       ? offsetDate(now, 0)
       : offsetDate(now, accountIndex % 2);
     const assignedAt = isoAtShanghai(workDate, 9 + accountIndex, 0);
