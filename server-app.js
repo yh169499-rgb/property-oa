@@ -17,6 +17,7 @@ const attendanceRoutes = require('./routes/attendance');
 const workforceReportRoutes = require('./routes/workforce-reports');
 const directoryRoutes = require('./routes/directory');
 const { createAiReportRouter } = require('./routes/ai-reports');
+const { createDeploymentRouter } = require('./routes/deployment');
 
 function createServerApp(options = {}) {
   const app = express();
@@ -63,6 +64,7 @@ function createServerApp(options = {}) {
   app.use('/api', attendanceRoutes);
   app.use('/api', workforceReportRoutes);
   app.use('/api', createAiReportRouter(options.aiReport));
+  app.use('/api', createDeploymentRouter(options.deployment));
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'property-oa' });
   });
