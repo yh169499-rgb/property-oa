@@ -9,6 +9,10 @@ function detectTicketAction(before, updates) {
   if (before.status === 'confirm' && updates.status === 'done') return 'approve_complete';
   if (before.status === 'confirm' && updates.status === 'doing' &&
       (updates.rejectReason || updates.reject_reason)) return 'reject';
+  if (before.status === 'wait' && updates.status === 'doing') return 'accept';
+  if (before.status === 'doing' && updates.status === 'wait') return 'return';
+  if ((before.status === 'doing' || before.status === 'pending') &&
+      updates.status === 'confirm') return 'submit';
   if (before.status === 'doing' && updates.status === 'pending') return 'suspend';
   if (before.status === 'pending' && updates.status === 'doing') return 'resume';
   return null;
@@ -23,14 +27,43 @@ function queryRows(db, sql, params) {
   return rows;
 }
 
-function resolveAssigneeUserId(db, workerName) {
-  if (!workerName || !String(workerName).trim()) return null;
+function assigneeError() {
+  const error = new Error('处理人不存在、已离职、重名或不属于当前主管团队');
+  error.status = 409;
+  error.code = 'ASSIGNEE_NOT_ELIGIBLE';
+  return error;
+}
+
+function tableColumns(db, table) {
+  const result = db.exec(`PRAGMA table_info(${table})`);
+  return new Set(result[0] ? result[0].values.map((row) => row[1]) : []);
+}
+
+function resolveAssignee(db, workerName, supervisorUserId) {
+  const displayName = String(workerName || '').trim();
+  if (!displayName || supervisorUserId == null) throw assigneeError();
+  const userStatus = tableColumns(db, 'users').has('status')
+    ? " AND COALESCE(u.status, 'active') = 'active'"
+    : '';
   const rows = queryRows(
     db,
-    'SELECT user_id FROM staff_profiles WHERE name = ?',
-    [String(workerName).trim()]
+    `SELECT sp.id AS staff_profile_id, sp.user_id, sp.name
+       FROM staff_profiles sp
+       JOIN users u ON u.id = sp.user_id
+       JOIN staff_profiles manager ON manager.id = sp.manager_id
+      WHERE TRIM(sp.name) = ?
+        AND COALESCE(sp.employment_status, 'active') = 'active'
+        AND manager.user_id = ?
+        AND LOWER(TRIM(u.role)) IN ('worker', 'keeper')
+        AND sp.user_id IS NOT NULL${userStatus}`,
+    [displayName, supervisorUserId]
   );
-  return rows.length === 1 && rows[0].user_id != null ? rows[0].user_id : null;
+  if (rows.length !== 1) throw assigneeError();
+  return {
+    assigneeUserId: Number(rows[0].user_id),
+    assigneeStaffProfileId: Number(rows[0].staff_profile_id),
+    displayName: String(rows[0].name),
+  };
 }
 
 function recordTicketActivity(db, {
@@ -61,6 +94,6 @@ function recordTicketActivity(db, {
 
 module.exports = {
   detectTicketAction,
-  resolveAssigneeUserId,
+  resolveAssignee,
   recordTicketActivity,
 };

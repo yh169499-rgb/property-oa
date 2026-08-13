@@ -12,7 +12,11 @@
     "test:workforce": "node --test --test-concurrency=1 test/*workforce*.test.js test/organization.test.js test/shifts.test.js test/attendance.test.js test/calendar.test.js test/reporting.test.js",
     "migrate:supabase": "node scripts/migrate-sqlite-to-supabase.js",
     "verify:supabase": "node scripts/verify-supabase-persistence.js",
-    "seed:workforce-demo": "SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js"
+    "seed:workforce-demo": "SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js",
+    "verify:e2e": "node scripts/verify-e2e.js",
+    "retained:dry-run": "node scripts/prepare-retained-test-data.js",
+    "retained:apply": "node scripts/prepare-retained-test-data.js --apply --confirm=RETAINED-TEST-DATA",
+    "retained:verify": "node scripts/verify-retained-test-data.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

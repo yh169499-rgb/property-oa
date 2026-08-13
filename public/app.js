@@ -1,6 +1,6 @@
 /* ============================================================
    物业 OA 工单审批系统 —— 应用逻辑
-   后端 API 模式（飞书多维表格）+ localStorage 人员管理
+   后端 API 模式；服务端数据库是人员、工单和权限的唯一事实来源
    ============================================================ */
 
 const LS_KEY = 'juzi_oa_demo_v1';
@@ -30,11 +30,8 @@ let useApi = true; // 是否使用后端 API
    数据加载与持久化
    ============================================================ */
 async function load() {
-  // 人员仍用 localStorage
-  const raw = localStorage.getItem(LS_KEY);
-  if (raw) {
-    try { var parsed = JSON.parse(raw); state.staff = parsed.staff || JSON.parse(JSON.stringify(SEED.staff)); } catch(e) { state.staff = JSON.parse(JSON.stringify(SEED.staff)); }
-  } else { state.staff = JSON.parse(JSON.stringify(SEED.staff)); }
+  // 不再从浏览器恢复人员/工单明细，避免旧缓存绕过服务端权限；服务端 API 成功后再填充内存状态。
+  state.staff = JSON.parse(JSON.stringify(SEED.staff));
   currentRole = localStorage.getItem(LS_ROLE) || 'eng_lead';
   currentCommunity = localStorage.getItem(LS_COMMUNITY) || 'default';
 
@@ -44,7 +41,7 @@ async function load() {
       var isLead = currentRole === 'eng_lead';
       var myName = currentRole.replace(/^worker_|^pm_keeper_/, '');
       var communityUrl = API_BASE + '/api/communities' + (!isLead && myName ? '?staff_name=' + encodeURIComponent(myName) : '');
-      var cResp = await fetch(communityUrl);
+      var cResp = await fetch(communityUrl, { headers: authHeaders() });
       var cJson = await cResp.json();
       if (cJson.data) state.communities = cJson.data;
     } catch(e) { console.warn('小区列表加载失败', e); state.communities = [{ id: 'default', name: '默认小区', address: '' }]; }
@@ -54,7 +51,7 @@ async function load() {
   if (useApi) {
     // 加载人员状态
     try {
-      var stResp = await fetch(API_BASE + '/api/staff/status');
+      var stResp = await fetch(API_BASE + '/api/staff/status', { headers: authHeaders() });
       var stJson = await stResp.json();
       if (stJson.data) {
         stJson.data.forEach(function(r) {
@@ -64,22 +61,24 @@ async function load() {
       }
     } catch(e) { /* ignore */ }
     try {
-      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity));
+      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
       if (json.data) {
         state.tickets = json.data.filter(t => t.id && t.type);
         saveLocal();
         return;
       }
-    } catch(e) { console.warn('API 不可用，回退到本地数据', e); }
+    } catch(e) { console.warn('API 不可用，暂不加载业务数据', e); }
   }
-  // 回退：使用本地数据
-  var localRaw = localStorage.getItem(LS_KEY);
-  if (localRaw) { try { state.tickets = JSON.parse(localRaw).tickets || []; } catch(e) { state.tickets = []; } }
-  else { state.tickets = []; }
+  // API 不可用时只保留空状态，不能使用可能过期或越权的浏览器工单缓存。
+  state.tickets = [];
+  saveLocal();
 }
 
-function saveLocal() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function saveLocal() {
+  // 仅保存非敏感 UI 偏好；人员、工单、手机号和权限全部由服务端持久化。
+  localStorage.setItem(LS_KEY, JSON.stringify({ version: 2, preferences: { community: currentCommunity } }));
+}
 function save() { saveLocal(); }
 
 async function apiPatch(recordId, updates) {
@@ -218,6 +217,9 @@ function roleWorkerName() {
   if (currentRole.startsWith('worker_')) return currentRole.replace('worker_', '');
   return null;
 }
+function roleStaffName() {
+  return roleWorkerName() || (currentRole.startsWith('pm_keeper_') ? currentRole.replace('pm_keeper_', '') : null);
+}
 function applyRoleView() {
   var isWorker = currentRole.startsWith('worker_');
   var isKeeper = currentRole.startsWith('pm_keeper_');
@@ -225,8 +227,10 @@ function applyRoleView() {
   $$('.nav button').forEach(b => {
     if (b.dataset.page === 'management') b.style.display = (isWorker || isKeeper) ? 'none' : '';
     if (b.dataset.page === 'dashboard') b.style.display = '';
-    if (b.dataset.page === 'repair') b.style.display = isKeeper ? 'none' : '';
-    if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = isWorker ? 'none' : '';
+    // 维修师傅和物业管家都需要处理自己被派发的报修、投诉、帮助工单；服务端仍按账号身份
+    // 过滤数据，因此这里只控制入口显示，不承担权限判断。
+    if (b.dataset.page === 'repair') b.style.display = '';
+    if (b.dataset.page === 'complaint' || b.dataset.page === 'help') b.style.display = '';
   });
   // 重新加载小区列表（按角色权限过滤）
   reloadCommunities();
@@ -242,7 +246,7 @@ async function reloadCommunities() {
     var isLead = currentRole === 'eng_lead';
     var myName = currentRole.replace(/^worker_|^pm_keeper_/, '');
     var url = API_BASE + '/api/communities' + (!isLead && myName ? '?staff_name=' + encodeURIComponent(myName) : '');
-    var resp = await fetch(url);
+    var resp = await fetch(url, { headers: authHeaders() });
     var json = await resp.json();
     if (json.data) state.communities = json.data;
   } catch(e) { /* keep existing */ }
@@ -255,7 +259,7 @@ async function reloadCommunities() {
 let openTicketId = null;
 
 function loadDrawerPhotos(ticketId) {
-  fetch(API_BASE + '/api/tickets/' + ticketId + '/photos')
+  fetch(API_BASE + '/api/tickets/' + ticketId + '/photos', { headers: authHeaders() })
     .then(function(r) { return r.json(); })
     .then(function(json) {
       var container = $('#drawer-photos');
@@ -312,6 +316,7 @@ function uploadPhoto(id) {
     toast('正在上传 ' + input.files.length + ' 张照片...');
     fetch(API_BASE + '/api/tickets/' + id + '/photos', {
       method: 'POST',
+      headers: authHeaders(),
       body: formData
     }).then(r => r.json()).then(d => {
       if (d.success) {
@@ -390,6 +395,10 @@ function saveStaff() {
     dutyEnd: $('#f-duty-end').value || '18:00',
     joinDate: $('#f-join-date').value || '',
   };
+  if (!editingStaffId && data.role === '主管') {
+    toast('主管最高权限账号由系统初始化，其他人员请提交注册申请');
+    return;
+  }
 
   // 状态校验：编辑已有人员时检查工单状态
   if (editingStaffId) {
@@ -434,11 +443,21 @@ function saveStaff() {
   }
   save(); renderStaff(); closeStaffModal();
 }
-function deleteStaff(id) {
+async function deleteStaff(id) {
   const s = state.staff.find(x => x.id === id);
-  if (confirm(`确定删除「${s.name}」？`)) {
+  if (!s || !confirm(`确定删除「${s.name}」？`)) return;
+  try {
+    const users = await fetch(API_BASE + '/api/users', { headers: authHeaders(true) }).then(r => r.json());
+    const account = (users.data || []).find(u => String(u.phone) === String(s.phone));
+    if (!account) { toast('未找到对应登录账号，未删除人员'); return; }
+    const result = await fetch(API_BASE + '/api/users/' + encodeURIComponent(account.id), {
+      method: 'DELETE', headers: authHeaders(true),
+    }).then(r => r.json());
+    if (!result.success) { toast(result.error || '删除失败'); return; }
     state.staff = state.staff.filter(x => x.id !== id);
-    save(); renderStaff(); toast('已删除');
+    save(); renderStaff(); toast('人员已停用，登录权限已撤销');
+  } catch (error) {
+    toast('删除失败，请检查网络后重试');
   }
 }
 
@@ -482,7 +501,7 @@ function updateLogo() {
 async function reloadTickets() {
   if (useApi) {
     try {
-      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity));
+      var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
       if (json.data) {
         state.tickets = json.data.filter(function(t) { return t.id && t.type; });
@@ -753,9 +772,8 @@ function renderTickets(type) {
   var tbody = $(`#tbody-${type}`); if (!tbody) return;
   var rows = state.tickets.filter(t => t.type === type && t.status !== 'done');
   // 师傅/管家视图：只看自己负责的工单
-  var myName = roleWorkerName();
-  if (currentRole.startsWith('worker_') && myName) rows = rows.filter(t => t.worker === myName);
-  if (currentRole.startsWith('pm_keeper_')) { var keeperName = currentRole.replace('pm_keeper_',''); rows = rows.filter(t => t.worker === keeperName); }
+  var myName = roleStaffName();
+  if ((currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_')) && myName) rows = rows.filter(t => t.worker === myName);
   var fs=$(`#filter-status-${type}`).value, fc=$(`#filter-cat-${type}`).value, fp=$(`#filter-priority-${type}`).value, sort=$(`#sort-${type}`).value;
   if(fs) rows=rows.filter(t=>t.status===fs); if(fc) rows=rows.filter(t=>t.cat===fc); if(fp) rows=rows.filter(t=>t.priority===fp);
   rows.sort((a,b) => sort==='newest' ? new Date(b.created)-new Date(a.created) : sort==='oldest' ? new Date(a.created)-new Date(b.created) : (PRIORITY_ORDER[b.priority]-PRIORITY_ORDER[a.priority] || new Date(a.created)-new Date(b.created)));
@@ -795,7 +813,9 @@ function openDrawer(id) {
   loadDrawerPhotos(id);
 }
 function buildActions(t) {
-  var repair=t.type==='repair', keeper=!repair, mine=repair&&currentRole.startsWith('worker_')&&t.worker===roleWorkerName();
+  var repair=t.type==='repair', keeper=!repair;
+  var employee = currentRole.startsWith('worker_') || currentRole.startsWith('pm_keeper_');
+  var mine = employee && t.worker === (roleWorkerName() || currentRole.replace('pm_keeper_', ''));
   var noteBtn = `<button class="btn sm ghost" onclick="addTicketNote('${t.id}')">📝 备注</button>`;
   var urgeBtn = (isLead(t) && t.status === 'pending') ? `<button class="btn sm" style="background:var(--warning);color:#fff" onclick="urgeTicket('${t.id}')">⚡ 催办</button>` : '';
 
@@ -808,7 +828,6 @@ function buildActions(t) {
   }
   if(t.status==='doing'){
     if(mine) return `<button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
-    if(keeper&&currentRole.startsWith('pm_keeper_')) return `<button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
     return hint(`已指派给 ${esc(t.worker||'处理人')}。`) + ` ${urgeBtn} ${noteBtn}`;
   }
   if(t.status==='pending'){
@@ -878,10 +897,10 @@ function checkAssignConflicts(workerName, newTicket, estHours){
   });
   return results;
 }
-function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
+function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
 function confirmDone(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可确认待审核工单');return;}t.status='done';t.finished=new Date().toISOString();pushStep(t,'主管确认完成',roleObj().name);save();apiPatch(t.id,{status:'done',finished:t.finished});afterAction(id,'工单已确认完成');}
 function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回给原负责人，不允许转单');}
-function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var allowed=t.type==='repair'?(t.worker===roleWorkerName()):(currentRole.startsWith('pm_keeper_'));if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
+function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
 function afterAction(id,msg){toast(msg);enhanceState();renderAll();renderDashboard();if(id)openDrawer(id);}
 
 /* ============================================================
@@ -1030,7 +1049,7 @@ function renderAll(){['repair','complaint','help'].forEach(renderTickets);render
 function updateNavBadges() {
   var counts = { repair: 0, complaint: 0, help: 0 };
   var isLead = currentRole === 'eng_lead';
-  var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
+  var myName = roleStaffName();
   state.tickets.forEach(function(t) {
     if (t.status !== 'wait' || counts[t.type] === undefined) return;
     if (isLead) { counts[t.type]++; }
@@ -1054,9 +1073,8 @@ function renderDone(){
   var tbody=$('#tbody-done');if(!tbody)return;
   var rows=state.tickets.filter(t=>t.status==='done');
   // 师傅/管家视图：只看自己已完成的工单
-  var myName=roleWorkerName();
-  if(currentRole.startsWith('worker_')&&myName) rows=rows.filter(t=>t.worker===myName);
-  if(currentRole.startsWith('pm_keeper_')){var keeperName=currentRole.replace('pm_keeper_','');rows=rows.filter(t=>t.worker===keeperName);}
+  var myName=roleStaffName();
+  if((currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&myName) rows=rows.filter(t=>t.worker===myName);
   // 搜索工单号
   var search=($('#search-done')||{}).value;
   if(search)rows=rows.filter(t=>t.id.toLowerCase().includes(search.toLowerCase()));
@@ -1154,9 +1172,10 @@ function renderAdminProfile() {
 function loadPendingRegistrations() {
   var listEl = $('#pending-reg-list');
   var countEl = $('#pending-count');
-  if (!listEl) return;
   fetch(API_BASE + '/api/pending-registrations', { headers: authHeaders() }).then(function(r) { return r.json(); }).then(function(json) {
     var data = json.data || [];
+    updatePendingRegistrationBadge(Number(json.pending_count == null ? data.length : json.pending_count));
+    if (!listEl) return;
     if (countEl) countEl.textContent = data.length ? '(' + data.length + '条待审核)' : '';
     if (!data.length) {
       listEl.innerHTML = '<span style="color:var(--muted)">暂无待审核申请</span>';
@@ -1179,7 +1198,31 @@ function loadPendingRegistrations() {
         '</div>';
     }).join('');
   }).catch(function() {
-    listEl.innerHTML = '<span style="color:var(--muted)">加载失败</span>';
+    if (listEl) listEl.innerHTML = '<span style="color:var(--muted)">加载失败</span>';
+  });
+}
+
+function updatePendingRegistrationBadge(count) {
+  var pending = Math.max(0, Number(count) || 0);
+  [
+    document.querySelector('.nav button[data-page="management"]'),
+    document.querySelector('#management-workspace .management-tab[data-tab="registrations"]')
+  ].forEach(function(target) {
+    if (!target) return;
+    var badge = target.querySelector('.pending-registration-badge');
+    if (!pending) {
+      if (badge) badge.remove();
+      target.removeAttribute('aria-label');
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-badge pending-registration-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      target.appendChild(badge);
+    }
+    badge.textContent = pending > 99 ? '99+' : String(pending);
+    target.setAttribute('aria-label', '管理工作台，' + pending + '条注册申请待审核');
   });
 }
 
@@ -1227,7 +1270,7 @@ window.onload=async function(){
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };
 
-function startAutoSync(){setInterval(async function(){try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity));var json=await resp.json();if(json.data&&json.data.length){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
+function startAutoSync(){setInterval(async function(){if(currentRole==='eng_lead')loadPendingRegistrations();try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
 
 /* ============================================================
    师傅日程 · 时间轴排班与冲突检测
@@ -1262,7 +1305,7 @@ function initSchedule() {
     sel.style.display = '';
   } else {
     // 非主管只能看自己
-    var myName = roleWorkerName() || currentRole.replace('pm_keeper_', '');
+    var myName = roleStaffName();
     sel.innerHTML = `<option value="${esc(myName)}">我的</option>`;
     sel.value = myName;
     sel.disabled = true;
@@ -1498,12 +1541,16 @@ function doResetPassword() {
   var pwd2 = $('#reset-password2').value;
   $('#reset-error').textContent = '';
   $('#reset-success').textContent = '';
+  if (!API || !API.token) {
+    $('#reset-error').textContent = '忘记密码请联系主管重置，登录后可修改自己的密码';
+    return;
+  }
   if (!phone || !/^1[3-9]\d{9}$/.test(phone)) { $('#reset-error').textContent = '请输入正确的11位手机号'; return; }
   if (!pwd || pwd.length < 4) { $('#reset-error').textContent = '新密码至少4位'; return; }
   if (pwd !== pwd2) { $('#reset-error').textContent = '两次输入密码不一致'; return; }
   fetch(API_BASE + '/api/reset-password', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(true),
     body: JSON.stringify({ phone: phone, newPassword: pwd })
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.success) {
@@ -1551,6 +1598,8 @@ function enterApp(user){
   } else if(user.role==='keeper'){
     currentRole='pm_keeper_'+user.name;
   }
+  if(currentRole==='eng_lead')loadPendingRegistrations();
+  else updatePendingRegistrationBadge(0);
   localStorage.setItem('juzi_oa_role_v1',currentRole);
   var sel=$('#roleSelect');
   if(sel){

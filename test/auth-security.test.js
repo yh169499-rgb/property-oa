@@ -56,7 +56,11 @@ test('人员与注册审核管理接口必须由主管登录后访问', async (t
 
   const lead = { headers: authHeader({ id: 1, role: 'lead' }) };
   assert.equal((await request(server, '/api/users', lead)).response.status, 200);
-  assert.equal((await request(server, '/api/pending-registrations', lead)).response.status, 200);
+  const pending = await request(server, '/api/pending-registrations', lead);
+  assert.equal(pending.response.status, 200);
+  assert.equal(pending.body.pending_count, 1);
+  assert.equal(pending.body.data.length, 1);
+  assert.equal(Object.hasOwn(pending.body.data[0], 'password'), false, '审核列表不应返回密码哈希');
 });
 
 test('注册审核通过和拒绝也必须由主管操作', async (t) => {
@@ -70,4 +74,13 @@ test('注册审核通过和拒绝也必须由主管操作', async (t) => {
       `${action} 普通人员应拒绝`
     );
   }
+});
+
+test('users 表存在时，数据库中已删除账号的旧 token 必须返回 401', async (t) => {
+  const { server } = await fixture(t);
+  const response = await request(server, '/api/users', {
+    headers: authHeader({ id: 999, role: '主管', name: '已删除主管' }),
+  });
+  assert.equal(response.response.status, 401);
+  assert.equal(response.body.code, 'AUTH_REQUIRED');
 });

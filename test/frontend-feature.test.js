@@ -23,6 +23,11 @@ test('员工页面从同小区通讯录读取手机号', () => {
   assert.match(myPage + workerHome, /通讯录|同事/);
 });
 
+test('维修师傅和物业管家都保留报修、投诉、帮助三个工单入口', () => {
+  assert.match(app, /b\.dataset\.page === 'complaint' \|\| b\.dataset\.page === 'help'/);
+  assert.doesNotMatch(app, /b\.dataset\.page === 'repair'[^\n]*isKeeper \? 'none'/);
+});
+
 test('报告展示服务端绩效依据且不再展示考勤', () => {
   assert.match(report, /performance/);
   assert.match(report, /staff-report-performance/);

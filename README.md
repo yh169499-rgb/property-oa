@@ -119,6 +119,8 @@ server/
 
 ## API 接口
 
+完整方法、权限、请求范围和错误码见：[API 文档](docs/API.md)。人员停用、数据持久化、附件访问和生产配置审查见：[安全审查与运行手册](docs/SECURITY-AUDIT.md)。
+
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
 | POST | /api/login | 公开 | 登录（返回JWT） |
@@ -213,6 +215,20 @@ node scripts/migrate-sqlite-to-supabase.js --source=/absolute/path/to/data.db --
 迁移完成并确认远程对象存在后，将 `SUPABASE_SYNC_REQUIRED` 改为 `true`，这样生产服务找不到远程快照时会拒绝启动，避免再次悄悄创建空数据库。可通过主管账号访问 `/api/persistence/status` 查看最后同步时间和错误。
 
 迁移后可运行 `npm run verify:supabase`，比较本地副本与远程快照的 SHA-256、表集合和各表记录数。
+
+### 固定测试账号与全流程数据准备
+
+固定测试账号迁移工具默认只预演，不会修改数据库。它会把指定的 7 个测试账号规范为启用状态，将其他账号停用并撤销当前人员关系，同时保留历史工单和操作日志；随后写入带 `MOCK-E2E` 标记的组织、小区、排班、请假、工单、活动和绩效样本。工具不会生成新的考勤记录。
+
+测试密码必须在运行时通过 `RETAINED_TEST_PASSWORD` 提供，不要写入仓库、Render 配置文件、命令历史或运维日志。下面的 `<运行时输入>` 仅为占位符：
+
+```bash
+RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:dry-run -- --source=/absolute/path/to/data.db
+RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:apply -- --source=/absolute/path/to/data.db
+RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:verify -- --source=/absolute/path/to/data.db
+```
+
+生产执行前必须先冻结人工写入，并分别备份 Render `/var/data/data.db` 与 Supabase `production/data.db`。只能对下载后的候选副本执行 dry-run、apply 和 verify；验证结果为 `ok: true` 后才能原子替换 Render 数据库并重新同步 Supabase。执行期间保留两份原始备份作为回滚点，直到 7 个账号登录、权限、日历、工单和报告全部验收完成。
 
 需要生成完整流程演示账号时，在 Render Shell 或一次性本地命令中临时设置密码（不要写入 GitHub 或长期环境变量）：
 

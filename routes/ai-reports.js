@@ -5,7 +5,7 @@ const defaultConfig = require('../config');
 const { requireAuth } = require('../middleware/auth');
 const { descendantIds } = require('../services/organization');
 const { getStaffReport, getAllStaffReport } = require('../services/reporting');
-const { isManagerRole, isGlobalManagerRole } = require('../services/roles');
+const { isManagerRole, isGlobalManagerRole, isSupervisorUser } = require('../services/roles');
 const aiReportService = require('../services/ai-report');
 
 const SAFE_CODES = new Set([
@@ -45,7 +45,7 @@ function scopedTarget(db, user, requestedId) {
     error.code = 'PROFILE_NOT_FOUND';
     throw error;
   }
-  const allowed = isGlobalManagerRole(user.role)
+  const allowed = isSupervisorUser(user)
     || Number(own.id) === targetId
     || (isManagerRole(user.role)
       && descendantIds(profiles, own.id).map(Number).includes(targetId));
@@ -69,7 +69,7 @@ function assertCommunityScope(db, user, target, communityId) {
       throw error;
     }
   }
-  if (isGlobalManagerRole(user.role)) return;
+  if (isSupervisorUser(user)) return;
   const member = tableExists(db, 'community_memberships') && rows(db, `
     SELECT 1 present FROM community_memberships
      WHERE community_id = ? AND staff_profile_id = ? LIMIT 1`,
@@ -122,7 +122,7 @@ function createAiReportRouter(options = {}) {
 
   router.post('/reports/staff/all/ai-analysis', requireAuth, limiter, async (req, res) => {
     try {
-      if (!isGlobalManagerRole(req.user.role)) {
+      if (!isSupervisorUser(req.user)) {
         const error = new Error('无权分析全部人员报告');
         error.status = 403;
         error.code = 'REPORT_SCOPE_FORBIDDEN';

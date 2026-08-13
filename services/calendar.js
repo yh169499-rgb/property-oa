@@ -1,4 +1,5 @@
 const { descendantIds } = require('./organization');
+const { isManagerRole } = require('./roles');
 
 function queryAll(db, sql, params = []) {
   const statement = db.prepare(sql);
@@ -94,11 +95,28 @@ function buildDayCalendar(db, {
 }) {
   if (!isValidDate(date)) throw calendarError('date 必须是真实的 YYYY-MM-DD 日期', 'INVALID_DATE');
 
-  const profiles = queryAll(
+  const activeProfiles = queryAll(
     db,
     `SELECT id, user_id, name, position, manager_id, employment_status
-     FROM staff_profiles WHERE employment_status = 'active' ORDER BY id`
+     FROM staff_profiles WHERE COALESCE(employment_status, 'active') = 'active' ORDER BY id`
   );
+  // 已离职人员不再出现在未来排班，但历史日期仍需能追溯其工单日程。
+  const departedProfiles = queryAll(
+    db,
+    `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status
+       FROM staff_profiles sp
+       JOIN tickets t ON t.assignee_staff_profile_id = sp.id
+      WHERE COALESCE(sp.employment_status, 'active') <> 'active'
+        AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) >= julianday(?)
+        AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) < julianday(?)
+      ORDER BY sp.id`,
+    [shanghaiDayRange(date).from, shanghaiDayRange(date).toExclusive]
+  );
+  const profiles = [...activeProfiles, ...departedProfiles];
+  const viewer = viewerUserId === undefined || viewerUserId === null
+    ? null
+    : queryAll(db, 'SELECT role FROM users WHERE id = ?', [viewerUserId])[0] || null;
+  const allowLegacyNameFallback = Boolean(viewer && isManagerRole(viewer.role));
   let selected = profiles;
   if (staffId !== undefined && staffId !== null && staffId !== '') {
     selected = profiles.filter((profile) => Number(profile.id) === Number(staffId));
@@ -141,7 +159,8 @@ function buildDayCalendar(db, {
     return {
       id: Number(profile.id),
       userId: profile.user_id === null ? null : Number(profile.user_id),
-      name: profile.name,
+      name: profile.employment_status && profile.employment_status !== 'active'
+        ? `${profile.name || ''}（已离职）` : profile.name,
       position: profile.position,
       managerId: profile.manager_id === null ? null : Number(profile.manager_id),
       employmentStatus: profile.employment_status,
@@ -171,7 +190,7 @@ function buildDayCalendar(db, {
     const identityClauses = [];
     const identityParams = [];
     const userIds = selected.filter((profile) => profile.user_id !== null).map((profile) => profile.user_id);
-    const names = [...uniqueProfileByName.keys()];
+    const names = allowLegacyNameFallback ? [...uniqueProfileByName.keys()] : [];
     if (userIds.length) {
       identityClauses.push(`assignee_user_id IN (${userIds.map(() => '?').join(', ')})`);
       identityParams.push(...userIds);
@@ -209,7 +228,7 @@ function buildDayCalendar(db, {
   const userIds = selected
     .filter((profile) => profile.user_id !== null)
     .map((profile) => profile.user_id);
-  const uniqueNames = [...uniqueProfileByName.keys()];
+  const uniqueNames = allowLegacyNameFallback ? [...uniqueProfileByName.keys()] : [];
   const aggregateQueries = [];
   const aggregateParams = [];
   const averageExpression = `(julianday(finished)

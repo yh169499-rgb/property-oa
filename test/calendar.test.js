@@ -227,6 +227,40 @@ test('ordinary user is forced to own staff profile despite requested filters', a
   assert.equal(body.people[0].shift.templateName, '');
 });
 
+test('ordinary user calendar never falls back to worker name for unassigned tickets', async (t) => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets
+      (id, worker, assignee_user_id, assigned_at, cat, status, created,
+       estimated_hours, community_id)
+    VALUES
+      ('UNASSIGNED-UNIQUE', '员工甲', NULL, '2026-07-30T12:00:00+08:00', '未分配',
+       'wait', '2026-07-30T11:30:00+08:00', 1, 'c1')
+  `);
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+
+  const uniqueName = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30`,
+    { headers: authHeader({ id: 3, role: 'worker', name: '员工甲' }) }
+  );
+  assert.equal(uniqueName.status, 200);
+  assert.equal(
+    (await uniqueName.json()).events.some((event) => event.ticketId === 'UNASSIGNED-UNIQUE'),
+    false
+  );
+
+  const duplicateName = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30&community_id=duplicate`,
+    { headers: authHeader({ id: 7, role: 'worker', name: '重名员工' }) }
+  );
+  assert.equal(duplicateName.status, 200);
+  assert.deepEqual(
+    (await duplicateName.json()).events.map((event) => event.ticketId),
+    ['DUP-NOW']
+  );
+});
+
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
