@@ -694,6 +694,17 @@ tbody tr:hover { background: #f8f7f6; box-shadow: inset 3px 0 0 var(--primary); 
 
 /* ========== 师傅工作台 ========== */
 #worker-home-root { display:grid; gap:22px; }
+.worker-ticket-links { padding:18px; }
+.worker-ticket-links h3 { margin-bottom:12px; }
+.worker-ticket-link-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.worker-ticket-link {
+  display:flex; flex-direction:column; align-items:flex-start; gap:5px;
+  padding:16px; border:1px solid #cfe0f7; border-radius:12px; background:#f7fbff;
+  color:var(--text); text-align:left; cursor:pointer; transition:all var(--transition);
+}
+.worker-ticket-link:hover { border-color:#2f80ff; background:#eef6ff; transform:translateY(-1px); }
+.worker-ticket-link strong { color:#14579c; font-size:15px; }
+.worker-ticket-link span { color:var(--text-2); font-size:12px; }
 .worker-hero {
   display:flex; align-items:center; justify-content:space-between; gap:20px;
   min-height:160px; padding:30px 36px; border-radius:24px; color:#fff;
@@ -897,6 +908,7 @@ tbody tr:hover { background: #f8f7f6; box-shadow: inset 3px 0 0 var(--primary); 
 
 /* ========== 移动端适配（normalize.css 增强） ========== */
 @media (max-width: 768px) {
+  .worker-ticket-link-grid { grid-template-columns:1fr; }
   .topbar {
     height: auto;
     min-height: 48px;

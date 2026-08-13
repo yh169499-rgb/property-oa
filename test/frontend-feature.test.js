@@ -26,6 +26,14 @@ test('员工页面从同小区通讯录读取手机号', () => {
 test('维修师傅和物业管家都保留报修、投诉、帮助三个工单入口', () => {
   assert.match(app, /b\.dataset\.page === 'complaint' \|\| b\.dataset\.page === 'help'/);
   assert.doesNotMatch(app, /b\.dataset\.page === 'repair'[^\n]*isKeeper \? 'none'/);
+  assert.match(workerHome, /我的工单/);
+  assert.match(workerHome, /报修工单/);
+  assert.match(workerHome, /投诉工单/);
+  assert.match(workerHome, /帮助工单/);
+  assert.match(workerHome, /page: 'repair'/);
+  assert.match(workerHome, /page: 'complaint'/);
+  assert.match(workerHome, /page: 'help'/);
+  assert.match(workerHome, /navTo\(entry\.page\)/);
 });
 
 test('报告展示服务端绩效依据且不再展示考勤', () => {
