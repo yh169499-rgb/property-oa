@@ -28,8 +28,8 @@ function inspectDatabase(db, password) {
   const phones = RETAINED_ACCOUNTS.map(account => account.phone);
   const expected = new Map(RETAINED_ACCOUNTS.map(account => [account.phone, account]));
   const activeUsers = rows(db, "SELECT id, phone, name, role, password FROM users WHERE status = 'active' ORDER BY phone");
-  if (activeUsers.length !== 7 || activeUsers.some(user => !expected.has(String(user.phone)))) {
-    problem(problems, 'UNEXPECTED_ACTIVE_ACCOUNT', 'active 账号必须恰好为固定 7 个');
+  if (activeUsers.length !== 5 || activeUsers.some(user => !expected.has(String(user.phone)))) {
+    problem(problems, 'UNEXPECTED_ACTIVE_ACCOUNT', 'active 账号必须恰好为固定 5 个');
   }
   let loginVerified = 0;
   for (const account of RETAINED_ACCOUNTS) {
@@ -51,22 +51,22 @@ function inspectDatabase(db, password) {
   const profiles = rows(db, `SELECT u.phone, sp.id, sp.manager_id, sp.employment_status
     FROM users u JOIN staff_profiles sp ON sp.user_id = u.id
     WHERE u.phone IN (${phones.map(() => '?').join(', ')}) ORDER BY u.phone`, phones);
-  if (profiles.length !== 7 || profiles.some(profile => profile.employment_status !== 'active')) {
+  if (profiles.length !== 5 || profiles.some(profile => profile.employment_status !== 'active')) {
     problem(problems, 'PROFILE_SCOPE_MISMATCH', '保留账号的 active 档案不完整');
   }
   const activeProfiles = Number(one(db,
     "SELECT COUNT(*) AS total FROM staff_profiles WHERE COALESCE(employment_status, 'active') = 'active'"
   ).total);
-  if (activeProfiles !== 7) {
-    problem(problems, 'UNEXPECTED_ACTIVE_PROFILE', 'active 人员档案必须恰好为固定 7 人');
+  if (activeProfiles !== 5) {
+    problem(problems, 'UNEXPECTED_ACTIVE_PROFILE', 'active 人员档案必须恰好为固定 5 人');
   }
   const supervisor = profiles.find(profile => profile.phone === '13800000001');
   const managedBySupervisor = supervisor
     ? profiles.filter(profile => profile.phone !== '13800000001'
       && Number(profile.manager_id) === Number(supervisor.id)).length
     : 0;
-  if (!supervisor || supervisor.manager_id != null || managedBySupervisor !== 6) {
-    problem(problems, 'ORGANIZATION_MISMATCH', '主管层级不是一个主管管理六名员工');
+  if (!supervisor || supervisor.manager_id != null || managedBySupervisor !== 4) {
+    problem(problems, 'ORGANIZATION_MISMATCH', '主管层级不是一个主管管理四名员工');
   }
   const defaultMemberships = Number(one(db, `SELECT COUNT(*) AS total
     FROM community_memberships cm JOIN staff_profiles sp ON sp.id = cm.staff_profile_id
@@ -74,7 +74,7 @@ function inspectDatabase(db, password) {
     WHERE cm.community_id = 'default' AND u.phone IN (${phones.map(() => '?').join(', ')})`, phones).total);
   const mockMemberships = Number(one(db, `SELECT COUNT(*) AS total
     FROM community_memberships WHERE community_id = ?`, [MOCK_COMMUNITY.id]).total);
-  if (defaultMemberships !== 7 || mockMemberships < 3) {
+  if (defaultMemberships !== 5 || mockMemberships < 3) {
     problem(problems, 'COMMUNITY_SCOPE_MISMATCH', '固定账号的小区成员关系不完整');
   }
 
@@ -114,11 +114,11 @@ function inspectDatabase(db, password) {
     SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS completed,
     SUM(CASE WHEN t.status <> 'done' THEN 1 ELSE 0 END) AS current_count
     FROM users u LEFT JOIN tickets t ON t.assignee_user_id = u.id AND t.id LIKE 'MOCK-E2E-%'
-    WHERE u.phone BETWEEN '13800000002' AND '13800000007'
+    WHERE u.phone IN ('13800000002', '13800000003', '13800000004', '13800000006')
     GROUP BY u.phone ORDER BY u.phone`);
   const completedPerPerson = completedRows.map(row => Number(row.completed || 0));
   const currentPerPerson = completedRows.map(row => Number(row.current_count || 0));
-  if (completedRows.length !== 6 || completedPerPerson.some(count => count < 5)
+  if (completedRows.length !== 4 || completedPerPerson.some(count => count < 5)
       || currentPerPerson.some(count => count < 1)) {
     problem(problems, 'INSUFFICIENT_PERFORMANCE_SAMPLE', '每名普通测试人员必须有至少五张完成工单和一张当前工单');
   }
@@ -166,7 +166,7 @@ function inspectDatabase(db, password) {
   } catch (_) {
     problem(problems, 'REPORT_GENERATION_FAILED', '服务端全员报告生成失败');
   }
-  if (reporting.activeStaff !== 7 || reporting.scoredStaff !== 6) {
+  if (reporting.activeStaff !== 5 || reporting.scoredStaff !== 4) {
     problem(problems, 'REPORT_SAMPLE_MISSING', '全员报告或普通人员绩效样本不完整');
   }
 
