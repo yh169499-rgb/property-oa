@@ -218,6 +218,19 @@ node scripts/migrate-sqlite-to-supabase.js --source=/absolute/path/to/data.db --
 
 ### 固定测试账号与全流程数据准备
 
+### 独立空白主管账号
+
+系统支持多个主管账号，每个主管最多管理 4 名在职人员。新增独立主管不会修改既有测试账号或 mock 业务数据，也不会自动绑定人员。生产环境需要在 Render 环境变量中临时配置：
+
+```text
+APPLY_STANDALONE_MANAGER_ON_START=true
+STANDALONE_MANAGER_PHONE=13222514178
+STANDALONE_MANAGER_NAME=发财
+STANDALONE_MANAGER_PASSWORD=<仅填登录密码，不提交到 Git>
+```
+
+保存并部署一次后，启动日志会输出不含密码的迁移摘要；账号已存在时迁移保持幂等。完成创建后可将 `APPLY_STANDALONE_MANAGER_ON_START` 改回 `false`，避免后续部署重复执行。手机号若已属于普通账号，迁移会拒绝提权并保持原账号不变。
+
 固定测试账号迁移工具默认只预演，不会修改数据库。它会把指定的 7 个测试账号规范为启用状态，将其他账号停用并撤销当前人员关系，同时保留历史工单和操作日志；随后写入带 `MOCK-E2E` 标记的组织、小区、排班、请假、工单、活动和绩效样本。工具不会生成新的考勤记录。
 
 测试密码必须在运行时通过 `RETAINED_TEST_PASSWORD` 提供，不要写入仓库、Render 配置文件、命令历史或运维日志。下面的 `<运行时输入>` 仅为占位符：

@@ -37,6 +37,15 @@ services:
         value: "false"
       - key: SEED_WORKFORCE_DEMO
         value: "false"
+      # 独立空白主管迁移默认关闭；填好密码后再在 Render 中改为 true 并手动部署。
+      - key: APPLY_STANDALONE_MANAGER_ON_START
+        value: "false"
+      - key: STANDALONE_MANAGER_PHONE
+        value: "13222514178"
+      - key: STANDALONE_MANAGER_NAME
+        value: 发财
+      - key: STANDALONE_MANAGER_PASSWORD
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
