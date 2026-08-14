@@ -21,11 +21,14 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "2.8.5",
-    "express": "4.21.2",
+    "express": "^4.22.2",
     "express-rate-limit": "^8.6.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "node-fetch": "2.7.0",
     "sql.js": "^1.11.0"
+  },
+  "overrides": {
+    "path-to-regexp": "0.1.13"
   }
 }

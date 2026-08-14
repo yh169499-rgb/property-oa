@@ -7,6 +7,7 @@ const { createServerApp } = require('./server-app');
 
 // 启动
 async function start() {
+  config.validateSecurityConfig();
   await initDB();
   const { runStartupRetainedMigration } = require('./services/startup-retained-migration');
   const retainedMigration = await runStartupRetainedMigration({

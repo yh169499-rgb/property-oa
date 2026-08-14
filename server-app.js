@@ -20,6 +20,14 @@ const { createAiReportRouter } = require('./routes/ai-reports');
 
 function createServerApp(options = {}) {
   const app = express();
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
   const configuredOrigins = String(process.env.CORS_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
   app.use(cors({
     // 同源部署不需要跨域；只有显式配置的前端域名才允许 CORS。
@@ -68,6 +76,18 @@ function createServerApp(options = {}) {
   });
   app.get('/api/persistence/status', requireAuth, requireAdmin, (req, res) => {
     res.json({ data: getPersistenceStatus() });
+  });
+
+  // 统一处理上传器和其他未捕获错误，避免 Express 在开发模式返回堆栈和文件路径。
+  app.use((error, _req, res, next) => {
+    if (res.headersSent) return next(error);
+    if (error && error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: '上传文件过大', code: 'UPLOAD_TOO_LARGE' });
+    }
+    if (error && /仅支持图片或 PDF|工单编号不合法/.test(String(error.message || ''))) {
+      return res.status(400).json({ error: error.message, code: 'INVALID_UPLOAD' });
+    }
+    return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
   });
 
   return app;

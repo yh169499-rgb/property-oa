@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const database = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { isSupervisorUser } = require('../services/roles');
 const {
   resolveShiftWindow,
   validateAssignment,
@@ -125,7 +126,18 @@ router.delete('/shift-templates/:id', requireAuth, requireAdmin, async (req, res
 
 router.get('/shifts', requireAuth, (req, res) => {
   try {
-    res.json({ data: listAssignments(database.getDB(), req.query) });
+    const filters = { ...req.query };
+    if (!isSupervisorUser(req.user)) {
+      const own = one(
+        'SELECT id FROM staff_profiles WHERE user_id = ? AND COALESCE(employment_status, \'active\') = \'active\'',
+        [req.user.id]
+      );
+      if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
+      // 忽略客户端传入的 staff_id/staffId，避免枚举他人的班次和请假备注。
+      filters.staff_id = own.id;
+      filters.staffId = own.id;
+    }
+    res.json({ data: listAssignments(database.getDB(), filters) });
   } catch (error) {
     sendError(res, error);
   }

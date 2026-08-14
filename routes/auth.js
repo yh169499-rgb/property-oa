@@ -16,10 +16,26 @@ function usersHaveStatusColumn() {
   return queryAll('PRAGMA table_info(users)').some(column => column.name === 'status');
 }
 
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 128;
+
+function validateNewPassword(value) {
+  if (typeof value !== 'string' || value.length < PASSWORD_MIN_LENGTH) {
+    return '密码至少 8 位';
+  }
+  if (value.length > PASSWORD_MAX_LENGTH) {
+    return '密码不能超过 128 位';
+  }
+  return '';
+}
+
 // POST /api/login
 router.post('/login', async (req, res) => {
   const { phone, password, rememberMe } = req.body;
   if (!phone || !password) return res.status(400).json({ error: '请输入手机号和密码' });
+  if (typeof password !== 'string' || password.length > PASSWORD_MAX_LENGTH) {
+    return res.status(400).json({ error: '密码长度无效' });
+  }
   const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
   if (!user) return res.status(401).json({ error: '手机号未注册' });
   if (String(user.status || 'active') !== 'active') return res.status(403).json({ error: '账号已停用，请联系主管' });
@@ -33,7 +49,8 @@ router.post('/login', async (req, res) => {
 router.post('/reset-password', requireAuth, async (req, res) => {
   const { phone, newPassword } = req.body;
   if (!phone || !newPassword) return res.status(400).json({ error: '手机号和新密码必填' });
-  if (newPassword.length < 4) return res.status(400).json({ error: '密码至少4位' });
+  const passwordError = validateNewPassword(newPassword);
+  if (passwordError) return res.status(400).json({ error: passwordError });
   const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
   if (!user) return res.status(404).json({ error: '该手机号未注册' });
   const canReset = String(req.user.id) === String(user.id)
@@ -49,6 +66,10 @@ router.post('/reset-password', requireAuth, async (req, res) => {
 router.post('/register', async (req, res) => {
   const { phone, password, name, role, skill, inviteCode } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
+  const passwordError = validateNewPassword(password);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+  if (!/^1[3-9]\d{9}$/.test(String(phone))) return res.status(400).json({ error: '手机号格式无效' });
+  if (typeof inviteCode !== 'string') return res.status(400).json({ error: '邀请码格式无效' });
   if (!inviteCode) return res.status(400).json({ error: '请输入邀请码' });
   const invite = queryOne('SELECT * FROM invite_codes WHERE code = ?', [inviteCode.toUpperCase()]);
   if (!invite) return res.status(400).json({ error: '邀请码无效' });
@@ -99,6 +120,9 @@ router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, asyn
 router.post('/users', requireAuth, requireAdmin, async (req, res) => {
   const { phone, password, name, role, skill, community_id, communityId } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
+  const passwordError = validateNewPassword(password);
+  if (passwordError) return res.status(400).json({ error: passwordError });
+  if (!/^1[3-9]\d{9}$/.test(String(phone))) return res.status(400).json({ error: '手机号格式无效' });
   try {
     const hash = await bcrypt.hash(password, 10);
     const created = createStaffAccount(getDB(), {
