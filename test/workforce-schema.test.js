@@ -28,6 +28,7 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
     'workforce_import_batches',
     'performance_rule_versions',
     'community_memberships',
+    'ai_report_analyses',
   ]) {
     assert.equal(names.includes(name), true, `missing table: ${name}`);
   }
@@ -36,6 +37,91 @@ test('workforce schema is idempotent and adds required tables', async (t) => {
   assert.equal(ticketColumns.includes('assignee_user_id'), true);
   assert.equal(ticketColumns.includes('assigned_at'), true);
   assert.equal(ticketColumns.includes('performance_rule_version_id'), true);
+
+  const aiColumns = columnNames(db, 'ai_report_analyses');
+  for (const column of [
+    'staff_profile_id', 'community_id', 'range_from', 'range_to',
+    'report_hash', 'model', 'prompt_version', 'analysis_json',
+    'created_by_user_id', 'created_at',
+  ]) {
+    assert.equal(aiColumns.includes(column), true, `missing AI cache column: ${column}`);
+  }
+  assert.equal(indexNames(db).includes('uq_ai_report_cache'), true);
+});
+
+test('workforce schema keeps departed identity and stable ticket assignee', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+  db.run("ALTER TABLE tickets ADD COLUMN created TEXT DEFAULT ''");
+
+  ensureWorkforceSchema(db);
+  ensureWorkforceSchema(db);
+
+  const profileColumns = columnNames(db, 'staff_profiles');
+  assert.equal(profileColumns.includes('departed_at'), true);
+  assert.equal(profileColumns.includes('departed_by_user_id'), true);
+  assert.equal(columnNames(db, 'tickets').includes('assignee_staff_profile_id'), true);
+  assert.equal(indexNames(db).includes('idx_tickets_assignee_profile'), true);
+
+  const indexColumns = db.exec('PRAGMA index_info(idx_tickets_assignee_profile)');
+  assert.deepEqual(
+    indexColumns[0].values.map((row) => row[2]),
+    ['assignee_staff_profile_id', 'created']
+  );
+});
+
+test('ticket assignee profile index upgrades when created becomes available', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+
+  ensureWorkforceSchema(db);
+  assert.deepEqual(
+    db.exec('PRAGMA index_info(idx_tickets_assignee_profile)')[0].values.map((row) => row[2]),
+    ['assignee_staff_profile_id']
+  );
+
+  db.run("ALTER TABLE tickets ADD COLUMN created TEXT DEFAULT ''");
+  ensureWorkforceSchema(db);
+
+  assert.deepEqual(
+    db.exec('PRAGMA index_info(idx_tickets_assignee_profile)')[0].values.map((row) => row[2]),
+    ['assignee_staff_profile_id', 'created']
+  );
+});
+
+test('ticket assignee profile backfill uses user identity and never guesses by name', async (t) => {
+  const db = await createTestDB();
+  t.after(() => db.close());
+  db.run("ALTER TABLE tickets ADD COLUMN created TEXT DEFAULT ''");
+
+  ensureWorkforceSchema(db);
+  db.run(`
+    INSERT INTO users (id, phone, password, name, role) VALUES
+      (1, '13800001001', 'hash', '身份匹配人员', 'worker'),
+      (2, '13800001002', 'hash', '无档案人员', 'worker')
+  `);
+  db.run(`
+    INSERT INTO staff_profiles (id, user_id, name) VALUES
+      (11, 1, '身份匹配人员'),
+      (12, NULL, '仅同名人员')
+  `);
+  db.run(`
+    INSERT INTO tickets (id, worker, assignee_user_id, created) VALUES
+      ('by-user-id', '名字不同也应匹配', 1, '2026-08-12T00:00:00Z'),
+      ('same-name-only', '仅同名人员', NULL, '2026-08-12T00:00:00Z'),
+      ('missing-profile', '无档案人员', 2, '2026-08-12T00:00:00Z')
+  `);
+
+  ensureWorkforceSchema(db);
+
+  assert.deepEqual(
+    db.exec('SELECT id, assignee_staff_profile_id FROM tickets ORDER BY id')[0].values,
+    [
+      ['by-user-id', 11],
+      ['missing-profile', null],
+      ['same-name-only', null],
+    ]
+  );
 });
 
 test('performance rules include a stable default version 1', async (t) => {
@@ -108,8 +194,8 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
   const expectedColumns = {
     staff_profiles: [
       'id', 'user_id', 'name', 'birth_month', 'join_date', 'phone',
-      'position', 'skill', 'manager_id', 'employment_status', 'created_at',
-      'updated_at',
+      'position', 'skill', 'manager_id', 'employment_status', 'departed_at',
+      'departed_by_user_id', 'created_at', 'updated_at',
     ],
     shift_templates: [
       'id', 'name', 'start_time', 'end_time', 'color', 'grace_minutes',

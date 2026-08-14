@@ -61,7 +61,7 @@ test('显式 DEMO_PASSWORD 时可创建缺失的演示账号', async () => {
     const users = db.exec('SELECT phone, password, role FROM users ORDER BY phone')[0].values;
     assert.equal(users.length, 3);
     assert.deepEqual(users.map(row => [row[0], row[2]]), [
-      ['13800000011', 'lead'],
+      ['13800000011', '主管'],
       ['13800000012', 'worker'],
       ['13800000013', 'keeper'],
     ]);

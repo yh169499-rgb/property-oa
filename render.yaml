@@ -4,7 +4,7 @@ services:
     runtime: node
     buildCommand: npm install
     startCommand: node index-new.js
-    healthCheckPath: /api/staff/status
+    healthCheckPath: /api/health
     # Render 默认文件系统是临时的；数据库必须写入持久化磁盘。
     disk:
       name: property-oa-data
@@ -16,9 +16,9 @@ services:
       - key: FEISHU_APP_SECRET
         sync: false
       - key: FEISHU_APP_TOKEN
-        value: PdZ0bstWWasvZFsWa3gc5PHznMb
+        sync: false
       - key: FEISHU_TABLE_ID
-        value: tbloxkuixNZIp76r
+        sync: false
       - key: DB_PATH
         value: /var/data/data.db
       - key: UPLOAD_DIR
@@ -36,6 +36,20 @@ services:
       - key: SUPABASE_SYNC_REQUIRED
         value: "false"
       - key: SEED_WORKFORCE_DEMO
-        value: "true"
+        value: "false"
       - key: JWT_SECRET
         generateValue: true
+      - key: CORS_ORIGINS
+        value: https://property-oa-fd4y.onrender.com
+      - key: AI_REPORT_ENABLED
+        value: "false"
+      - key: AI_BASE_URL
+        value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: AI_MODEL
+        value: qwen3.6-flash
+      - key: AI_TIMEOUT_MS
+        value: "30000"
+      - key: AI_REPORT_PROMPT_VERSION
+        value: report-analysis-v1
+      - key: AI_API_KEY
+        sync: false

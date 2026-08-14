@@ -6,7 +6,17 @@ const { authHeader } = require('./helpers/auth');
 
 test('持久化状态接口仅允许主管查看并返回同步字段', async () => {
   const SQL = await initSqlJs();
-  const server = await startHttpServer(new SQL.Database());
+  const db = new SQL.Database();
+  db.run(`CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    phone TEXT,
+    password TEXT,
+    name TEXT,
+    role TEXT,
+    status TEXT DEFAULT 'active'
+  )`);
+  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (1, '13800000001', 'x', '主管', 'admin')");
+  const server = await startHttpServer(db);
   try {
     const anonymous = await fetch(`${server.url}/api/persistence/status`);
     assert.equal(anonymous.status, 401);

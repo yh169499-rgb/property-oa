@@ -71,11 +71,18 @@ function ensureWorkforceSchema(db) {
       skill TEXT DEFAULT '',
       manager_id INTEGER,
       employment_status TEXT DEFAULT 'active',
+      departed_at TEXT DEFAULT '',
+      departed_by_user_id INTEGER,
       created_at TEXT DEFAULT '',
       updated_at TEXT DEFAULT '',
       CHECK (manager_id IS NULL OR manager_id <> id)
     )
   `);
+
+  // Existing installations may already have staff_profiles. Keep the migration
+  // additive so stable historical identity is available without recreating it.
+  addColumn(db, 'staff_profiles', "departed_at TEXT DEFAULT ''");
+  addColumn(db, 'staff_profiles', 'departed_by_user_id INTEGER');
 
   db.run(`
     CREATE TABLE IF NOT EXISTS shift_templates (
@@ -191,7 +198,24 @@ function ensureWorkforceSchema(db) {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS ai_report_analyses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      staff_profile_id INTEGER NOT NULL,
+      community_id TEXT NOT NULL DEFAULT '',
+      range_from TEXT NOT NULL,
+      range_to TEXT NOT NULL,
+      report_hash TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_version TEXT NOT NULL,
+      analysis_json TEXT NOT NULL,
+      created_by_user_id INTEGER,
+      created_at TEXT NOT NULL
+    )
+  `);
+
   addColumn(db, 'tickets', 'assignee_user_id INTEGER');
+  addColumn(db, 'tickets', 'assignee_staff_profile_id INTEGER');
   addColumn(db, 'tickets', "assigned_at TEXT DEFAULT ''");
   addColumn(db, 'tickets', 'performance_rule_version_id INTEGER');
 
@@ -214,6 +238,20 @@ function ensureWorkforceSchema(db) {
   `, [nowIso, nowIso]);
 
   if (tableExists(db, 'tickets')) {
+    // Bind only through the authenticated user identity. In particular, never
+    // infer a profile from worker/name text because names are not unique and
+    // historical snapshots must remain unambiguous.
+    db.run(`
+      UPDATE tickets
+      SET assignee_staff_profile_id = (
+        SELECT sp.id
+        FROM staff_profiles sp
+        WHERE sp.user_id = tickets.assignee_user_id
+      )
+      WHERE assignee_staff_profile_id IS NULL
+        AND assignee_user_id IS NOT NULL
+    `);
+
     db.run(`
       UPDATE tickets
       SET performance_rule_version_id = (
@@ -229,6 +267,33 @@ function ensureWorkforceSchema(db) {
   db.run('CREATE INDEX IF NOT EXISTS idx_shift_staff_date ON shift_assignments(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_attendance_staff_date ON attendance_records(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_ticket_activity_actor_time ON ticket_activity_logs(actor_staff_id, created_at)');
+  const ticketColumns = db.exec('PRAGMA table_info(tickets)');
+  const ticketColumnNames = ticketColumns[0]
+    ? ticketColumns[0].values.map((row) => row[1])
+    : [];
+  if (ticketColumnNames.includes('created')) {
+    const assigneeIndex = db.exec('PRAGMA index_info(idx_tickets_assignee_profile)');
+    const assigneeIndexColumns = assigneeIndex[0]
+      ? assigneeIndex[0].values.map((row) => row[2])
+      : [];
+    if (
+      assigneeIndexColumns.length > 0
+      && (
+        assigneeIndexColumns.length !== 2
+        || assigneeIndexColumns[0] !== 'assignee_staff_profile_id'
+        || assigneeIndexColumns[1] !== 'created'
+      )
+    ) {
+      db.run('DROP INDEX idx_tickets_assignee_profile');
+    }
+    db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_assignee_profile
+      ON tickets(assignee_staff_profile_id, created)`);
+  } else {
+    db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_assignee_profile
+      ON tickets(assignee_staff_profile_id)`);
+  }
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_report_cache
+    ON ai_report_analyses(report_hash, model, prompt_version)`);
 }
 
 module.exports = { ensureWorkforceSchema, addColumn, backfillCommunityMemberships };

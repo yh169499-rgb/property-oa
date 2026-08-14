@@ -181,13 +181,24 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const community = communityClause(filters);
   const noStaff = ids.length === 0;
   const staffPlaceholders = ids.map(() => '?').join(',');
-  const staffPredicate = noStaff
-    ? '0'
-    : `(t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${staffPlaceholders}))
-        OR (NULLIF(t.worker, '') IS NOT NULL
-            AND t.worker IN (SELECT name FROM staff_profiles WHERE id IN (${staffPlaceholders}))))`;
-  const baseParams = [...ids, ...ids, ...community.params];
   const columns = ticketColumns(db);
+  const staffPredicates = [];
+  const baseParams = [];
+  if (!noStaff && columns.has('assignee_user_id')) {
+    staffPredicates.push(`t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${staffPlaceholders}))`);
+    baseParams.push(...ids);
+  }
+  if (!noStaff && columns.has('assignee_staff_profile_id')) {
+    staffPredicates.push(`t.assignee_staff_profile_id IN (${staffPlaceholders})`);
+    baseParams.push(...ids);
+  }
+  if (!noStaff) {
+    staffPredicates.push(`(NULLIF(t.worker, '') IS NOT NULL
+      AND t.worker IN (SELECT name FROM staff_profiles WHERE id IN (${staffPlaceholders})))`);
+    baseParams.push(...ids);
+  }
+  const staffPredicate = noStaff ? '0' : `(${staffPredicates.join(' OR ')})`;
+  baseParams.push(...community.params);
 
   const received = one(db, `
     SELECT COUNT(*) total
@@ -278,10 +289,59 @@ function getStaffReport(db, staffId, filters = {}) {
     error.code = 'PROFILE_NOT_FOUND';
     throw error;
   }
+  const staffName = profile.employment_status && profile.employment_status !== 'active'
+    ? `${profile.name || ''}（已离职）` : profile.name;
   return {
-    staff: profile,
+    staff: { ...profile, raw_name: profile.name, display_name: staffName, name: staffName },
     ...reportForStaffIds(db, [id], filters),
     performance: scoreStaff(db, id, filters),
+  };
+}
+
+function getAllStaffReport(db, filters = {}, staffIds) {
+  const requested = Array.isArray(staffIds)
+    ? [...new Set(staffIds.map(Number).filter(Number.isInteger))]
+    : null;
+    const profiles = rows(db, `
+      SELECT * FROM staff_profiles
+     WHERE (${requested ? 'id IN (' + (requested.length ? requested.map(() => '?').join(',') : '0') + ')' : '1 = 1'})
+     ORDER BY id
+  `, requested || []);
+  const ids = profiles.map((profile) => Number(profile.id));
+  const aggregate = reportForStaffIds(db, ids, filters);
+  const staffReports = profiles.map((profile) => {
+    const report = getStaffReport(db, profile.id, filters);
+    return {
+      staff: {
+        id: profile.id,
+        name: profile.employment_status && profile.employment_status !== 'active'
+          ? `${profile.name || ''}（已离职）` : profile.name || '',
+        raw_name: profile.name || '',
+        position: profile.position || '',
+      },
+      received: report.received,
+      completed: report.completed,
+      current: report.current,
+      recurrence: report.recurrence,
+      feedback: report.feedback,
+      performance: report.performance,
+    };
+  });
+  const scored = staffReports
+    .map((item) => Number(item.performance && item.performance.score))
+    .filter((score) => Number.isFinite(score));
+  return {
+    staff: { id: 'all', name: '全部人员', position: '团队汇总' },
+    ...aggregate,
+    performance: {
+      status: 'team_summary',
+      score: scored.length ? Number((scored.reduce((sum, score) => sum + score, 0) / scored.length).toFixed(1)) : null,
+      level: 'team_summary',
+      sampleSize: scored.length,
+      components: {},
+      ruleVersions: [],
+    },
+    staffReports,
   };
 }
 
@@ -382,5 +442,6 @@ module.exports = {
   completionExpression,
   getDashboardStats,
   getStaffReport,
+  getAllStaffReport,
   getManagerReport,
 };

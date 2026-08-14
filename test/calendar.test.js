@@ -116,12 +116,14 @@ test('aggregates people, shifts, attendance, tickets and same-staff conflicts', 
   });
   assert.equal(result.people.length, 5);
   assert.equal(result.people.find((person) => person.id === 11).shift.assignmentType, 'work');
+  assert.equal(result.people.find((person) => person.id === 11).accountRole, 'worker');
   assert.equal(result.people.find((person) => person.id === 11).shift.templateName, '');
   assert.equal(result.people.find((person) => person.id === 11).attendance.status, 'normal');
   assert.equal(result.people.find((person) => person.id === 12).shift.assignmentType, 'leave');
   assert.equal(result.events[0].ticketId, 'WX1001');
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].staffId, 11);
+  assert.equal(result.conflicts[0].type, 'ticket_overlap');
   assert.deepEqual(result.conflicts[0].ticketIds, ['WX1001', 'WX1002']);
   assert.match(result.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
@@ -132,6 +134,75 @@ test('does not report overlaps belonging to different staff', () => {
     { ticketId: 'A', staffId: 1, startAt: '2026-07-30T09:00:00+08:00', endAt: '2026-07-30T11:00:00+08:00' },
     { ticketId: 'B', staffId: 2, startAt: '2026-07-30T10:00:00+08:00', endAt: '2026-07-30T12:00:00+08:00' },
   ]), []);
+});
+
+test('treats a work shift as dispatch availability rather than a conflicting event', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  db.run("DELETE FROM tickets WHERE id = 'WX1002'");
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, communityId: 'c1', viewerUserId: 1,
+  });
+  assert.equal(result.people[0].shift.startAt, '2026-07-30T08:00:00+08:00');
+  assert.deepEqual(result.events.map(event => event.ticketId), ['WX1001']);
+  assert.deepEqual(result.conflicts, []);
+});
+
+test('shows the carried-over portion of a previous overnight shift after midnight', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  db.run('DELETE FROM shift_assignments WHERE staff_id = 11 AND work_date = ?', ['2026-07-30']);
+  db.run(`INSERT INTO shift_assignments
+    (staff_id, work_date, assignment_type, start_at, end_at)
+    VALUES (11, '2026-07-29', 'work',
+      '2026-07-29T22:00:00+08:00', '2026-07-30T06:00:00+08:00')`);
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, viewerUserId: 1,
+  });
+  assert.equal(result.people[0].shift.assignmentType, 'work');
+  assert.equal(result.people[0].shift.startAt, '2026-07-29T16:00:00.000Z');
+  assert.equal(result.people[0].shift.endAt, '2026-07-30T06:00:00+08:00');
+  assert.equal(result.people[0].shift.carriedOver, true);
+});
+
+test('shows both carried-over overnight and current-day work windows', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  db.run("DELETE FROM shift_assignments WHERE staff_id = 11 AND work_date = '2026-07-30'");
+  db.run(`INSERT INTO shift_assignments
+    (staff_id, work_date, assignment_type, start_at, end_at)
+    VALUES
+      (11, '2026-07-29', 'work', '2026-07-29T22:00:00+08:00', '2026-07-30T06:00:00+08:00'),
+      (11, '2026-07-30', 'work', '2026-07-30T22:00:00+08:00', '2026-07-31T06:00:00+08:00')`);
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, viewerUserId: 1,
+  });
+  assert.deepEqual(result.people[0].shifts.map(shift => ({
+    startAt: shift.startAt, endAt: shift.endAt, carriedOver: shift.carriedOver,
+  })), [
+    { startAt: '2026-07-29T16:00:00.000Z', endAt: '2026-07-30T06:00:00+08:00', carriedOver: true },
+    { startAt: '2026-07-30T22:00:00+08:00', endAt: '2026-07-31T06:00:00+08:00', carriedOver: false },
+  ]);
+});
+
+test('shows and clips tickets that started before midnight but overlap the selected day', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  db.run(`INSERT INTO tickets
+    (id, worker, assignee_user_id, assigned_at, cat, loc, status, created,
+     estimated_hours, community_id)
+    VALUES ('OVERNIGHT-TICKET', '员工甲', 3, '2026-07-29T23:00:00+08:00',
+      '跨夜维修', '机房', 'doing', '2026-07-29T22:50:00+08:00', 3, 'c1')`);
+  const { buildDayCalendar } = require('../services/calendar');
+  const result = buildDayCalendar(db, {
+    date: '2026-07-30', staffId: 11, communityId: 'c1', viewerUserId: 1,
+  });
+  const event = result.events.find(item => item.ticketId === 'OVERNIGHT-TICKET');
+  assert.equal(event.startAt, '2026-07-29T16:00:00.000Z');
+  assert.equal(event.endAt, '2026-07-29T18:00:00.000Z');
 });
 
 test('uses Asia/Shanghai absolute day boundaries for UTC ticket timestamps', async (t) => {
@@ -225,6 +296,40 @@ test('ordinary user is forced to own staff profile despite requested filters', a
     ['UTC-IN', 'AVG-NOW', 'WX1001', 'WX1002']
   );
   assert.equal(body.people[0].shift.templateName, '');
+});
+
+test('ordinary user calendar never falls back to worker name for unassigned tickets', async (t) => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets
+      (id, worker, assignee_user_id, assigned_at, cat, status, created,
+       estimated_hours, community_id)
+    VALUES
+      ('UNASSIGNED-UNIQUE', '员工甲', NULL, '2026-07-30T12:00:00+08:00', '未分配',
+       'wait', '2026-07-30T11:30:00+08:00', 1, 'c1')
+  `);
+  const server = await startHttpServer(db);
+  t.after(() => server.close());
+
+  const uniqueName = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30`,
+    { headers: authHeader({ id: 3, role: 'worker', name: '员工甲' }) }
+  );
+  assert.equal(uniqueName.status, 200);
+  assert.equal(
+    (await uniqueName.json()).events.some((event) => event.ticketId === 'UNASSIGNED-UNIQUE'),
+    false
+  );
+
+  const duplicateName = await fetch(
+    `${server.url}/api/calendar/day?date=2026-07-30&community_id=duplicate`,
+    { headers: authHeader({ id: 7, role: 'worker', name: '重名员工' }) }
+  );
+  assert.equal(duplicateName.status, 200);
+  assert.deepEqual(
+    (await duplicateName.json()).events.map((event) => event.ticketId),
+    ['DUP-NOW']
+  );
 });
 
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {

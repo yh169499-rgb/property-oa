@@ -38,8 +38,17 @@ test('师傅首页只汇总本人工作与日程，不包含考勤字段', () =>
   assert.equal(model.schedule.shift.templateName, '标准白班');
   assert.equal(model.schedule.events[0].ticketId, 'WX001');
   assert.equal(model.schedule.hasConflict, true);
+  assert.deepEqual(model.schedule.conflictTicketIds, ['WX001', 'WX002']);
   assert.equal('attendance' in model, false);
   assert.equal('attendance' in model.schedule, false);
+});
+
+test('师傅首页明确班次是可派时间且使用北京时间显示工单', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../public/js/worker-home.js'), 'utf8');
+  assert.match(source, /该时段内可派单/);
+  assert.match(source, /shanghaiTime/);
+  assert.doesNotMatch(source, /startAt\s*\|\|\s*''\)\.slice\(11, 16\)/);
+  assert.match(source, /工单.*时间重叠/);
 });
 
 test('师傅端保留首页与我的，移除旧本月出勤和手动在岗状态界面', () => {

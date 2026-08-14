@@ -33,6 +33,28 @@ test('builds personal schedule from server calendar data', () => {
   assert.equal('attendance' in model.schedule, false);
   assert.equal(model.schedule.events[0].ticketId, 'DEMO-1');
   assert.equal(model.schedule.hasConflict, false);
+  assert.deepEqual(model.schedule.conflictTicketIds, []);
+});
+
+test('我的日程保留具体冲突工单编号', () => {
+  const model = buildMyPageModel({ id: 9, name: '测试师傅' }, {}, [], 'month', {
+    date: '2026-08-13', people: [{ id: 9, shift: null }],
+    events: [
+      { staffId: 9, ticketId: 'A', startAt: '2026-08-13T01:00:00.000Z', endAt: '2026-08-13T03:00:00.000Z' },
+      { staffId: 9, ticketId: 'B', startAt: '2026-08-13T02:00:00.000Z', endAt: '2026-08-13T04:00:00.000Z' },
+    ],
+    conflicts: [{ type: 'ticket_overlap', staffId: 9, ticketIds: ['A', 'B'] }],
+  });
+  assert.equal(model.schedule.hasConflict, true);
+  assert.deepEqual(model.schedule.conflictTicketIds, ['A', 'B']);
+});
+
+test('我的日程统一使用北京时间并说明班次可派单', () => {
+  const source = require('node:fs').readFileSync('public/js/my-page.js', 'utf8');
+  assert.match(source, /shanghaiTime/);
+  assert.match(source, /该时段内可派单/);
+  assert.match(source, /工单.*时间重叠/);
+  assert.doesNotMatch(source, /startAt\s*\|\|\s*''\)\.slice\(11, 16\)/);
 });
 
 test('shows explicit empty schedule states', () => {
@@ -73,4 +95,42 @@ test('个人中心忽略历史考勤数据，只保留资料、成果和日程',
   assert.equal('attendance' in model, false);
   assert.equal('calendar' in model, false);
   assert.equal(model.isManager, true);
+});
+
+test('普通员工个人中心展示本人的服务端绩效', () => {
+  const model = buildMyPageModel({ id: 9, name: '测试师傅', position: '维修师傅' }, {
+    performance: {
+      status: 'scored', score: 88.5, level: 'good', sampleSize: 6,
+      components: {
+        completion: { score: 90, contribution: 36 },
+        onTime: { score: 85, contribution: 25.5 },
+        quality: { score: 90, contribution: 27 },
+      },
+      ruleVersions: [{ version: 2, sampleSize: 6 }],
+    },
+  }, [], 'month', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+
+  assert.equal(model.performance.score, 88.5);
+  assert.equal(model.performance.levelLabel, '良好');
+  assert.equal(model.performance.sampleSize, 6);
+  assert.equal(model.performance.components.completion.score, 90);
+  assert.equal(model.performance.ruleLabel, 'v2');
+});
+
+test('主管个人中心读取本人结果中的绩效且样本不足不伪造分数', () => {
+  const model = buildMyPageModel({ id: 1, name: '主管', position: '主管' }, {
+    personalActions: { total: 1 },
+    personalResults: {
+      performance: {
+        status: 'insufficient_sample', score: null, level: 'insufficient_sample', sampleSize: 1,
+        components: {}, ruleVersions: [{ version: 3, sampleSize: 1 }],
+      },
+    },
+    team: { staffIds: [] },
+  }, [], 'year', { date: '2026-08-05', people: [], events: [], conflicts: [] });
+
+  assert.equal(model.performance.status, 'insufficient_sample');
+  assert.equal(model.performance.score, null);
+  assert.equal(model.performance.levelLabel, '样本不足');
+  assert.equal(model.performance.ruleLabel, 'v3');
 });

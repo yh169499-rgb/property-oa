@@ -26,6 +26,8 @@ test('shares same-day and clock formatting helpers', () => {
   );
   assert.equal(utils.sameDay(new Date(2026, 6, 31), new Date(2026, 7, 1)), false);
   assert.equal(utils.fmtHM(new Date(2026, 6, 31, 8, 5)), '08:05');
+  assert.equal(utils.shanghaiTime('2026-08-13T01:00:00.000Z'), '09:00');
+  assert.equal(utils.shanghaiTime('2026-08-13T09:00:00+08:00'), '09:00');
 });
 
 test('labels reporting periods for display', () => {

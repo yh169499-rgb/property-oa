@@ -90,7 +90,7 @@ function seedDemo(db, now = new Date()) {
   const inserted = { profiles: 0, templates: 0, assignments: 0, attendance: 0, tickets: 0 };
   const users = {};
   const demoUsers = {
-    lead: { phone: DEMO_PHONES.lead, name: '测试主管', role: 'lead' },
+    lead: { phone: DEMO_PHONES.lead, name: '测试主管', role: '主管' },
     worker: { phone: DEMO_PHONES.worker, name: '测试师傅', role: 'worker' },
     keeper: { phone: DEMO_PHONES.keeper, name: '测试管家', role: 'keeper' },
   };
@@ -98,11 +98,15 @@ function seedDemo(db, now = new Date()) {
     const phone = value.phone;
     const user = one(db, 'SELECT id, name, role FROM users WHERE phone = ?', [phone]);
     if (user) {
+      if (key === 'lead' && ['lead', 'admin'].includes(String(user.role || '').toLowerCase())) {
+        db.run("UPDATE users SET role = '主管' WHERE id = ?", [user.id]);
+        user.role = '主管';
+      }
       users[key] = user;
       return;
     }
     if (!process.env.DEMO_PASSWORD) {
-      const fallbackRoles = key === 'lead' ? ['admin', 'lead'] : [value.role];
+      const fallbackRoles = key === 'lead' ? ['admin', 'lead', '主管'] : [value.role];
       users[key] = one(db,
         `SELECT id, name, role FROM users WHERE role IN (${fallbackRoles.map(() => '?').join(',')}) ORDER BY id LIMIT 1`,
         fallbackRoles);

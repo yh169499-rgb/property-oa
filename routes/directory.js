@@ -1,7 +1,7 @@
 const express = require('express');
 const { queryAll, queryOne } = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { isGlobalManagerRole } = require('../services/roles');
+const { isSupervisorUser } = require('../services/roles');
 
 const router = express.Router();
 
@@ -20,7 +20,7 @@ router.get('/staff/directory', requireAuth, (req, res) => {
     [req.user.id]
   );
   if (!own) return fail(res, 404, '人员档案不存在', 'PROFILE_NOT_FOUND');
-  const globalManager = isGlobalManagerRole(req.user.role);
+  const globalManager = isSupervisorUser(req.user);
   if (!globalManager) {
     const member = queryOne(
       `SELECT 1 FROM community_memberships

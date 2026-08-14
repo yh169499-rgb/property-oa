@@ -17,12 +17,18 @@ async function fixture() {
       community_id TEXT DEFAULT 'default', reject_reason TEXT DEFAULT '',
       is_recurring INTEGER DEFAULT 0, feedback_count INTEGER DEFAULT 1
     );
-    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, password TEXT, role TEXT);
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, password TEXT, role TEXT,
+      status TEXT NOT NULL DEFAULT 'active');
   `);
   ensureWorkforceSchema(db);
   db.run(`
     INSERT INTO staff_profiles (id, user_id, name, manager_id) VALUES
       (1, 1, '主管', NULL), (2, 2, '组长', 1), (3, 3, '师傅', 2), (4, 4, '树外', NULL);
+    INSERT INTO users (id, name, phone, password, role, status) VALUES
+      (1, '主管', '13800000001', 'fixture', '主管', 'active'),
+      (2, '组长', '13800000002', 'fixture', 'lead', 'active'),
+      (3, '师傅', '13800000003', 'fixture', 'worker', 'active'),
+      (4, '树外', '13800000004', 'fixture', 'lead', 'active');
   `);
   return db;
 }
@@ -80,6 +86,42 @@ test('人员报告兼容只有 worker 名称的历史工单', async () => {
   assert.equal(report.received.total, 1);
   assert.equal(report.current.doing, 1);
   assert.deepEqual(report.categories, [{ category: '其他', total: 1 }]);
+});
+
+test('离职人员报告保留稳定身份和历史工单并标记已离职', async () => {
+  const db = await fixture();
+  db.run("UPDATE staff_profiles SET employment_status = 'departed', user_id = NULL WHERE id = 3");
+  db.run(`INSERT INTO tickets
+    (id, type, status, worker, created, assigned_at, assignee_staff_profile_id)
+    VALUES ('departed-history', 'repair', 'done', '师傅', '2026-07-15T00:00:00Z',
+      '2026-07-15T00:00:00Z', 3)`);
+  const { getStaffReport, getAllStaffReport } = require('../services/reporting');
+  const report = getStaffReport(db, 3, { from: '2026-07-01', to: '2026-07-31' });
+  assert.equal(report.staff.name, '师傅（已离职）');
+  assert.equal(report.staff.raw_name, '师傅');
+  assert.equal(report.received.total, 1);
+  const all = getAllStaffReport(db, { from: '2026-07-01', to: '2026-07-31' }, [3]);
+  assert.equal(all.staffReports[0].staff.name, '师傅（已离职）');
+});
+
+test('全部人员报告聚合团队指标并保留人员明细', async () => {
+  const db = await fixture();
+  db.run(`
+    INSERT INTO tickets
+      (id, type, status, created, assigned_at, finished, estimated_hours, assignee_user_id)
+    VALUES
+      ('all-one', 'repair', 'done', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', '2026-07-03T01:00:00Z', 2, 2),
+      ('all-two', 'complaint', 'doing', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', '', 0, 3);
+  `);
+  const { getAllStaffReport } = require('../services/reporting');
+  const report = getAllStaffReport(db, { from: '2026-07-01', to: '2026-07-31' }, [1, 2, 3]);
+  assert.equal(report.staff.id, 'all');
+  assert.equal(report.staff.name, '全部人员');
+  assert.equal(report.received.total, 2);
+  assert.equal(report.completed.total, 1);
+  assert.deepEqual(report.staffReports.map((item) => item.staff.name), ['主管', '组长', '师傅']);
+  assert.equal(report.staffReports.find((item) => item.staff.name === '组长').received.total, 1);
+  assert.equal(report.staffReports.find((item) => item.staff.name === '师傅').received.total, 1);
 });
 
 test('主管个人动作只计本人，团队成果递归下级且排除树外', async () => {
@@ -172,21 +214,22 @@ test('报告路由要求登录并限制本人或递归团队范围', async (t) =
   assert.equal((await get('/api/reports/staff/3', authHeader({ id: 3, role: 'worker' }))).response.status, 200);
   assert.equal((await get('/api/reports/staff/2', authHeader({ id: 3, role: 'worker' }))).response.status, 403);
   assert.equal((await get('/api/reports/staff/3', authHeader({ id: 1, role: 'lead' }))).response.status, 200);
+  const all = await get('/api/reports/staff/all', authHeader({ id: 1, role: '主管' }));
+  assert.equal(all.response.status, 200);
+  assert.equal(all.body.data.staff.name, '全部人员');
+  assert.equal((await get('/api/reports/staff/all', authHeader({ id: 3, role: 'worker' }))).response.status, 403);
   const attendance = await get('/api/me/attendance?month=2026-07', authHeader({ id: 3, role: 'worker' }));
   assert.equal(attendance.response.status, 200);
   assert.deepEqual(attendance.body.data, []);
 });
 
-test('旧 /api/report 匿名无 staff_id 保持兼容，staff_id 分支要求登录', async (t) => {
+test('旧 /api/report 也必须登录，避免匿名读取全量统计', async (t) => {
   const db = await fixture();
   const server = await startHttpServer(db);
   t.after(() => server.close());
 
   const legacy = await fetch(`${server.url}/api/report`);
-  const legacyBody = await legacy.json();
-  assert.equal(legacy.status, 200);
-  assert.equal(legacyBody.success, true);
-  assert.deepEqual(Object.keys(legacyBody.stats).sort(), ['avgHours', 'done', 'total']);
+  assert.equal(legacy.status, 401);
 
   const scoped = await fetch(`${server.url}/api/report?staff_id=3`);
   const scopedBody = await scoped.json();
@@ -217,7 +260,9 @@ test('历史完成列参与完成统计，负耗时和无效时间不进入耗�
 
   const server = await startHttpServer(db);
   t.after(() => server.close());
-  const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`);
+  const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`, {
+    headers: authHeader({ id: 1, role: '主管' }),
+  });
   assert.equal((await legacy.json()).stats.done, 3);
 });
 
@@ -243,11 +288,11 @@ test('主管看板只统计本人递归团队并拒绝跨树社区', async (t) =
   assert.equal(other.status, 200);
   assert.equal((await other.json()).data.monthTotal, 1);
 
-  const forbidden = await fetch(`${server.url}/api/dashboard/stats?community_id=team-b`, {
+  // 当前系统仅保留一个最高权限主管；主管可查看全部授权小区统计。
+  const global = await fetch(`${server.url}/api/dashboard/stats?community_id=team-b`, {
     headers: leadOne,
   });
-  assert.equal(forbidden.status, 403);
-  assert.equal((await forbidden.json()).code, 'REPORT_SCOPE_FORBIDDEN');
+  assert.equal(global.status, 200);
 });
 
 test('报告路由对未知数据库异常返回通用 500 且不回显 SQL', async (t) => {

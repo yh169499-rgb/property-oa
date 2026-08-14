@@ -66,3 +66,55 @@ test('updateManager 拒绝不存在的人员和直属上级', async () => {
     null
   );
 });
+
+test('updateManager 对直属在职团队实施 4/3/1 容量限制并排除本人', async () => {
+  const db = await createTestDB();
+  ensureWorkforceSchema(db);
+  db.run(`
+    INSERT INTO staff_profiles
+      (id, name, position, manager_id, employment_status) VALUES
+      (1, '主管', '主管', NULL, 'active'),
+      (2, '师傅一', '维修师傅', 1, 'active'),
+      (3, '师傅二', '维修师傅', 1, 'active'),
+      (4, '师傅三', '维修师傅', 1, 'active'),
+      (5, '管家', '物业管家', 1, 'active'),
+      (6, '候选师傅', '维修师傅', NULL, 'inactive')
+  `);
+
+  assert.equal(updateManager(db, 2, 1).manager_id, 1);
+  assert.throws(
+    () => updateManager(db, 6, 1, {
+      profile: { position: '维修师傅', employment_status: 'active' },
+    }),
+    (error) => error.status === 409 && error.code === 'ROLE_CAPACITY_FULL'
+  );
+  assert.equal(
+    db.exec('SELECT manager_id FROM staff_profiles WHERE id = 6')[0].values[0][0],
+    null
+  );
+});
+
+test('updateManager 拒绝在职普通员工无主管或绑定非主管', async () => {
+  const db = await createTestDB();
+  ensureWorkforceSchema(db);
+  db.run(`
+    INSERT INTO staff_profiles
+      (id, name, position, manager_id, employment_status) VALUES
+      (1, '主管', '主管', NULL, 'active'),
+      (2, '普通师傅', '维修师傅', 1, 'active'),
+      (3, '另一师傅', '维修师傅', 1, 'active')
+  `);
+
+  assert.throws(
+    () => updateManager(db, 2, null),
+    (error) => error.status === 409 && error.code === 'ACTIVE_STAFF_MANAGER_REQUIRED'
+  );
+  assert.throws(
+    () => updateManager(db, 2, 3),
+    (error) => error.status === 409 && error.code === 'INVALID_ACTIVE_MANAGER'
+  );
+  assert.equal(
+    db.exec('SELECT manager_id FROM staff_profiles WHERE id = 2')[0].values[0][0],
+    1
+  );
+});

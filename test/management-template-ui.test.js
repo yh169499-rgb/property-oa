@@ -40,4 +40,7 @@ test('日历展示请假与冲突状态', () => {
   assert.match(calendar, /请假|休息|未排班/);
   assert.match(calendar, /冲突|conflict/);
   assert.match(calendar, /attendanceStatusLabel/);
+  assert.match(calendar, /shanghaiTime/);
+  assert.match(calendar, /工单.*时间重叠/);
+  assert.match(calendar, /班次内可派单/);
 });

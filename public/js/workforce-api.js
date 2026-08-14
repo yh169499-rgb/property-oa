@@ -25,6 +25,15 @@
     staffReport: function (staffId, query) {
       var path = '/api/reports/staff/' + utils.requiredPathSegment(staffId, 'staffId');
       return API.get(utils.withQuery(path, query));
+    },
+    aiReportStatus: function () {
+      return API.get('/api/reports/ai/status');
+    },
+    aiStaffReport: function (staffId, body) {
+      var path = String(staffId) === 'all'
+        ? '/api/reports/staff/all/ai-analysis'
+        : '/api/reports/staff/' + utils.requiredPathSegment(staffId, 'staffId') + '/ai-analysis';
+      return API.post(path, body || {});
     }
   };
 }(window));

@@ -7,7 +7,8 @@ const router = express.Router();
 const { queryAll, queryOne, run, saveDB, getDB } = require('../db');
 const config = require('../config');
 const { descendantIds } = require('../services/organization');
-const { isManagerRole } = require('../services/roles');
+const { isGlobalManagerRole, isSupervisorUser } = require('../services/roles');
+const { canAccessTicket } = require('./tickets');
 const { getStaffReport, completionExpression } = require('../services/reporting');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
@@ -105,10 +106,11 @@ function startSlaAlerts() {
 // ============ 路由 ============
 
 // POST /api/notify
-router.post('/notify', async (req, res) => {
+router.post('/notify', requireAuth, async (req, res) => {
   const { ticketId, event } = req.body;
   const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
   if (!row) return res.status(404).json({ error: '工单不存在' });
+  if (!canAccessTicket(req, ticketId)) return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
   if (!config.NOTIFY_WEBHOOK) return res.json({ success: false, error: '未配置 NOTIFY_WEBHOOK' });
   try {
     const resp = await fetch(config.NOTIFY_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ event: event || 'completed', ticket: row, timestamp: new Date().toISOString() }) });
@@ -117,7 +119,7 @@ router.post('/notify', async (req, res) => {
 });
 
 // GET /api/reminder/trigger
-router.get('/reminder/trigger', async (req, res) => {
+router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
   const reminder = getWaitingTicketsReminder();
   if (reminder) {
     await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, reminder).catch(() => {});
@@ -126,8 +128,8 @@ router.get('/reminder/trigger', async (req, res) => {
 });
 
 // GET/POST /api/settings/reminder
-router.get('/settings/reminder', (req, res) => { res.json({ intervalMinutes: reminderInterval / 60000 }); });
-router.post('/settings/reminder', (req, res) => {
+router.get('/settings/reminder', requireAuth, requireAdmin, (req, res) => { res.json({ intervalMinutes: reminderInterval / 60000 }); });
+router.post('/settings/reminder', requireAuth, requireAdmin, (req, res) => {
   const { intervalMinutes } = req.body;
   reminderInterval = Math.max(0, Number(intervalMinutes) || 0) * 60000;
   startReminders();
@@ -135,8 +137,8 @@ router.post('/settings/reminder', (req, res) => {
 });
 
 // GET/POST /api/settings/sla
-router.get('/settings/sla', (req, res) => { res.json({ intervalMinutes: slaInterval / 60000 }); });
-router.post('/settings/sla', (req, res) => {
+router.get('/settings/sla', requireAuth, requireAdmin, (req, res) => { res.json({ intervalMinutes: slaInterval / 60000 }); });
+router.post('/settings/sla', requireAuth, requireAdmin, (req, res) => {
   const { intervalMinutes } = req.body;
   slaInterval = Math.max(0, Number(intervalMinutes) || 0) * 60000;
   startSlaAlerts();
@@ -151,7 +153,7 @@ router.get('/settings/performance', requireAuth, (req, res) => {
       data: {
         active: getActiveRule(getDB()),
         // 登录用户可读取当前规则；历史版本属于管理数据，仅主管可见。
-        versions: req.user && isManagerRole(req.user.role)
+        versions: req.user && isSupervisorUser(req.user)
           ? listRuleVersions(getDB()) : [],
       },
     });
@@ -174,8 +176,8 @@ router.post('/settings/performance/versions', requireAuth, requireAdmin, async (
 });
 
 // GET /api/sla/overdue
-router.get('/sla/overdue', (req, res) => { res.json({ data: checkSlaOverdue() }); });
-router.get('/sla/alert', async (req, res) => {
+router.get('/sla/overdue', requireAuth, requireAdmin, (req, res) => { res.json({ data: checkSlaOverdue() }); });
+router.get('/sla/alert', requireAuth, requireAdmin, async (req, res) => {
   const overdue = checkSlaOverdue();
   if (!overdue.length) return res.json({ success: true, message: '无超时' });
   const msg = `⚠️ SLA超时：${overdue.length}张\n` + overdue.map(t => `• ${t.id}｜${t.cat}｜超${t.hoursOverdue}h`).join('\n');
@@ -184,7 +186,7 @@ router.get('/sla/alert', async (req, res) => {
 });
 
 // GET /api/report
-router.get('/report', (req, res) => {
+router.get('/report', requireAuth, (req, res) => {
   if (req.query.staff_id !== undefined && req.query.staff_id !== '') {
     try {
       if (!req.user) {
@@ -197,10 +199,7 @@ router.get('/report', (req, res) => {
       const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
       if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
       const target = Number(req.query.staff_id);
-      const allowed = req.user.role === 'admin'
-        || target === Number(own.id)
-        || (req.user.role === 'lead'
-          && descendantIds(profiles, own.id).map(Number).includes(target));
+      const allowed = isSupervisorUser(req.user) || target === Number(own.id);
       if (!allowed) {
         return res.status(403).json({ error: '无权查看该人员', code: 'REPORT_SCOPE_FORBIDDEN' });
       }
@@ -217,6 +216,9 @@ router.get('/report', (req, res) => {
   const from = req.query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
   const to = req.query.to || new Date().toISOString();
   const communityId = req.query.community_id;
+  if (!isSupervisorUser(req.user)) {
+    return res.status(403).json({ error: '请使用人员报告接口查看本人数据', code: 'REPORT_SCOPE_FORBIDDEN' });
+  }
   const completion = completionExpression(getDB());
   let all = communityId
     ? queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t WHERE community_id = ?`, [communityId])
@@ -231,7 +233,7 @@ router.get('/report', (req, res) => {
 });
 
 // POST /api/jzm/trigger-event
-router.post('/jzm/trigger-event', async (req, res) => {
+router.post('/jzm/trigger-event', requireAuth, requireAdmin, async (req, res) => {
   const { sessionId, message } = req.body;
   if (!sessionId || !message) return res.status(400).json({ error: '缺少参数' });
   try { const result = await triggerJzmWorkflowEvent(sessionId, message); res.json(result); }

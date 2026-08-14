@@ -107,6 +107,10 @@
       button.addEventListener('click', function () { activate(tab); });
       tabs.appendChild(button);
     });
+    if (typeof window.updatePendingRegistrationBadge === 'function') {
+      var badge = document.querySelector('.nav button[data-page="management"] .pending-registration-badge');
+      window.updatePendingRegistrationBadge(badge ? Number(badge.textContent) : 0);
+    }
     container.appendChild(tabs);
     MANAGEMENT_TABS.forEach(function (tab) {
       var panel = node('section', 'management-panel');
@@ -588,9 +592,9 @@
       { value: 'today', label: '今日' }, { value: 'week', label: '近 7 天' },
       { value: 'month', label: '本月' }, { value: 'custom', label: '自定义' }
     ], 'month');
-    var staff = select(profiles.map(function (profile) {
+    var staff = select([{ value: 'all', label: '全部人员' }].concat(profiles.map(function (profile) {
       return { value: profile.id, label: profile.name + (profile.position ? ' · ' + profile.position : '') };
-    }), profiles[0] && profiles[0].id);
+    })), 'all');
     var from = node('input'); from.type = 'date'; from.value = monthStart;
     var to = node('input'); to.type = 'date'; to.value = today;
     var currentControl = document.getElementById('community-select');
@@ -619,7 +623,7 @@
     function generateReport() {
       if (!staff.value) return showMessage(target, '暂无可生成报告的人员', true);
       if (!from.value || !to.value || from.value > to.value) return showMessage(target, '日期范围无效', true);
-      window.StaffReport.load(output, Number(staff.value), {
+      window.StaffReport.load(output, staff.value, {
         from: from.value, to: to.value,
         community_id: community.value,
         community_name: community.options[community.selectedIndex].textContent
