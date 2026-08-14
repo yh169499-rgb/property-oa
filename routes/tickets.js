@@ -16,6 +16,7 @@ const {
 } = require('../services/ticket-activity');
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
+const { assertDispatchAvailable } = require('../services/dispatch-availability');
 const { isSupervisorUser } = require('../services/roles');
 const {
   STAFF_TICKET_TYPES,
@@ -107,6 +108,14 @@ function assertCommunityAccess(req, communityId) {
     error.code = 'COMMUNITY_SCOPE_FORBIDDEN';
     throw error;
   }
+}
+
+function dispatchErrorResponse(res, error) {
+  return res.status(error.status || 409).json({
+    error: error.message,
+    code: error.code,
+    conflicting_ticket_ids: error.conflictingTicketIds || [],
+  });
 }
 
 function canAccessTicket(req, ticketId) {
@@ -220,6 +229,17 @@ router.post('/', requireAuth, async (req, res) => {
   if (requestedStatus === 'doing' && !assignee) {
     return res.status(400).json({ error: '处理中工单必须指定处理人', code: 'INVALID_TICKET_INITIAL_STATE' });
   }
+  if (assignee) {
+    try {
+      assertDispatchAvailable(getDB(), {
+        staffProfileId: assignee.assigneeStaffProfileId,
+        assignedAt: now,
+        estimatedHours: Number(t.estimated_hours) || 1,
+      });
+    } catch (error) {
+      return dispatchErrorResponse(res, error);
+    }
+  }
   const repeatKey = buildRepeatKey(type, cat, loc);
   const issueSignature = identifyIssueSignature(cat, t.desc, t.message);
   const matches = getRepeatMatches(communityId, repeatKey, issueSignature);
@@ -299,6 +319,16 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (workerName) {
       try { assignee = resolveAssignee(db, workerName, req.user.id); }
       catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+      try {
+        assertDispatchAvailable(db, {
+          staffProfileId: assignee.assigneeStaffProfileId,
+          assignedAt: new Date().toISOString(),
+          estimatedHours: Number(updates.estimated_hours ?? before.estimated_hours) || 1,
+          excludeTicketId: before.id,
+        });
+      } catch (error) {
+        return dispatchErrorResponse(res, error);
+      }
     }
     sets.push('assignee_user_id = ?', 'assignee_staff_profile_id = ?', 'assigned_at = ?');
     values.push(
@@ -313,6 +343,24 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (workerName && before.performance_rule_version_id == null) {
       sets.push('performance_rule_version_id = ?');
       values.push(getActiveRule(db)?.id || null);
+    }
+  }
+  if (updates.estimated_hours !== undefined
+      && before.assignee_staff_profile_id != null
+      && before.assigned_at
+      && !(updates.worker !== undefined
+        && (updates.worker !== before.worker
+          || before.assignee_user_id == null
+          || before.assignee_staff_profile_id == null))) {
+    try {
+      assertDispatchAvailable(db, {
+        staffProfileId: before.assignee_staff_profile_id,
+        assignedAt: before.assigned_at,
+        estimatedHours: Number(updates.estimated_hours) || 1,
+        excludeTicketId: before.id,
+      });
+    } catch (error) {
+      return dispatchErrorResponse(res, error);
     }
   }
   let community = null;

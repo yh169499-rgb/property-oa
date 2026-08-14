@@ -34,6 +34,12 @@ function shanghaiDayRange(date) {
   };
 }
 
+function previousDate(date) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() - 1);
+  return value.toISOString().slice(0, 10);
+}
+
 function estimateTicketWindow(ticket, staffHistory = [], now = new Date()) {
   const startAt = ticket.assigned_at || ticket.assignedAt || ticket.created
     || (now instanceof Date ? now.toISOString() : now);
@@ -77,6 +83,7 @@ function detectCalendarConflicts(events) {
         if (Date.parse(sorted[right].startAt) >= Date.parse(sorted[left].endAt)) break;
         if (Date.parse(sorted[left].startAt) < Date.parse(sorted[right].endAt)) {
           conflicts.push({
+            type: 'ticket_overlap',
             staffId: Number(staffId),
             ticketIds: [sorted[left].ticketId, sorted[right].ticketId],
             startAt: sorted[right].startAt,
@@ -97,15 +104,19 @@ function buildDayCalendar(db, {
 
   const activeProfiles = queryAll(
     db,
-    `SELECT id, user_id, name, position, manager_id, employment_status
-     FROM staff_profiles WHERE COALESCE(employment_status, 'active') = 'active' ORDER BY id`
+    `SELECT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status,
+            u.role AS account_role
+     FROM staff_profiles sp LEFT JOIN users u ON u.id = sp.user_id
+     WHERE COALESCE(sp.employment_status, 'active') = 'active' ORDER BY sp.id`
   );
   // 已离职人员不再出现在未来排班，但历史日期仍需能追溯其工单日程。
   const departedProfiles = queryAll(
     db,
-    `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status
+    `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status,
+            u.role AS account_role
        FROM staff_profiles sp
        JOIN tickets t ON t.assignee_staff_profile_id = sp.id
+       LEFT JOIN users u ON u.id = sp.user_id
       WHERE COALESCE(sp.employment_status, 'active') <> 'active'
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) >= julianday(?)
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) < julianday(?)
@@ -128,13 +139,14 @@ function buildDayCalendar(db, {
   }
 
   const selectedIds = selected.map((profile) => Number(profile.id));
+  const dayRange = shanghaiDayRange(date);
   const shifts = selectedIds.length ? queryAll(
     db,
     `SELECT a.*, t.name AS template_name, t.color AS template_color
        FROM shift_assignments a
        LEFT JOIN shift_templates t ON t.id = a.template_id
-      WHERE a.work_date = ? AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
-    [date, ...selectedIds]
+      WHERE a.work_date IN (?, ?) AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
+    [date, previousDate(date), ...selectedIds]
   ) : [];
   const attendance = selectedIds.length ? queryAll(
     db,
@@ -142,7 +154,28 @@ function buildDayCalendar(db, {
      WHERE work_date = ? AND staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
     [date, ...selectedIds]
   ) : [];
-  const shiftByStaff = new Map(shifts.map((row) => [Number(row.staff_id), row]));
+  const shiftWindowsByStaff = new Map();
+  for (const staff of selectedIds) {
+    const current = shifts.filter(shift => Number(shift.staff_id) === staff && shift.work_date === date);
+    const unavailable = current.find(shift => shift.assignment_type === 'leave' || shift.assignment_type === 'rest');
+    if (unavailable) {
+      shiftWindowsByStaff.set(staff, [unavailable]);
+      continue;
+    }
+    const windows = shifts.filter(shift => Number(shift.staff_id) === staff
+      && shift.work_date === previousDate(date)
+      && shift.assignment_type === 'work'
+      && shift.end_at && Date.parse(shift.end_at) > Date.parse(dayRange.from))
+      .map(shift => ({
+        ...shift,
+        original_start_at: shift.start_at,
+        start_at: dayRange.from,
+        carried_over: 1,
+      }));
+    windows.push(...current);
+    windows.sort((left, right) => Date.parse(left.start_at || '') - Date.parse(right.start_at || ''));
+    if (windows.length) shiftWindowsByStaff.set(staff, windows);
+  }
   const attendanceByStaff = new Map(attendance.map((row) => [Number(row.staff_id), row]));
   const profileNameCounts = new Map();
   for (const profile of profiles) {
@@ -154,8 +187,22 @@ function buildDayCalendar(db, {
   );
 
   const people = selected.map((profile) => {
-    const shift = shiftByStaff.get(Number(profile.id));
+    const profileShifts = shiftWindowsByStaff.get(Number(profile.id)) || [];
+    const shift = profileShifts[0];
     const record = attendanceByStaff.get(Number(profile.id));
+    const mapShift = (item) => ({
+      id: Number(item.id),
+      assignmentType: item.assignment_type,
+      templateId: item.template_id === null ? null : Number(item.template_id),
+      templateName: item.template_name || '',
+      templateColor: item.template_color || '',
+      startAt: item.start_at,
+      endAt: item.end_at,
+      leaveType: item.leave_type,
+      note: item.note,
+      carriedOver: Boolean(item.carried_over),
+      originalStartAt: item.original_start_at || null,
+    });
     return {
       id: Number(profile.id),
       userId: profile.user_id === null ? null : Number(profile.user_id),
@@ -164,17 +211,9 @@ function buildDayCalendar(db, {
       position: profile.position,
       managerId: profile.manager_id === null ? null : Number(profile.manager_id),
       employmentStatus: profile.employment_status,
-      shift: shift ? {
-        id: Number(shift.id),
-        assignmentType: shift.assignment_type,
-        templateId: shift.template_id === null ? null : Number(shift.template_id),
-        templateName: shift.template_name || '',
-        templateColor: shift.template_color || '',
-        startAt: shift.start_at,
-        endAt: shift.end_at,
-        leaveType: shift.leave_type,
-        note: shift.note,
-      } : null,
+      accountRole: profile.account_role || '',
+      shift: shift ? mapShift(shift) : null,
+      shifts: profileShifts.map(mapShift),
       attendance: record ? {
         id: Number(record.id),
         checkInAt: record.check_in_at,
@@ -203,10 +242,11 @@ function buildDayCalendar(db, {
       const { from, toExclusive } = shanghaiDayRange(date);
       const where = [
         `(${identityClauses.join(' OR ')})`,
-        "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
         "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
+        `(julianday(COALESCE(NULLIF(assigned_at, ''), created))
+          + (CASE WHEN estimated_hours > 0 THEN estimated_hours ELSE 1 END) / 24.0) > julianday(?)`,
       ];
-      const params = [...identityParams, from, toExclusive];
+      const params = [...identityParams, toExclusive, from];
       if (communityId !== undefined && communityId !== null && communityId !== '') {
         where.push('community_id = ?');
         params.push(communityId);
@@ -280,6 +320,7 @@ function buildDayCalendar(db, {
       ? uniqueProfileByName.get(ticket.worker)
       : profileByUser.get(Number(ticket.assignee_user_id));
     const window = estimateTicketWindow(ticket, histories.get(Number(profile.id)));
+    const { from, toExclusive } = shanghaiDayRange(date);
     return {
       ticketId: ticket.id,
       staffId: Number(profile.id),
@@ -289,6 +330,8 @@ function buildDayCalendar(db, {
       status: ticket.status,
       communityId: ticket.community_id,
       ...window,
+      startAt: Date.parse(window.startAt) < Date.parse(from) ? from : window.startAt,
+      endAt: Date.parse(window.endAt) > Date.parse(toExclusive) ? toExclusive : window.endAt,
     };
   });
 

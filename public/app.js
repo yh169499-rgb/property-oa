@@ -20,7 +20,7 @@ const STATUS_LABEL = { wait: '待派单', doing: '处理中', pending: '搁置�
 const STATUS_CLASS = { wait: 'wait', doing: 'doing', pending: 'pending', confirm: 'confirm', done: 'done' };
 
 /* ---------- 全局 state ---------- */
-let state = { tickets: [], staff: [], communities: [] };
+let state = { tickets: [], staff: [], communities: [], dispatchCalendar: {} };
 let currentRole = 'eng_lead';
 let currentCommunity = 'default';
 let charts = {};   // echarts 实例缓存
@@ -60,6 +60,7 @@ async function load() {
         });
       }
     } catch(e) { /* ignore */ }
+    await loadDispatchCalendar();
     try {
       var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
@@ -75,6 +76,20 @@ async function load() {
   saveLocal();
 }
 
+async function loadDispatchCalendar() {
+  try {
+    var calendarDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+    var response = await fetch(API_BASE + '/api/calendar/day?date=' + encodeURIComponent(calendarDate), {
+      headers: authHeaders()
+    });
+    var json = await response.json();
+    if (response.ok) state.dispatchCalendar = json.data || json;
+    return response.ok;
+  } catch(e) { state.dispatchCalendar = {}; return false; }
+}
+
 function saveLocal() {
   // 仅保存非敏感 UI 偏好；人员、工单、手机号和权限全部由服务端持久化。
   localStorage.setItem(LS_KEY, JSON.stringify({ version: 2, preferences: { community: currentCommunity } }));
@@ -82,17 +97,24 @@ function saveLocal() {
 function save() { saveLocal(); }
 
 async function apiPatch(recordId, updates) {
-  if (!useApi || !recordId) return;
+  if (!useApi || !recordId) return { ok: false, error: '服务端 API 不可用' };
   try {
     var headers = { 'Content-Type': 'application/json' };
     var token = localStorage.getItem('auth_token');
     if (token) headers['Authorization'] = 'Bearer ' + token;
-    await fetch(API_BASE + '/api/tickets/' + recordId, {
+    var response = await fetch(API_BASE + '/api/tickets/' + recordId, {
       method: 'PATCH',
       headers: headers,
       body: JSON.stringify(updates)
     });
-  } catch(e) { console.warn('API更新失败', e); }
+    var payload = {};
+    try { payload = await response.json(); } catch(e) { /* 使用统一错误文案 */ }
+    if (!response.ok) return { ok: false, error: payload.error || ('请求失败（' + response.status + '）'), code: payload.code || '' };
+    return { ok: true, data: payload };
+  } catch(e) {
+    console.warn('API更新失败', e);
+    return { ok: false, error: '网络异常，请稍后重试' };
+  }
 }
 
 /* ============================================================
@@ -679,17 +701,21 @@ function ageLabel(t) {
 }
 function ticketSla(t) { return t.priority === 'urgent' ? 2 : (t.priority === 'high' ? 8 : (t.priority === 'normal' ? 24 : 48)); }
 function isOnTime(t) { var h = durHours(t.created, t.finished); return h != null && h <= ticketSla(t); }
-function activeStaff(role) {
-  var now = new Date();
-  var currentHM = now.getHours() * 60 + now.getMinutes();
-  return state.staff.filter(s => {
-    if (s.role !== role || s.status !== 'on') return false;
-    // 检查值班时间
-    var start = parseHM(s.dutyStart || '00:00');
-    var end = parseHM(s.dutyEnd || '23:59');
-    if (start <= end) return currentHM >= start && currentHM <= end;
-    // 跨午夜（如 22:00 ~ 06:00）
-    return currentHM >= start || currentHM <= end;
+function activeStaff(role, estimatedHours) {
+  var nowMs = Date.now();
+  var endMs = nowMs + (Number(estimatedHours) > 0 ? Number(estimatedHours) : 1) * 3600000;
+  return (state.dispatchCalendar.people || []).filter(function (person) {
+    var matchesRole = role === '维修工' ? person.accountRole === 'worker' : person.accountRole === 'keeper';
+    if (!matchesRole) return false;
+    var shifts = person.shifts || (person.shift ? [person.shift] : []);
+    return shifts.some(function (shift) {
+      return shift.assignmentType === 'work'
+        && nowMs >= Date.parse(shift.startAt)
+        && endMs <= Date.parse(shift.endAt);
+    });
+  }).map(function (person) {
+    var legacy = state.staff.find(function (staff) { return staff.name === person.name; }) || {};
+    return { ...legacy, name: person.name, role: person.accountRole, skill: legacy.skill || person.position };
   });
 }
 function parseHM(hm) { var p = (hm || '08:00').split(':'); return parseInt(p[0]) * 60 + parseInt(p[1] || 0); }
@@ -821,10 +847,11 @@ function buildActions(t) {
 
   if(t.status==='wait'){
     if(!isLead(t)) return hint(`仅${repair?'工程部':'物业'}主管可指派。`);
-    var people=activeStaff(repair?'维修工':'物业管家'); if(!people.length)return hint('暂无可派单人员（全部正在处理、请假或不在值班时段）。');
     var defHrs = CAT_DEFAULT_HOURS[t.cat] || 2;
+    var people=activeStaff(repair?'维修工':'物业管家',defHrs);
     var timeOpts = [0.5,1,1.5,2,2.5,3,4,5,6,8].map(h => `<option value="${h}"${h===defHrs?' selected':''}>${h}小时</option>`).join('');
-    return `<select id="assignWorker">${people.map(s=>`<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.skill)}</option>`).join('')}</select><select id="assignDuration" title="预计处理时间">${timeOpts}</select><button class="btn" onclick="assignTicket('${t.id}')">确认指派</button>`;
+    var personOpts=people.length?people.map(s=>`<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.skill)}</option>`).join(''):'<option value="">当前时长暂无可派人员</option>';
+    return `<select id="assignWorker">${personOpts}</select><select id="assignDuration" title="预计处理时间" onchange="refreshAssignWorkers('${t.id}')">${timeOpts}</select><button class="btn" onclick="assignTicket('${t.id}')">确认指派</button>`;
   }
   if(t.status==='doing'){
     if(mine) return `<button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
@@ -839,30 +866,27 @@ function buildActions(t) {
   if(t.status==='confirm') return (isLead(t)?`<button class="btn green" onclick="confirmDone('${t.id}')">确认完成</button><button class="btn danger" onclick="reject('${t.id}')">驳回工单</button>`:hint('等待主管审核。')) + ` ${noteBtn}`;
   return hint('工单已完成。') + ` ${noteBtn}`;
 }
-function assignTicket(id){
+function refreshAssignWorkers(id){
+  var t=state.tickets.find(x=>x.id===id);var select=$('#assignWorker');var duration=$('#assignDuration');if(!t||!select||!duration)return;
+  var role=t.type==='repair'?'维修工':'物业管家';var people=activeStaff(role,parseFloat(duration.value)||1);
+  select.innerHTML=people.length?people.map(s=>`<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.skill)}</option>`).join(''):'<option value="">当前时长暂无可派人员</option>';
+}
+async function assignTicket(id){
   var t=state.tickets.find(x=>x.id===id);
   if(!t||t.status!=='wait'||!isLead(t)){toast('无权指派该工单');return;}
   var el=$('#assignWorker');if(!el)return;
   var workerName=el.value;
+  if(!workerName){toast('当前预计时长暂无可派人员，请缩短预计时间或调整班次');return;}
   var durEl=$('#assignDuration');
   var estHours=durEl?parseFloat(durEl.value)||2:2;
 
-  // 日程冲突检测：检查该师傅当前是否有时间重叠
-  var conflicts=checkAssignConflicts(workerName, t, estHours);
-  if(conflicts.length){
-    var msg='⚠️ 日程冲突提醒：\n\n'+workerName+' 在以下时段已有工单：\n\n';
-    conflicts.forEach(function(c){
-      msg+='• '+c.ticketId+'（'+c.cat+'）\n  时间：'+c.startTime+' ~ '+c.endTime+'\n  重叠：'+c.overlap+'小时\n\n';
-    });
-    msg+='当前工单预计时段：'+conflicts[0].newStart+' ~ '+conflicts[0].newEnd+'\n\n确定仍要派单给该师傅吗？';
-    if(!confirm(msg))return;
-  }
-
+  var result=await apiPatch(t.id,{status:'doing',worker:workerName,estimated_hours:estHours});
+  if(!result.ok){toast(result.error||'派单失败');return;}
   t.worker=workerName;
   t.status='doing';
   t.estimatedHours=estHours;
   pushStep(t,t.type==='repair'?'工单分配':'主管指派',roleObj().name);
-  save();apiPatch(t.id,{status:'doing',worker:t.worker});
+  save();
   afterAction(id,'已指派给 '+t.worker+'，预计 '+(t.estimatedHours||2)+'h');
 }
 
@@ -1270,7 +1294,7 @@ window.onload=async function(){
   if (nav) { nav.style.pointerEvents = ''; nav.style.opacity = ''; }
 };
 
-function startAutoSync(){setInterval(async function(){if(currentRole==='eng_lead')loadPendingRegistrations();try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
+function startAutoSync(){setInterval(async function(){if(currentRole==='eng_lead')loadPendingRegistrations();await loadDispatchCalendar();try{var resp=await fetch(API_BASE+'/api/tickets?community_id='+encodeURIComponent(currentCommunity),{headers:authHeaders()});var json=await resp.json();if(Array.isArray(json.data)){state.tickets=json.data.filter(t=>t.id&&t.type);state.tickets.forEach(t=>{t.priority=t.priority||inferPriority(t);t.rejectHistory=t.rejectHistory||[];t.steps=t.steps||[];t.photos=t.photos||[];t.aggregated=t.aggregated||[];});saveLocal();renderAll();if($('#page-dashboard').classList.contains('active'))renderDashboard();}}catch(e){}},10000);}
 
 /* ============================================================
    师傅日程 · 时间轴排班与冲突检测
@@ -1614,6 +1638,7 @@ function enterApp(user){
   (async function(){
     await reloadCommunities();
     await reloadTickets();
+    await loadDispatchCalendar();
     enhanceState();
     applyRoleView();
     // 图表在display:none时初始化尺寸不对，显示后强制resize

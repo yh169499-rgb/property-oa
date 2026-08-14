@@ -24,6 +24,14 @@
       return event.staffId == null || Number(event.staffId) === Number(profile.id);
     });
     var eventIds = new Set(events.map(function (event) { return event.ticketId; }));
+    var conflictTicketIds = [];
+    (calendar.conflicts || []).forEach(function (conflict) {
+      if ((conflict.ticketIds || []).some(function (ticketId) { return eventIds.has(ticketId); })) {
+        (conflict.ticketIds || []).forEach(function (ticketId) {
+          if (!conflictTicketIds.includes(ticketId)) conflictTicketIds.push(ticketId);
+        });
+      }
+    });
 
     return {
       name: profile.name || '未命名员工',
@@ -39,10 +47,10 @@
       },
       schedule: {
         shift: person.shift || null,
+        shifts: person.shifts || (person.shift ? [person.shift] : []),
         events: events,
-        hasConflict: (calendar.conflicts || []).some(function (conflict) {
-          return (conflict.ticketIds || []).some(function (ticketId) { return eventIds.has(ticketId); });
-        }),
+        hasConflict: conflictTicketIds.length > 0,
+        conflictTicketIds: conflictTicketIds,
       },
       directory: directory,
     };
@@ -69,9 +77,15 @@
       ? (shift.leaveType || '请假')
       : shift.assignmentType === 'rest' ? '休息' : '上班');
     var time = shift.startAt && shift.endAt
-      ? shift.startAt.slice(11, 16) + '—' + shift.endAt.slice(11, 16)
+      ? shanghaiTime(shift.startAt) + '—' + shanghaiTime(shift.endAt)
+        + (shift.assignmentType === 'work' ? ' · 该时段内可派单' : '')
       : (shift.leaveType || '');
     return { title: title, time: time };
+  }
+
+  function shanghaiTime(value) {
+    return typeof WorkforceUtils !== 'undefined' && WorkforceUtils.shanghaiTime
+      ? WorkforceUtils.shanghaiTime(value) : String(value || '').slice(11, 16);
   }
 
   function render(model) {
@@ -136,13 +150,17 @@
     heading.appendChild(mySchedule);
     schedule.appendChild(heading);
 
-    var shift = shiftText(model.schedule.shift);
-    var shiftBlock = element('div', 'worker-shift-block');
-    shiftBlock.appendChild(element('strong', '', shift.title));
-    shiftBlock.appendChild(element('span', '', shift.time));
-    schedule.appendChild(shiftBlock);
+    var shifts = model.schedule.shifts.length ? model.schedule.shifts : [null];
+    shifts.forEach(function (item) {
+      var shift = shiftText(item);
+      var shiftBlock = element('div', 'worker-shift-block');
+      shiftBlock.appendChild(element('strong', '', shift.title));
+      shiftBlock.appendChild(element('span', '', shift.time));
+      schedule.appendChild(shiftBlock);
+    });
     if (model.schedule.hasConflict) {
-      schedule.appendChild(element('div', 'management-warning', '今日工单存在时间冲突，请尽快联系主管调整。'));
+      schedule.appendChild(element('div', 'management-warning',
+        '工单 ' + model.schedule.conflictTicketIds.join(' 与 ') + ' 时间重叠，请尽快联系主管调整。'));
     }
     content.appendChild(schedule);
 
@@ -155,7 +173,7 @@
       var item = element('button', 'worker-task-item');
       item.type = 'button';
       var title = element('strong', '', event.ticketId + ' · ' + (event.category || '工单'));
-      var time = (event.startAt || '').slice(11, 16) + '—' + (event.endAt || '').slice(11, 16);
+      var time = shanghaiTime(event.startAt) + '—' + shanghaiTime(event.endAt);
       item.appendChild(title);
       item.appendChild(element('span', '', time + ' · ' + (event.location || event.description || '')));
       item.addEventListener('click', function () {

@@ -70,6 +70,15 @@
     var scheduleEvents = (calendar.events || []).filter(function (event) {
       return event.staffId == null || Number(event.staffId) === Number(profile.id);
     });
+    var scheduleEventIds = new Set(scheduleEvents.map(function (event) { return event.ticketId; }));
+    var conflictTicketIds = [];
+    (calendar.conflicts || []).forEach(function (conflict) {
+      if ((conflict.ticketIds || []).some(function (ticketId) { return scheduleEventIds.has(ticketId); })) {
+        (conflict.ticketIds || []).forEach(function (ticketId) {
+          if (!conflictTicketIds.includes(ticketId)) conflictTicketIds.push(ticketId);
+        });
+      }
+    });
 
     return {
       period: period,
@@ -110,10 +119,10 @@
       schedule: {
         date: calendar.date || '',
         shift: ownCalendar.shift || null,
+        shifts: ownCalendar.shifts || (ownCalendar.shift ? [ownCalendar.shift] : []),
         events: scheduleEvents,
-        hasConflict: (calendar.conflicts || []).some(function (conflict) {
-          return scheduleEvents.some(function (event) { return (conflict.ticketIds || []).includes(event.ticketId); });
-        }),
+        hasConflict: conflictTicketIds.length > 0,
+        conflictTicketIds: conflictTicketIds,
         emptyShiftLabel: '今天未安排班次',
         emptyEventsLabel: '暂无工单时间块'
       },
@@ -126,6 +135,11 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = String(text);
     return node;
+  }
+
+  function shanghaiTime(value) {
+    return typeof WorkforceUtils !== 'undefined' && WorkforceUtils.shanghaiTime
+      ? WorkforceUtils.shanghaiTime(value) : String(value || '').slice(11, 16);
   }
 
   function metric(label, value) {
@@ -252,25 +266,29 @@
     scheduleHead.appendChild(dateControls);
     scheduleCard.appendChild(scheduleHead);
     var scheduleBody = element('div', 'schedule-agenda');
-    var shift = model.schedule.shift;
-    var shiftBlock = element('div', 'schedule-block schedule-shift');
-    shiftBlock.appendChild(element('strong', '', shift
-      ? (shift.templateName || (shift.assignmentType === 'leave' ? '请假' : shift.assignmentType === 'rest' ? '休息' : '上班'))
-      : model.schedule.emptyShiftLabel));
-    shiftBlock.appendChild(element('span', '', shift && shift.startAt && shift.endAt
-      ? shift.startAt.slice(11, 16) + '—' + shift.endAt.slice(11, 16)
-      : (shift && shift.leaveType ? shift.leaveType : '')));
-    scheduleBody.appendChild(shiftBlock);
+    var shifts = model.schedule.shifts.length ? model.schedule.shifts : [null];
+    shifts.forEach(function (shift) {
+      var shiftBlock = element('div', 'schedule-block schedule-shift');
+      shiftBlock.appendChild(element('strong', '', shift
+        ? (shift.templateName || (shift.assignmentType === 'leave' ? '请假' : shift.assignmentType === 'rest' ? '休息' : '上班'))
+        : model.schedule.emptyShiftLabel));
+      shiftBlock.appendChild(element('span', '', shift && shift.startAt && shift.endAt
+        ? shanghaiTime(shift.startAt) + '—' + shanghaiTime(shift.endAt)
+          + (shift.assignmentType === 'work' ? ' · 该时段内可派单' : '')
+        : (shift && shift.leaveType ? shift.leaveType : '')));
+      scheduleBody.appendChild(shiftBlock);
+    });
     var eventGroup = element('div', 'schedule-events');
     if (!model.schedule.events.length) eventGroup.appendChild(element('div', 'my-empty', model.schedule.emptyEventsLabel));
     model.schedule.events.forEach(function (event) {
       var item = element('div', 'schedule-block schedule-ticket');
       item.appendChild(element('strong', '', event.ticketId + ' · ' + (event.category || '工单')));
-      item.appendChild(element('span', '', (event.startAt || '').slice(11, 16) + '—' + (event.endAt || '').slice(11, 16) + ' · ' + (event.location || event.description || '')));
+      item.appendChild(element('span', '', shanghaiTime(event.startAt) + '—' + shanghaiTime(event.endAt) + ' · ' + (event.location || event.description || '')));
       eventGroup.appendChild(item);
     });
     scheduleBody.appendChild(eventGroup);
-    if (model.schedule.hasConflict) scheduleBody.appendChild(element('div', 'management-warning', '当前日程存在工单时间重叠，请联系主管调整。'));
+    if (model.schedule.hasConflict) scheduleBody.appendChild(element('div', 'management-warning',
+      '工单 ' + model.schedule.conflictTicketIds.join(' 与 ') + ' 时间重叠，请联系主管调整。'));
     scheduleCard.appendChild(scheduleBody);
     rootNode.appendChild(scheduleCard);
     var directoryCard = element('section', 'card my-directory-card');
