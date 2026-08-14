@@ -18,6 +18,31 @@ const workforceReportRoutes = require('./routes/workforce-reports');
 const directoryRoutes = require('./routes/directory');
 const { createAiReportRouter } = require('./routes/ai-reports');
 
+// Express 4 不会自动把 async 路由的 Promise rejection 交给 error middleware。
+// 统一包装路由处理器，避免数据库/外部服务异常时请求悬挂或触发 unhandledRejection。
+function asyncHandler(handler) {
+  return function wrappedAsyncHandler(req, res, next) {
+    try {
+      return Promise.resolve(handler(req, res, next)).catch(next);
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
+function wrapRouterAsync(router) {
+  if (!router || !Array.isArray(router.stack)) return router;
+  router.stack.forEach((layer) => {
+    if (!layer.route || !Array.isArray(layer.route.stack)) return;
+    layer.route.stack.forEach((routeLayer) => {
+      if (typeof routeLayer.handle === 'function') {
+        routeLayer.handle = asyncHandler(routeLayer.handle);
+      }
+    });
+  });
+  return router;
+}
+
 function createServerApp(options = {}) {
   const app = express();
   app.disable('x-powered-by');
@@ -60,17 +85,17 @@ function createServerApp(options = {}) {
     next();
   }, express.static(config.UPLOAD_DIR));
 
-  app.use('/api', authRoutes);
-  app.use('/api/tickets', ticketRoutes);
-  app.use('/api/communities', communityRoutes);
-  app.use('/api/staff', staffRoutes);
-  app.use('/api', directoryRoutes);
-  app.use('/api', settingsRoutes);
-  app.use('/api', profileRoutes);
-  app.use('/api', shiftRoutes);
-  app.use('/api', attendanceRoutes);
-  app.use('/api', workforceReportRoutes);
-  app.use('/api', createAiReportRouter(options.aiReport));
+  app.use('/api', wrapRouterAsync(authRoutes));
+  app.use('/api/tickets', wrapRouterAsync(ticketRoutes));
+  app.use('/api/communities', wrapRouterAsync(communityRoutes));
+  app.use('/api/staff', wrapRouterAsync(staffRoutes));
+  app.use('/api', wrapRouterAsync(directoryRoutes));
+  app.use('/api', wrapRouterAsync(settingsRoutes));
+  app.use('/api', wrapRouterAsync(profileRoutes));
+  app.use('/api', wrapRouterAsync(shiftRoutes));
+  app.use('/api', wrapRouterAsync(attendanceRoutes));
+  app.use('/api', wrapRouterAsync(workforceReportRoutes));
+  app.use('/api', wrapRouterAsync(createAiReportRouter(options.aiReport)));
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'property-oa' });
   });
@@ -93,4 +118,4 @@ function createServerApp(options = {}) {
   return app;
 }
 
-module.exports = { createServerApp };
+module.exports = { createServerApp, asyncHandler, wrapRouterAsync };

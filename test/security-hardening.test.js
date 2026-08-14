@@ -4,6 +4,8 @@ const { createTestDB } = require('./helpers/test-db');
 const { startHttpServer } = require('./helpers/http-server');
 const { authHeader } = require('./helpers/auth');
 const config = require('../config');
+const express = require('express');
+const { wrapRouterAsync } = require('../server-app');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -31,6 +33,7 @@ test('旧版未加权限的服务默认禁止启动', () => {
   const legacy = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
   assert.match(legacy, /ALLOW_LEGACY_SERVER/);
   assert.match(legacy, /旧版服务已禁用/);
+  assert.doesNotMatch(legacy, /accessToken:\s*token/);
 });
 
 test('员工只能读取自己的排班，主管才可读取全员排班', async (t) => {
@@ -119,4 +122,25 @@ test('响应关闭 Express 指纹并设置基础安全响应头', async (t) => {
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(response.headers.get('x-frame-options'), 'DENY');
   assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+});
+
+test('Express 4 异步路由异常统一返回 500，不会让请求悬挂', async (t) => {
+  const app = express();
+  const router = express.Router();
+  router.get('/async-failure', async () => {
+    throw new Error('simulated persistence failure');
+  });
+  app.use('/api', wrapRouterAsync(router));
+  app.use((error, _req, res, _next) => {
+    res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
+  });
+  const server = await new Promise((resolve) => {
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  t.after(() => server.close());
+
+  const address = server.address();
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/async-failure`);
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: '服务器内部错误', code: 'INTERNAL_ERROR' });
 });
