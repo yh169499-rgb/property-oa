@@ -7,6 +7,7 @@ const root = path.join(__dirname, '..', 'public');
 const workspace = fs.readFileSync(path.join(root, 'js', 'management-workspace.js'), 'utf8');
 const report = fs.readFileSync(path.join(root, 'js', 'staff-report.js'), 'utf8');
 const myPage = fs.readFileSync(path.join(root, 'js', 'my-page.js'), 'utf8');
+const api = fs.readFileSync(path.join(root, 'js', 'api.js'), 'utf8');
 const workerHome = fs.readFileSync(path.join(root, 'js', 'worker-home.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const workforceApi = fs.readFileSync(path.join(root, 'js', 'workforce-api.js'), 'utf8');
@@ -15,6 +16,15 @@ test('设置页提供服务端绩效规则读取和发布入口', () => {
   assert.match(workspace, /\/api\/settings\/performance/);
   assert.match(workspace, /performance_weight|completion_weight|on_time_weight/);
   assert.match(workspace, /performance\/versions/);
+});
+
+test('认证信息按浏览器标签页隔离，避免多账号互相顶掉登录', () => {
+  assert.match(api, /sessionStorage\.getItem\(['"]auth_token['"]\)/);
+  assert.match(api, /sessionStorage\.setItem\(['"]auth_token['"]\s*[,)]/);
+  assert.match(api, /sessionStorage\.removeItem\(['"]auth_token['"]\)/);
+  assert.doesNotMatch(api, /localStorage\.(?:getItem|setItem|removeItem)\(['"]auth_token['"]\)/);
+  assert.doesNotMatch(app, /localStorage\.(?:getItem|setItem|removeItem)\(['"](?:auth_token|login_user)['"]\)/);
+  assert.doesNotMatch(workspace, /localStorage\.getItem\(['"]auth_token['"]\)/);
 });
 
 test('员工页面从同小区通讯录读取手机号', () => {
@@ -34,6 +44,31 @@ test('维修师傅和物业管家都保留报修、投诉、帮助三个工单�
   assert.match(workerHome, /page: 'complaint'/);
   assert.match(workerHome, /page: 'help'/);
   assert.match(workerHome, /navTo\(entry\.page\)/);
+});
+
+test('主管派单等待服务端成功并提交预计工时，失败时不显示虚假成功', () => {
+  const assignSource = app.slice(app.indexOf('async function assignTicket(id)'), app.indexOf('function checkAssignConflicts'));
+  assert.match(app, /async function assignTicket\(id\)/);
+  assert.match(app, /await apiPatch\(t\.id,\{status:'doing',worker:workerName,estimated_hours:estHours\}\)/);
+  assert.match(app, /if\(!result\.ok\)/);
+  assert.match(app, /result\.error/);
+  assert.doesNotMatch(app, /确定仍要派单/);
+  assert.doesNotMatch(assignSource, /checkAssignConflicts/);
+  assert.match(app, /state\.dispatchCalendar/);
+  assert.match(app, /await loadDispatchCalendar\(\)/);
+  assert.match(app, /person\.accountRole === 'worker'/);
+  assert.match(app, /person\.shifts/);
+  assert.match(app, /endMs <= Date\.parse\(shift\.endAt\)/);
+  const activeSource = app.slice(app.indexOf('function activeStaff(role'), app.indexOf('function parseHM'));
+  assert.doesNotMatch(activeSource, /s\.status|dutyStart|dutyEnd/);
+  assert.match(app, /onchange="refreshAssignWorkers/);
+  assert.match(app, /function refreshAssignWorkers/);
+});
+
+test('日历前端支持同一天展示多个可派班次窗口', () => {
+  assert.match(workerHome, /person\.shifts/);
+  assert.match(myPage, /ownCalendar\.shifts/);
+  assert.match(fs.readFileSync(path.join(root, 'js', 'responsive-calendar.js'), 'utf8'), /person\.shifts/);
 });
 
 test('报告展示服务端绩效依据且不再展示考勤', () => {

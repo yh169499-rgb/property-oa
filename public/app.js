@@ -10,7 +10,7 @@ const API_BASE = ''; // 同域，留空即可；部署到 Render 后改为实际
 
 function authHeaders(json) {
   var headers = json ? { 'Content-Type': 'application/json' } : {};
-  var token = localStorage.getItem('auth_token');
+  var token = sessionStorage.getItem('auth_token');
   if (token) headers.Authorization = 'Bearer ' + token;
   return headers;
 }
@@ -100,7 +100,7 @@ async function apiPatch(recordId, updates) {
   if (!useApi || !recordId) return { ok: false, error: '服务端 API 不可用' };
   try {
     var headers = { 'Content-Type': 'application/json' };
-    var token = localStorage.getItem('auth_token');
+    var token = sessionStorage.getItem('auth_token');
     if (token) headers['Authorization'] = 'Bearer ' + token;
     var response = await fetch(API_BASE + '/api/tickets/' + recordId, {
       method: 'PATCH',
@@ -1530,7 +1530,7 @@ function doLogin(){
   if(window._jigsawPassed===false){$('#login-error').textContent='请先完成滑动验证';return;}
   fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pwd,rememberMe:!!$('#login-remember').checked})}).then(r=>r.json()).then(d=>{
     if(d.success){
-      localStorage.setItem('login_user',JSON.stringify(d.user));
+      sessionStorage.setItem('login_user',JSON.stringify(d.user));
       if(d.token) API.setToken(d.token);
       enterApp(d.user);
     } else {
@@ -1646,7 +1646,7 @@ function enterApp(user){
   })();
 }
 function checkLogin(){
-  var saved=localStorage.getItem('login_user');
+  var saved=sessionStorage.getItem('login_user');
   if(saved){
     try{enterApp(JSON.parse(saved));}catch(e){showLoginPage();}
   } else {
@@ -1680,8 +1680,8 @@ function showLoginPage(){
   }
 }
 function doLogout(){
-  localStorage.removeItem('login_user');
-  localStorage.removeItem('auth_token');
+  sessionStorage.removeItem('login_user');
+  sessionStorage.removeItem('auth_token');
   // 销毁所有图表实例，避免切换用户后尺寸异常
   Object.keys(charts).forEach(function(k) {
     try { charts[k].dispose(); } catch(e) {}
