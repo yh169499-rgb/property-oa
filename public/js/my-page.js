@@ -95,6 +95,7 @@
       editableFields: ['birth_month', 'phone'],
       readonlyFields: ['join_date', 'position', 'manager'],
       isManager: manager,
+      showPerformance: !manager,
       personalActions: personal,
       managerResults: managerResults ? {
         received: number(managerResults.received && managerResults.received.total),
@@ -217,33 +218,35 @@
     grid.appendChild(summary);
     rootNode.appendChild(grid);
 
-    var performanceCard = element('section', 'card my-performance-card');
-    var performanceHead = element('div', 'my-section-head');
-    var performanceTitle = element('div');
-    performanceTitle.appendChild(element('h3', '', '我的绩效'));
-    performanceTitle.appendChild(element('p', '', model.periodLabel + ' · 服务端统一计算'));
-    performanceHead.appendChild(performanceTitle);
-    performanceHead.appendChild(element('span', 'my-performance-rule', '规则 ' + model.performance.ruleLabel));
-    performanceCard.appendChild(performanceHead);
-    var performanceBody = element('div', 'my-performance-body');
-    var score = element('div', 'my-performance-score');
-    score.appendChild(element('span', '', '综合得分'));
-    score.appendChild(element('strong', '', model.performance.status === 'scored'
-      ? model.performance.score + ' 分' : '样本不足'));
-    score.appendChild(element('small', '', model.performance.levelLabel + ' · ' + model.performance.sampleSize + ' 单样本'));
-    performanceBody.appendChild(score);
-    var componentGrid = element('div', 'my-performance-components');
-    ['completion', 'onTime', 'quality'].forEach(function (key) {
-      var item = model.performance.components[key];
-      var box = element('div', 'my-performance-component');
-      box.appendChild(element('span', '', item.label));
-      box.appendChild(element('strong', '', item.score == null ? '—' : item.score + ' 分'));
-      box.appendChild(element('small', '', item.contribution == null ? '暂无计算结果' : '计入 ' + item.contribution + ' 分'));
-      componentGrid.appendChild(box);
-    });
-    performanceBody.appendChild(componentGrid);
-    performanceCard.appendChild(performanceBody);
-    rootNode.appendChild(performanceCard);
+    if (model.showPerformance) {
+      var performanceCard = element('section', 'card my-performance-card');
+      var performanceHead = element('div', 'my-section-head');
+      var performanceTitle = element('div');
+      performanceTitle.appendChild(element('h3', '', '我的绩效'));
+      performanceTitle.appendChild(element('p', '', model.periodLabel + ' · 服务端统一计算'));
+      performanceHead.appendChild(performanceTitle);
+      performanceHead.appendChild(element('span', 'my-performance-rule', '规则 ' + model.performance.ruleLabel));
+      performanceCard.appendChild(performanceHead);
+      var performanceBody = element('div', 'my-performance-body');
+      var score = element('div', 'my-performance-score');
+      score.appendChild(element('span', '', '综合得分'));
+      score.appendChild(element('strong', '', model.performance.status === 'scored'
+        ? model.performance.score + ' 分' : '样本不足'));
+      score.appendChild(element('small', '', model.performance.levelLabel + ' · ' + model.performance.sampleSize + ' 单样本'));
+      performanceBody.appendChild(score);
+      var componentGrid = element('div', 'my-performance-components');
+      ['completion', 'onTime', 'quality'].forEach(function (key) {
+        var item = model.performance.components[key];
+        var box = element('div', 'my-performance-component');
+        box.appendChild(element('span', '', item.label));
+        box.appendChild(element('strong', '', item.score == null ? '—' : item.score + ' 分'));
+        box.appendChild(element('small', '', item.contribution == null ? '暂无计算结果' : '计入 ' + item.contribution + ' 分'));
+        componentGrid.appendChild(box);
+      });
+      performanceBody.appendChild(componentGrid);
+      performanceCard.appendChild(performanceBody);
+      rootNode.appendChild(performanceCard);
+    }
 
     var scheduleCard = element('section', 'card my-schedule-card');
     var scheduleHead = element('div', 'my-section-head');
