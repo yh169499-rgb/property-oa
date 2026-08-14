@@ -1,4 +1,4 @@
-const { findSoleSupervisorProfile, assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
+const { findSupervisorProfile, assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
 const { isSupervisorUser, positionForRole } = require('./roles');
 
 function all(db, sql, params = []) {
@@ -87,7 +87,7 @@ function normalizeInput(input) {
 function insertStaff(db, rawInput, actorUser, auditAction = 'create', auditMetadata = {}) {
   assertSupervisor(actorUser);
   const input = normalizeInput(rawInput);
-  const manager = findSoleSupervisorProfile(db);
+  const manager = findSupervisorProfile(db, actorUser.id);
   assertTeamCapacity(db, manager.id, input.role);
   if (!one(db, 'SELECT id FROM communities WHERE id = ?', [input.communityId])) {
     throw lifecycleError('小区不存在', 'COMMUNITY_NOT_FOUND', 404);

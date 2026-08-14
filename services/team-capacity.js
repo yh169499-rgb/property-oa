@@ -110,10 +110,30 @@ function findSoleSupervisorProfile(db) {
   throw error;
 }
 
+function findSupervisorProfile(db, userId) {
+  const profile = queryAll(db, `
+    SELECT id, user_id, name, position, manager_id, employment_status
+    FROM staff_profiles
+    WHERE user_id = ?
+      AND employment_status = 'active'
+    LIMIT 1
+  `, [userId]).find((candidate) => (
+    MANAGER_ROLES.has(String(candidate.position || '').trim().toLowerCase())
+  ));
+  if (profile) return profile;
+
+  const error = new Error('未找到当前主管档案');
+  error.status = 404;
+  error.code = 'SUPERVISOR_PROFILE_NOT_FOUND';
+  error.details = { userId };
+  throw error;
+}
+
 module.exports = {
   TEAM_LIMITS,
   normalizedStaffRole,
   teamUsage,
   assertTeamCapacity,
   findSoleSupervisorProfile,
+  findSupervisorProfile,
 };
