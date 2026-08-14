@@ -10,7 +10,7 @@ const API_BASE = ''; // 同域，留空即可；部署到 Render 后改为实际
 
 function authHeaders(json) {
   var headers = json ? { 'Content-Type': 'application/json' } : {};
-  var token = localStorage.getItem('auth_token');
+  var token = sessionStorage.getItem('auth_token');
   if (token) headers.Authorization = 'Bearer ' + token;
   return headers;
 }
@@ -100,7 +100,7 @@ async function apiPatch(recordId, updates) {
   if (!useApi || !recordId) return { ok: false, error: '服务端 API 不可用' };
   try {
     var headers = { 'Content-Type': 'application/json' };
-    var token = localStorage.getItem('auth_token');
+    var token = sessionStorage.getItem('auth_token');
     if (token) headers['Authorization'] = 'Bearer ' + token;
     var response = await fetch(API_BASE + '/api/tickets/' + recordId, {
       method: 'PATCH',
@@ -1523,15 +1523,66 @@ function formatDayLabel(d) { var w = ['周日','周一','周二','周三','周�
 /* ============================================================
    登录系统
    ============================================================ */
+// 当前登录态只放在 sessionStorage，避免同源标签页之间互相覆盖。
+// “记住我”另存为按手机号分桶的凭据集合；它不是当前登录态，且多账号时不会自动选错账号。
+var REMEMBERED_AUTH_KEY = 'remembered_auth_sessions_v1';
+var REMEMBERED_AUTH_TTL = 30 * 24 * 60 * 60 * 1000;
+function readRememberedAuth() {
+  try {
+    var value = JSON.parse(localStorage.getItem(REMEMBERED_AUTH_KEY) || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch (e) {
+    return {};
+  }
+}
+function writeRememberedAuth(value) {
+  try { localStorage.setItem(REMEMBERED_AUTH_KEY, JSON.stringify(value)); } catch (e) {}
+}
+function rememberAuthSession(phone, user, token) {
+  if (!phone || !user || !token) return;
+  var sessions = readRememberedAuth();
+  sessions[String(phone)] = {
+    user: user,
+    token: token,
+    expiresAt: Date.now() + REMEMBERED_AUTH_TTL
+  };
+  writeRememberedAuth(sessions);
+}
+function forgetRememberedAuth(phone) {
+  if (!phone) return;
+  var sessions = readRememberedAuth();
+  delete sessions[String(phone)];
+  writeRememberedAuth(sessions);
+}
+function restoreRememberedAuth() {
+  var sessions = readRememberedAuth();
+  var now = Date.now();
+  var valid = {};
+  Object.keys(sessions).forEach(function(phone) {
+    var item = sessions[phone];
+    if (item && item.token && item.user && Number(item.expiresAt) > now) valid[phone] = item;
+  });
+  if (Object.keys(valid).length !== Object.keys(sessions).length) writeRememberedAuth(valid);
+  var entries = Object.keys(valid).map(function(phone) { return valid[phone]; });
+  // 多个账号都勾选“记住我”时不自动选择，避免新标签页进入错误账号。
+  if (entries.length !== 1) return null;
+  var entry = entries[0];
+  sessionStorage.setItem('login_user', JSON.stringify(entry.user));
+  if (typeof API !== 'undefined' && API.setToken) API.setToken(entry.token);
+  return entry.user;
+}
 function doLogin(){
   var phone=$('#login-phone').value.trim();
   var pwd=$('#login-password').value;
+  var rememberMe = !!$('#login-remember').checked;
   if(!phone||!pwd){$('#login-error').textContent='请填写手机号和密码';return;}
   if(window._jigsawPassed===false){$('#login-error').textContent='请先完成滑动验证';return;}
-  fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pwd,rememberMe:!!$('#login-remember').checked})}).then(r=>r.json()).then(d=>{
+  fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pwd,rememberMe:rememberMe})}).then(r=>r.json()).then(d=>{
     if(d.success){
-      localStorage.setItem('login_user',JSON.stringify(d.user));
+      sessionStorage.setItem('login_user',JSON.stringify(d.user));
       if(d.token) API.setToken(d.token);
+      if (rememberMe) rememberAuthSession(phone, d.user, d.token);
+      else forgetRememberedAuth(phone);
       enterApp(d.user);
     } else {
       $('#login-error').textContent=d.error||'登录失败';
@@ -1646,11 +1697,13 @@ function enterApp(user){
   })();
 }
 function checkLogin(){
-  var saved=localStorage.getItem('login_user');
+  var saved=sessionStorage.getItem('login_user');
   if(saved){
     try{enterApp(JSON.parse(saved));}catch(e){showLoginPage();}
   } else {
-    showLoginPage();
+    var restored = restoreRememberedAuth();
+    if (restored) enterApp(restored);
+    else showLoginPage();
   }
 }
 function showLoginPage(){
@@ -1680,8 +1733,15 @@ function showLoginPage(){
   }
 }
 function doLogout(){
-  localStorage.removeItem('login_user');
-  localStorage.removeItem('auth_token');
+  var phone = '';
+  try {
+    var saved = sessionStorage.getItem('login_user');
+    phone = saved ? (JSON.parse(saved).phone || '') : '';
+  } catch (e) {}
+  if (typeof API !== 'undefined' && API.clearToken) API.clearToken();
+  else sessionStorage.removeItem('auth_token');
+  sessionStorage.removeItem('login_user');
+  forgetRememberedAuth(phone);
   // 销毁所有图表实例，避免切换用户后尺寸异常
   Object.keys(charts).forEach(function(k) {
     try { charts[k].dispose(); } catch(e) {}
