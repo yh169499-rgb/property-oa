@@ -493,9 +493,7 @@ function initCommunitySelect() {
 function updateLogo() {
   var logo = $('#app-logo');
   if (!logo) return;
-  var c = state.communities.find(function(x) { return x.id === currentCommunity; });
-  var name = c ? c.name : '';
-  logo.textContent = '🏢 ' + (name && name !== '默认小区' ? name + '工单系统' : '工单系统');
+  logo.textContent = '🏢 工单系统';
 }
 
 async function reloadTickets() {

@@ -61,6 +61,11 @@ test('旧前端本地绩效公式不再作为数据源', () => {
   assert.doesNotMatch(app, /m\.onRate\s*\*\s*\.7/);
 });
 
+test('系统标题不拼接测试小区名称', () => {
+  assert.match(app, /logo\.textContent = '🏢 工单系统'/);
+  assert.doesNotMatch(app, /name \+ '工单系统'/);
+});
+
 test('人员报告提供按需千问润色并固定展示六类管理解读', () => {
   assert.match(report, /AI 优化并润色/);
   assert.match(report, /AI 润色报告/);
