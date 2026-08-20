@@ -211,6 +211,26 @@ Render Web Service 的默认文件系统是临时的，重新部署或实例重�
 
 迁移后可运行 `npm run verify:supabase`，比较本地副本与远程快照的 SHA-256、表集合和各表记录数。
 
+### 免费 Render 计划的一次性迁移
+
+免费计划没有 Shell 时，可在 Render 服务的 **Environment** 中临时增加以下变量，让服务在启动前执行一次受保护的租户迁移：
+
+```text
+APPLY_TENANT_MIGRATION_ON_START=true
+TENANT_MIGRATION_CONFIRM=MIGRATE-MULTI-TENANT
+```
+
+可选变量用于指定需要保留的测试主管和企业：
+
+```text
+TENANT_MIGRATION_SUPERVISOR_PHONE=13800000001
+TENANT_MIGRATION_TENANT_ID=tenant-test
+TENANT_MIGRATION_TENANT_NAME=全流程测试企业
+TENANT_MIGRATION_STAFF_LIMIT=4
+```
+
+保存并重新部署后，日志出现“启动租户迁移完成”且服务进入 Live，即表示迁移成功。确认服务正常后，应立即删除 `TENANT_MIGRATION_CONFIRM`，并将 `APPLY_TENANT_MIGRATION_ON_START` 改为 `false`；迁移已完成时即使暂时保留开关也不会重复写入。若日志出现 `TENANT_MIGRATION_CONFLICT`，请停止部署并先处理冲突，不要关闭生产租户校验。
+
 ### 固定生产账号与多租户迁移
 
 | 手机号 | 身份 | 数据规划 |
