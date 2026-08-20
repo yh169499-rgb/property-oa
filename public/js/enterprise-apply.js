@@ -22,13 +22,13 @@
     var supervisorName = String(values.supervisorName.value || '').trim();
     var phone = String(values.phone.value || '').trim();
     var password = String(values.password.value || '');
-    var confirmPassword = String(values.confirmPassword.value || '');
+    var confirm = String(values.confirm.value || '');
 
-    if (!enterpriseName || !supervisorName || !phone || !password || !confirmPassword) {
+    if (!enterpriseName || !supervisorName || !phone || !password || !confirm) {
       setStatus(status, '请完整填写所有申请信息。', 'is-error');
       return;
     }
-    if (password !== confirmPassword) {
+    if (password !== confirm) {
       setStatus(status, '两次输入的密码不一致。', 'is-error');
       return;
     }

@@ -6,7 +6,7 @@
 
   function redirectToLogin() {
     sessionStorage.removeItem('platform_token');
-    global.location.href = '/platform-login.html';
+    global.location.replace('/platform-login.html');
   }
 
   function safeError(code, status) {
@@ -71,6 +71,20 @@
       locks.delete(button);
       button.disabled = false;
     }
+  }
+
+  async function saveTenantChanges(tenant, controls) {
+    return withSubmitLock(controls.button, async function () {
+      setStatus(controls.message, '正在保存…');
+      try {
+        await updateTenant(tenant.id, controls.nameInput.value.trim(), Number(controls.limitInput.value));
+        setStatus(controls.message, '已保存', 'is-success');
+        return true;
+      } catch (error) {
+        setStatus(controls.message, error.message, 'is-error');
+        return false;
+      }
+    });
   }
 
   function setStatus(element, message, kind) {
@@ -220,9 +234,7 @@
       var limitInput = row.querySelector('[name="staffLimit"]');
       var active = Number(tenant.activeStaffCount ?? tenant.active_staff_count ?? 0);
       var limit = Number(tenant.staffLimit ?? tenant.staff_limit ?? 1);
-      var originalName = tenant.name || '';
-      var originalLimit = limit;
-      nameInput.value = originalName;
+      nameInput.value = tenant.name || '';
       limitInput.value = String(limit);
       row.querySelector('[data-field="activeStaffCount"]').textContent = String(active);
       row.querySelector('[data-field="status"]').textContent = normalizedState(tenant.status);
@@ -230,20 +242,16 @@
       var message = row.querySelector('[data-field="message"]');
       saveButton.addEventListener('click', function () {
         if (!nameInput.reportValidity() || !limitInput.reportValidity()) return;
-        withSubmitLock(saveButton, async function () {
-          setStatus(message, '正在保存…');
-          try {
-            await updateTenant(tenant.id, nameInput.value.trim(), Number(limitInput.value));
-            setStatus(message, '已保存', 'is-success');
+        saveTenantChanges(tenant, {
+          nameInput: nameInput,
+          limitInput: limitInput,
+          message: message,
+          button: saveButton,
+        }).then(async function (saved) {
+          if (saved) {
             await Promise.all([loadTenants(), loadOverview(), loadAudit()]);
-          } catch (error) {
-            if (error.code === 'STAFF_LIMIT_BELOW_ACTIVE_COUNT') {
-              nameInput.value = originalName;
-              limitInput.value = String(originalLimit);
-            }
-            setStatus(message, error.message, 'is-error');
           }
-        });
+        }).catch(showPageError);
       });
       fragment.appendChild(row);
     });
@@ -329,6 +337,7 @@
     approveApplication: approveApplication,
     rejectApplication: rejectApplication,
     withSubmitLock: withSubmitLock,
+    saveTenantChanges: saveTenantChanges,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

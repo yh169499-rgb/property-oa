@@ -36,7 +36,12 @@ function loadBrowserScript(relativePath, overrides = {}) {
         };
       },
     },
-    location: { href: '', assign(url) { this.href = url; } },
+    location: {
+      href: '',
+      replacedWith: '',
+      assign(url) { this.href = url; },
+      replace(url) { this.replacedWith = url; },
+    },
     window: {},
     ...overrides,
   };
@@ -69,6 +74,7 @@ test('企业登录页开放企业主管申请链接但企业导航不暴露平�
 });
 
 test('企业申请提交精确 payload，成功后清空并提示待审核', async () => {
+  assert.match(readPublic('enterprise-apply.html'), /id="confirm"\s+name="confirm"/);
   const requests = [];
   const storageCalls = [];
   const { context } = loadBrowserScript('js/enterprise-apply.js', {
@@ -84,7 +90,7 @@ test('企业申请提交精确 payload，成功后清空并提示待审核', asy
     supervisorName: { value: '李主管' },
     phone: { value: '13800138000' },
     password: { value: 'Secret-123' },
-    confirmPassword: { value: 'Secret-123' },
+    confirm: { value: 'Secret-123' },
   };
   const form = { elements: fields, resetCalled: false, reset() { this.resetCalled = true; } };
   const status = { textContent: '', className: '' };
@@ -108,6 +114,7 @@ test('企业申请提交精确 payload，成功后清空并提示待审核', asy
 });
 
 test('企业申请会校验确认密码并阻止重复提交', async () => {
+  assert.doesNotMatch(readPublic('js/enterprise-apply.js'), /confirmPassword/);
   let fetchCount = 0;
   let resolveFetch;
   const { context } = loadBrowserScript('js/enterprise-apply.js', {
@@ -123,7 +130,7 @@ test('企业申请会校验确认密码并阻止重复提交', async () => {
     supervisorName: { value: '李主管' },
     phone: { value: '13800138000' },
     password: { value: 'Secret-123' },
-    confirmPassword: { value: 'Secret-123' },
+    confirm: { value: 'Secret-123' },
   };
   const form = { elements: fields, reset() {} };
   const status = { textContent: '', className: '' };
@@ -137,7 +144,7 @@ test('企业申请会校验确认密码并阻止重复提交', async () => {
   await Promise.all([first, second]);
   assert.equal(button.disabled, false);
 
-  fields.confirmPassword.value = 'different';
+  fields.confirm.value = 'different';
   await context.EnterpriseApply.submitApplication(form, status, button);
   assert.equal(fetchCount, 1);
   assert.match(status.textContent, /两次输入的密码不一致/);
@@ -190,7 +197,7 @@ test('人数上限输入与审批弹窗均约束 1–999，审批默认 4', () =
   assert.match(html, /id="approval-staff-limit"[^>]*value="4"[^>]*min="1"[^>]*max="999"[^>]*step="1"/);
 });
 
-test('平台 API 客户端携带独立 token，并在 401/403 时清理跳转', async () => {
+test('平台 API 客户端携带独立 token，并在 401/403 时清理后 replace 跳转', async () => {
   for (const statusCode of [401, 403]) {
     const session = new Map([['platform_token', 'platform-token']]);
     const requests = [];
@@ -208,7 +215,8 @@ test('平台 API 客户端携带独立 token，并在 401/403 时清理跳转', 
     await assert.rejects(context.PlatformAdmin.apiFetch('/api/platform/overview'));
     assert.equal(requests[0].options.headers.Authorization, 'Bearer platform-token');
     assert.equal(session.has('platform_token'), false);
-    assert.equal(context.location.href, '/platform-login.html');
+    assert.equal(context.location.replacedWith, '/platform-login.html');
+    assert.equal(context.location.href, '');
   }
 });
 
@@ -231,6 +239,32 @@ test('平台修改、审批和拒绝发送精确 payload', async () => {
     ['/api/platform/applications/application%2Fa/approve', 'POST', { staffLimit: 4 }],
     ['/api/platform/applications/application%2Fa/reject', 'POST', { reason: '资料不完整' }],
   ]);
+});
+
+test('人数上限低于在职人数时显示中文错误并保留用户输入', async () => {
+  const { context } = loadBrowserScript('js/platform-admin.js', {
+    fetch: async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ code: 'STAFF_LIMIT_BELOW_ACTIVE_COUNT' }),
+    }),
+    sessionStorage: { getItem() { return 'platform-token'; }, removeItem() {} },
+  });
+  assert.equal(typeof context.PlatformAdmin.saveTenantChanges, 'function');
+  const controls = {
+    nameInput: { value: '用户输入的新企业名' },
+    limitInput: { value: '2' },
+    message: { textContent: '', className: '' },
+    button: { disabled: false },
+  };
+
+  const saved = await context.PlatformAdmin.saveTenantChanges({ id: 'tenant-1' }, controls);
+
+  assert.equal(saved, false);
+  assert.equal(controls.nameInput.value, '用户输入的新企业名');
+  assert.equal(controls.limitInput.value, '2');
+  assert.match(controls.message.textContent, /人数上限不能低于当前在职人数/);
+  assert.equal(controls.button.disabled, false);
 });
 
 test('平台脚本安全构建外部文本、处理人数下限错误并防重复提交', async () => {
