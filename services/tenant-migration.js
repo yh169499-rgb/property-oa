@@ -362,7 +362,8 @@ function tenantReferenceConflicts(db) {
       sql: `SELECT COUNT(*) AS count FROM ai_report_analyses report
         LEFT JOIN staff_profiles sp ON sp.id=report.staff_profile_id
         LEFT JOIN communities c ON c.id=report.community_id
-        WHERE sp.id IS NULL OR c.id IS NULL`,
+        WHERE sp.id IS NULL
+          OR (COALESCE(report.community_id,'')<>'' AND c.id IS NULL)`,
     },
     {
       code: 'CROSS_TENANT_AI_REPORT', table: 'ai_report_analyses',
@@ -494,6 +495,30 @@ function migrationError(details) {
   return error;
 }
 
+function purgeOrphanAiReportCache(db) {
+  if (!tableExists(db, 'ai_report_analyses')
+    || !tableExists(db, 'staff_profiles')
+    || !tableExists(db, 'communities')) return 0;
+  const orphanCount = count(db, `SELECT COUNT(*) AS count
+    FROM ai_report_analyses report
+    LEFT JOIN staff_profiles sp ON sp.id=report.staff_profile_id
+    LEFT JOIN communities c ON c.id=report.community_id
+    WHERE sp.id IS NULL
+      OR (COALESCE(report.community_id,'')<>'' AND c.id IS NULL)`);
+  if (orphanCount > 0) {
+    db.run(`DELETE FROM ai_report_analyses
+      WHERE id IN (
+        SELECT report.id
+        FROM ai_report_analyses report
+        LEFT JOIN staff_profiles sp ON sp.id=report.staff_profile_id
+        LEFT JOIN communities c ON c.id=report.community_id
+        WHERE sp.id IS NULL
+          OR (COALESCE(report.community_id,'')<>'' AND c.id IS NULL)
+      )`);
+  }
+  return orphanCount;
+}
+
 function applyTenantMigration(db, rawInput = {}) {
   const input = normalizeInput(rawInput);
   const preview = inspectTenantMigration(db, input);
@@ -560,4 +585,5 @@ module.exports = {
   applyTenantMigration,
   assertTenantIntegrity,
   hasPendingTenantMigration,
+  purgeOrphanAiReportCache,
 };

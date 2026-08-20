@@ -2,6 +2,7 @@ const {
   DEFAULT_INPUT,
   applyTenantMigration,
   hasPendingTenantMigration,
+  purgeOrphanAiReportCache,
 } = require('./tenant-migration');
 
 const CONFIRM_PHRASE = 'MIGRATE-MULTI-TENANT';
@@ -27,13 +28,23 @@ function runStartupTenantMigration(options = {}) {
       ? Number(env.TENANT_MIGRATION_STAFF_LIMIT) : DEFAULT_INPUT.testStaffLimit,
     nowIso: options.nowIso || new Date().toISOString(),
   };
-  const migration = applyTenantMigration(options.db, input);
-  return Promise.resolve(typeof options.persist === 'function'
-    ? Promise.resolve(options.persist()).then(() => ({
-      applied: true,
-      summary: migration,
-    }))
-    : { applied: true, summary: migration });
+  const db = options.db;
+  db.run('SAVEPOINT startup_tenant_migration');
+  try {
+    const orphanAiReportsRemoved = purgeOrphanAiReportCache(db);
+    const migration = applyTenantMigration(db, input);
+    db.run('RELEASE SAVEPOINT startup_tenant_migration');
+    const summary = { ...migration, orphanAiReportsRemoved };
+    return Promise.resolve(typeof options.persist === 'function'
+      ? Promise.resolve(options.persist()).then(() => ({ applied: true, summary }))
+      : { applied: true, summary });
+  } catch (error) {
+    try {
+      db.run('ROLLBACK TO SAVEPOINT startup_tenant_migration');
+      db.run('RELEASE SAVEPOINT startup_tenant_migration');
+    } catch (_) {}
+    throw error;
+  }
 }
 
 module.exports = { CONFIRM_PHRASE, runStartupTenantMigration };
