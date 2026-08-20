@@ -156,6 +156,7 @@ server/
 | PLATFORM_PROVISIONING_SECRET | 保护平台运维初始化命令 |
 | PLATFORM_OWNER_PASSWORD | 平台运维初始凭据的运行时输入 |
 | BLANK_SUPERVISOR_PASSWORD | 发财企业空白主管初始凭据的运行时输入 |
+| RETAINED_TEST_PASSWORD | 保留全流程测试账号时由运维临时注入的运行时密码；只填写在受保护环境中，不写入 Git、文档或日志 |
 | SUPABASE_URL | Supabase 服务端项目端点 |
 | SUPABASE_SERVICE_ROLE_KEY | Supabase Storage 服务端访问凭据 |
 | SUPABASE_STORAGE_BUCKET | 私有快照桶名称 |
