@@ -17,6 +17,10 @@ function usersHaveStatusColumn() {
   return queryAll('PRAGMA table_info(users)').some(column => column.name === 'status');
 }
 
+function tableHasColumn(table, column) {
+  return queryAll(`PRAGMA table_info(${table})`).some(item => item.name === column);
+}
+
 // POST /api/login
 router.post('/login', async (req, res) => {
   try {
@@ -73,17 +77,24 @@ router.post('/register', async (req, res) => {
   const { phone, password, name, role, skill, inviteCode } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
   if (!inviteCode) return res.status(400).json({ error: '请输入邀请码' });
-  const invite = queryOne('SELECT * FROM invite_codes WHERE code = ?', [inviteCode.toUpperCase()]);
+  const invite = queryOne(`SELECT i.*, c.tenant_id AS community_tenant_id
+    FROM invite_codes i LEFT JOIN communities c ON c.id = i.community_id
+    WHERE i.code = ?`, [inviteCode.toUpperCase()]);
   if (!invite) return res.status(400).json({ error: '邀请码无效' });
+  const tenantId = String(invite.tenant_id || invite.community_tenant_id || '').trim();
+  if (!tenantId) return res.status(400).json({ error: '邀请码未绑定企业', code: 'TENANT_CONTEXT_REQUIRED' });
   const existUser = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
   if (existUser) return res.status(400).json({ error: '该手机号已注册，请直接登录' });
   const existPending = queryOne("SELECT * FROM pending_registrations WHERE phone = ? AND status = 'pending'", [phone]);
   if (existPending) return res.status(400).json({ error: '该手机号已提交注册申请，请等待审核' });
   const hash = await bcrypt.hash(password, 10);
-  run(
-    'INSERT INTO pending_registrations (phone, password, name, role, skill, community_id, status, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [phone, hash, name, ['keeper'].includes(String(role || '').toLowerCase()) ? 'keeper' : 'worker', skill || '', invite.community_id, 'pending', new Date().toISOString()]
-  );
+  const columns = ['phone', 'password', 'name', 'role', 'skill', 'community_id', 'status', 'created'];
+  const values = [phone, hash, name, ['keeper'].includes(String(role || '').toLowerCase()) ? 'keeper' : 'worker', skill || '', invite.community_id, 'pending', new Date().toISOString()];
+  if (tableHasColumn('pending_registrations', 'tenant_id')) {
+    columns.unshift('tenant_id');
+    values.unshift(tenantId);
+  }
+  run(`INSERT INTO pending_registrations (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`, values);
   await database.saveDB();
   res.json({ success: true, message: '注册申请已提交，请等待主管审核' });
 });
@@ -91,7 +102,7 @@ router.post('/register', async (req, res) => {
 // GET /api/pending-registrations
 router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
   const rows = queryAll(`SELECT id, phone, name, role, skill, community_id, status, created
-    FROM pending_registrations WHERE status = 'pending' ORDER BY created DESC`);
+    FROM pending_registrations WHERE status = 'pending' AND tenant_id = ? ORDER BY created DESC`, [req.user.tenant_id]);
   res.json({ data: rows, pending_count: rows.length });
 });
 
@@ -111,9 +122,9 @@ router.post('/pending-registrations/:id/approve', requireAuth, requireAdmin, asy
 
 // POST /api/pending-registrations/:id/reject
 router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, async (req, res) => {
-  const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ?', [req.params.id]);
+  const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ? AND tenant_id = ?', [req.params.id, req.user.tenant_id]);
   if (!reg) return res.status(404).json({ error: '记录不存在' });
-  run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ?", [req.params.id]);
+  run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ? AND tenant_id = ?", [req.params.id, req.user.tenant_id]);
   await database.saveDB();
   res.json({ success: true, message: '已拒绝' });
 });
@@ -147,9 +158,11 @@ router.get('/users', requireAuth, requireAdmin, (req, res) => {
         FROM users u
         LEFT JOIN staff_profiles sp ON sp.user_id = u.id
         WHERE COALESCE(u.status, 'active') = 'active'
+          AND u.tenant_id = ?
+          AND LOWER(TRIM(u.role)) IN ('worker', 'keeper')
           AND (sp.id IS NULL OR COALESCE(sp.employment_status, 'active') = 'active')
-        ORDER BY u.id`)
-    : queryAll('SELECT id, phone, name, role FROM users ORDER BY id').map(user => ({ ...user, status: 'active' }));
+        ORDER BY u.id`, [req.user.tenant_id])
+    : queryAll('SELECT id, phone, name, role FROM users WHERE tenant_id = ? AND LOWER(TRIM(role)) IN (\'worker\', \'keeper\') ORDER BY id', [req.user.tenant_id]).map(user => ({ ...user, status: 'active' }));
   res.json({ data: users });
 });
 
@@ -158,7 +171,7 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: '用户 ID 无效' });
   if (userId === Number(req.user.id)) return res.status(400).json({ error: '不能删除当前登录的主管账号' });
-  const target = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+  const target = queryOne('SELECT * FROM users WHERE id = ? AND tenant_id = ?', [userId, req.user.tenant_id]);
   if (!target) return res.status(404).json({ error: '用户不存在' });
   try {
     const departed = departStaff(getDB(), userId, req.user);
