@@ -1,4 +1,6 @@
 const TEAM_LIMITS = Object.freeze({ total: 4, worker: 3, keeper: 1 });
+const MIN_STAFF_LIMIT = 1;
+const MAX_STAFF_LIMIT = 999;
 const { MANAGER_ROLES } = require('./roles');
 
 const STAFF_ROLE_ALIASES = new Map([
@@ -17,6 +19,18 @@ function normalizedStaffRole(roleOrPosition) {
   if (value.includes('维修')) return 'worker';
   if (value.includes('管家')) return 'keeper';
   return null;
+}
+
+function normalizeStaffLimit(value, fallback = 4) {
+  const candidate = value === undefined ? fallback : value;
+  const limit = typeof candidate === 'number' ? candidate : Number(candidate);
+  if (!Number.isInteger(limit) || limit < MIN_STAFF_LIMIT || limit > MAX_STAFF_LIMIT) {
+    const error = new Error('人员上限必须是 1—999 的整数');
+    error.status = 400;
+    error.code = 'INVALID_STAFF_LIMIT';
+    throw error;
+  }
+  return limit;
 }
 
 function queryAll(db, sql, params = []) {
@@ -131,6 +145,9 @@ function findSupervisorProfile(db, userId) {
 
 module.exports = {
   TEAM_LIMITS,
+  MIN_STAFF_LIMIT,
+  MAX_STAFF_LIMIT,
+  normalizeStaffLimit,
   normalizedStaffRole,
   teamUsage,
   assertTeamCapacity,
