@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>平台运维后台 | 工单系统</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="platform-admin-page">
+  <header class="platform-admin-header">
+    <div>
+      <strong>工单系统</strong>
+      <span>平台运维后台</span>
+    </div>
+    <button id="platform-logout" class="btn gray sm" type="button">退出平台</button>
+  </header>
+
+  <div class="platform-admin-shell">
+    <nav class="platform-admin-nav" aria-label="平台运维功能">
+      <a href="#overview">总览</a>
+      <a href="#applications">企业/主管申请</a>
+      <a href="#tenants">企业列表与配置</a>
+      <a href="#audit">平台审计日志</a>
+    </nav>
+
+    <main class="platform-admin-content">
+      <p id="platform-admin-status" class="platform-form-status" role="status" aria-live="polite"></p>
+
+      <section id="overview" class="platform-section" data-section="overview">
+        <div class="platform-section-heading">
+          <div><p class="platform-eyebrow">OPERATIONS</p><h1>总览</h1></div>
+          <button id="platform-refresh" class="btn gray sm" type="button">刷新数据</button>
+        </div>
+        <div id="platform-overview-cards" class="platform-overview-grid" aria-live="polite"></div>
+      </section>
+
+      <section id="applications" class="platform-section" data-section="applications">
+        <div class="platform-section-heading"><div><p class="platform-eyebrow">APPLICATIONS</p><h2>企业/主管申请</h2></div></div>
+        <div class="platform-table-wrap">
+          <table class="platform-table">
+            <thead><tr><th>企业</th><th>主管</th><th>申请时间</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="platform-applications-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tenants" class="platform-section" data-section="tenants">
+        <div class="platform-section-heading"><div><p class="platform-eyebrow">TENANTS</p><h2>企业列表与配置</h2></div></div>
+        <div class="platform-table-wrap">
+          <table class="platform-table">
+            <thead><tr><th>企业名称</th><th>在职人数 / 总人数上限</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="platform-tenants-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="audit" class="platform-section" data-section="audit">
+        <div class="platform-section-heading"><div><p class="platform-eyebrow">AUDIT</p><h2>平台审计日志</h2></div></div>
+        <div class="platform-table-wrap">
+          <table class="platform-table">
+            <thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>对象</th></tr></thead>
+            <tbody id="platform-audit-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="tenant-row-template">
+    <tr>
+      <td><input name="name" type="text" maxlength="80" required></td>
+      <td class="platform-staff-limit"><span data-field="activeStaffCount"></span><span>/</span><input name="staffLimit" type="number" min="1" max="999" step="1" required></td>
+      <td data-field="status"></td>
+      <td><button class="btn sm" data-action="save" type="submit">保存</button><p data-field="message" class="platform-row-message" role="status"></p></td>
+    </tr>
+  </template>
+
+  <dialog id="approval-dialog" class="platform-dialog">
+    <form id="approval-form" method="dialog">
+      <h2>批准企业申请</h2>
+      <p>请设置企业可用的总人数上限。</p>
+      <label>总人数上限
+        <input id="approval-staff-limit" name="staffLimit" type="number" value="4" min="1" max="999" step="1" required>
+      </label>
+      <p id="approval-status" class="platform-form-status" role="status"></p>
+      <div class="platform-dialog-actions">
+        <button id="approval-cancel" class="btn gray" type="button">取消</button>
+        <button id="approval-submit" class="btn" type="submit">确认批准</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/platform-admin.js"></script>
+</body>
+</html>

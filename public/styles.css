@@ -131,6 +131,173 @@ input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 input[type="number"] { -moz-appearance: textfield; }
 
+/* ========== 平台运维与企业申请 ========== */
+.platform-auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 18px;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(86,69,212,.12), transparent 32%),
+    linear-gradient(145deg, #f7f6ff 0%, #fff 48%, #f5f8fc 100%);
+}
+.platform-ops-auth {
+  background:
+    radial-gradient(circle at 80% 18%, rgba(47,128,255,.2), transparent 30%),
+    linear-gradient(145deg, #071329 0%, #102346 55%, #172c51 100%);
+}
+.platform-auth-card {
+  width: min(100%, 440px);
+  padding: 34px;
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  background: rgba(255,255,255,.97);
+  box-shadow: var(--shadow-lg);
+}
+.platform-brand {
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: .02em;
+  margin-bottom: 24px;
+}
+.platform-brand span {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--primary-light);
+  font-size: 11px;
+  font-weight: 650;
+}
+.platform-auth-card h1 { font-size: 25px; letter-spacing: -.03em; }
+.platform-auth-lead { margin: 6px 0 24px; color: var(--text-2); }
+.platform-form { display: grid; gap: 15px; }
+.platform-form label, .platform-dialog label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.platform-form input, .platform-dialog input, .platform-table input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  background: #fff;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.platform-form input:focus, .platform-dialog input:focus, .platform-table input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(86,69,212,.12);
+}
+.platform-primary-button { width: 100%; margin-top: 6px; min-height: 44px; }
+.platform-form-status { min-height: 22px; margin-top: 12px; color: var(--text-2); font-size: 13px; }
+.platform-form-status.is-error, .platform-row-message.is-error { color: var(--danger); }
+.platform-form-status.is-success, .platform-row-message.is-success { color: var(--success); }
+.platform-privacy-note { margin-top: 10px; color: var(--text-3); font-size: 12px; }
+.platform-back-link { display: inline-block; margin-bottom: 16px; color: var(--text-2); text-decoration: none; font-size: 13px; }
+.platform-back-link:hover { color: var(--primary); }
+.platform-back-link-bottom { margin: 12px 0 0; }
+
+.platform-admin-page { min-height: 100vh; background: #f4f6fa; }
+.platform-admin-header {
+  height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  color: #fff;
+  background: #0b1933;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.platform-admin-header > div { display: flex; align-items: center; gap: 10px; }
+.platform-admin-header strong { font-size: 16px; }
+.platform-admin-header span { color: rgba(255,255,255,.6); font-size: 12px; }
+.platform-admin-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: calc(100vh - 62px); }
+.platform-admin-nav {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: grid;
+  gap: 4px;
+  padding: 28px 18px;
+}
+.platform-admin-nav a {
+  padding: 10px 12px;
+  color: var(--text-2);
+  border-radius: var(--radius);
+  text-decoration: none;
+  font-weight: 600;
+}
+.platform-admin-nav a:hover { color: var(--primary); background: var(--primary-light); }
+.platform-admin-content { min-width: 0; padding: 30px 32px 64px; }
+.platform-section {
+  margin-bottom: 24px;
+  padding: 24px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: 16px;
+}
+.platform-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.platform-section-heading h1, .platform-section-heading h2 { font-size: 20px; letter-spacing: -.02em; }
+.platform-eyebrow { color: var(--primary); font-size: 10px; font-weight: 750; letter-spacing: .16em; }
+.platform-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.platform-overview-card {
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 16px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.platform-overview-card span { color: var(--text-2); font-size: 12px; }
+.platform-overview-card strong { font-size: 30px; line-height: 1; }
+.platform-table-wrap { overflow-x: auto; }
+.platform-table { width: 100%; min-width: 660px; border-collapse: collapse; }
+.platform-table th, .platform-table td { padding: 12px 10px; border-bottom: 1px solid var(--hairline-soft); text-align: left; vertical-align: middle; }
+.platform-table th { color: var(--text-3); font-size: 11px; font-weight: 650; }
+.platform-table td { font-size: 13px; }
+.platform-table input[name="name"] { min-width: 150px; }
+.platform-table input[name="staffLimit"] { width: 76px; }
+.platform-staff-limit { display: flex; align-items: center; gap: 8px; }
+.platform-actions { display: flex; gap: 8px; }
+.platform-row-message { margin-top: 5px; max-width: 220px; font-size: 11px; }
+.platform-empty-state { padding: 28px !important; color: var(--text-3); text-align: center !important; }
+.platform-dialog {
+  width: min(92vw, 420px);
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+.platform-dialog::backdrop { background: rgba(5,15,33,.55); }
+.platform-dialog form { display: grid; gap: 15px; padding: 26px; }
+.platform-dialog h2 { font-size: 20px; }
+.platform-dialog p { color: var(--text-2); }
+.platform-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+@media (max-width: 900px) {
+  .platform-admin-shell { grid-template-columns: 1fr; }
+  .platform-admin-nav { position: static; display: flex; overflow-x: auto; padding: 14px 18px; background: #fff; border-bottom: 1px solid var(--hairline); }
+  .platform-admin-nav a { white-space: nowrap; }
+  .platform-admin-content { padding: 20px 16px 48px; }
+  .platform-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .platform-auth-card { padding: 25px 20px; }
+  .platform-admin-header { padding: 0 16px; }
+  .platform-overview-grid { grid-template-columns: 1fr; }
+  .platform-section { padding: 18px 14px; }
+}
+
 /* ========== 顶部导航 ========== */
 .topbar {
   background: var(--sidebar);
