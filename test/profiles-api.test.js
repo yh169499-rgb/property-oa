@@ -251,16 +251,17 @@ test('组织树返回层级、未分配人员，team 返回全部下级', async 
   assert.deepEqual(team.body.data.map((profile) => profile.id), [2, 3]);
 });
 
-test('创建在职普通档案必须绑定主管且受 4/3/1 容量限制', async (t) => {
+test('创建在职普通档案必须绑定主管且受企业总人数上限限制', async (t) => {
   const { db, server } = await fixture(t);
   const headers = authHeader({ id: 1, role: 'lead' });
+  db.run("UPDATE tenants SET staff_limit = 4 WHERE id = 'tenant-test'");
   db.run("UPDATE staff_profiles SET employment_status = 'inactive' WHERE id <> 1");
   db.run(`
-    INSERT INTO staff_profiles (name, phone, position, manager_id, employment_status) VALUES
-      ('师傅一', '13900000101', '维修师傅', 1, 'active'),
-      ('师傅二', '13900000102', '维修师傅', 1, 'active'),
-      ('师傅三', '13900000103', '维修师傅', 1, 'active'),
-      ('管家一', '13900000104', '物业管家', 1, 'active')
+    INSERT INTO staff_profiles (tenant_id, name, phone, position, manager_id, employment_status) VALUES
+      ('tenant-test', '师傅一', '13900000101', '维修师傅', 1, 'active'),
+      ('tenant-test', '师傅二', '13900000102', '维修师傅', 1, 'active'),
+      ('tenant-test', '师傅三', '13900000103', '维修师傅', 1, 'active'),
+      ('tenant-test', '管家一', '13900000104', '物业管家', 1, 'active')
   `);
 
   const missingManager = await request(server, '/api/staff/profiles', {
@@ -290,7 +291,7 @@ test('创建在职普通档案必须绑定主管且受 4/3/1 容量限制', asyn
     }),
   });
   assert.equal(overCapacity.response.status, 409);
-  assert.ok(['ROLE_CAPACITY_FULL', 'TEAM_CAPACITY_FULL'].includes(overCapacity.body.code));
+  assert.equal(overCapacity.body.code, 'TEAM_CAPACITY_FULL');
   assert.equal(
     db.exec("SELECT COUNT(*) FROM staff_profiles WHERE name IN ('无主管师傅', '无岗位普通员工', '超限师傅')")[0].values[0][0],
     0
@@ -300,6 +301,7 @@ test('创建在职普通档案必须绑定主管且受 4/3/1 容量限制', asyn
 test('修改岗位、恢复在职和独立 manager 接口均不能绕过团队容量', async (t) => {
   const { db, server } = await fixture(t);
   const headers = authHeader({ id: 1, role: 'lead' });
+  db.run("UPDATE tenants SET staff_limit = 4 WHERE id = 'tenant-test'");
   db.run("UPDATE staff_profiles SET employment_status = 'inactive' WHERE id <> 1");
   db.run(`
     INSERT INTO staff_profiles
@@ -323,7 +325,7 @@ test('修改岗位、恢复在职和独立 manager 接口均不能绕过团队�
     method: 'PATCH', headers, body: JSON.stringify({ position: '物业管家' }),
   });
   assert.equal(changedPosition.response.status, 409);
-  assert.equal(changedPosition.body.code, 'ROLE_CAPACITY_FULL');
+  assert.equal(changedPosition.body.code, 'TEAM_CAPACITY_FULL');
 
   const restored = await request(server, '/api/staff/profiles/14', {
     method: 'PATCH', headers, body: JSON.stringify({ employment_status: 'active' }),
