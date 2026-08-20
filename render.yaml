@@ -35,6 +35,19 @@ services:
         value: backups
       - key: SUPABASE_SYNC_REQUIRED
         value: "false"
+      # 免费 Render 无 Shell 时可临时开启一次受保护的租户迁移；完成后关闭。
+      - key: APPLY_TENANT_MIGRATION_ON_START
+        sync: false
+      - key: TENANT_MIGRATION_CONFIRM
+        sync: false
+      - key: TENANT_MIGRATION_SUPERVISOR_PHONE
+        sync: false
+      - key: TENANT_MIGRATION_TENANT_ID
+        sync: false
+      - key: TENANT_MIGRATION_TENANT_NAME
+        sync: false
+      - key: TENANT_MIGRATION_STAFF_LIMIT
+        sync: false
       - key: SEED_WORKFORCE_DEMO
         value: "false"
       # 平台运维初始化和空白企业凭据只由 Render 安全注入。

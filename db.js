@@ -17,6 +17,7 @@ const {
   backfillTicketAssignees,
 } = require('./services/workforce-migration');
 const { hasPendingTenantMigration } = require('./services/tenant-migration');
+const { runStartupTenantMigration } = require('./services/startup-tenant-migration');
 const {
   getSupabaseStorageConfig,
   ensureBucket,
@@ -111,6 +112,14 @@ async function initDB() {
   }
 
   ensureDatabaseSchema(db);
+  const startupTenantMigration = await runStartupTenantMigration({
+    db,
+    env: process.env,
+    persist: saveDB,
+  });
+  if (startupTenantMigration.applied) {
+    console.log('✅ 启动租户迁移完成:', JSON.stringify(startupTenantMigration.summary));
+  }
   assertProductionTenantMigrationReady(db);
   const nowIso = new Date().toISOString();
   backfillWorkforceData(db, nowIso);
