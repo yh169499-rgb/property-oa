@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 将现有共享数据的多主管实现改造成严格隔离的多企业系统，并交付唯一平台管理员、企业主管申请审核、四人团队限制和可审计的生产迁移。
+**目标：** 将现有共享数据的多主管实现改造成严格隔离的多企业系统，并交付唯一平台管理员、企业主管申请审核、按企业配置的人员总上限和可审计的生产迁移。
 
 **架构：** 继续使用单个 SQLite 数据库并通过 Supabase Storage 持久化，但每条企业业务记录必须带服务端注入的 `tenant_id`。认证中间件每次从数据库恢复账号角色、租户、状态和会话版本；企业 API 使用统一租户作用域，平台 API 使用独立 `platform_owner` 权限。生产迁移先把全部旧数据绑定测试租户，再创建平台管理员和空白“发财”租户，迁移校验通过后才允许服务启动。
 
@@ -36,7 +36,7 @@
 
 - `db.js`、`workforce-schema.js`：在启动阶段创建结构并拒绝未完成的生产迁移。
 - `middleware/auth.js`、`services/roles.js`：增加 `platform_owner`、租户身份和会话失效机制。
-- `services/staff-lifecycle.js`、`services/team-capacity.js`：团队容量、审批和离职全部限定同租户。
+- `services/staff-lifecycle.js`、`services/team-capacity.js`：从企业读取可配置总人数上限，审批和离职全部限定同租户。
 - `services/ticket-access.js`、`services/ticket-activity.js`、`routes/tickets.js`：工单和附件严格按租户隔离。
 - `routes/auth.js`、`routes/communities.js`、`routes/profiles.js`、`routes/staff.js`、`routes/directory.js`、`routes/shifts.js`、`routes/settings.js`、`routes/workforce-reports.js`、`routes/ai-reports.js`：所有查询和写入增加租户条件。
 - `services/calendar.js`、`services/shifts.js`、`services/organization.js`、`services/reporting.js`、`services/performance.js`、`services/ai-report.js`：服务层接收 `tenantId` 并在最底层过滤。
@@ -67,6 +67,9 @@ test('多租户结构覆盖全部企业业务表', async () => {
   }
   assert.ok(indexNames(db).includes('uq_users_phone'));
   assert.ok(indexNames(db).includes('uq_tenant_owner'));
+  db.run("INSERT INTO tenants(id,name,status,staff_limit,created_at,updated_at) VALUES('limit-test','上限测试','active',12,'2026-08-19','2026-08-19')");
+  assert.equal(one(db, "SELECT staff_limit FROM tenants WHERE id='limit-test'").staff_limit, 12);
+  assert.throws(() => db.run("INSERT INTO tenants(id,name,status,staff_limit,created_at,updated_at) VALUES('invalid-limit','错误上限','active',0,'2026-08-19','2026-08-19')"));
 });
 ```
 
@@ -94,6 +97,7 @@ function ensureTenantSchema(db) {
     name TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('active','disabled')),
     owner_user_id INTEGER UNIQUE,
+    staff_limit INTEGER NOT NULL DEFAULT 4 CHECK(staff_limit BETWEEN 1 AND 999),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     disabled_at TEXT NOT NULL DEFAULT ''
@@ -131,6 +135,7 @@ function ensureTenantSchema(db) {
   for (const table of TENANT_TABLES) {
     if (tableExists(db, table)) addColumn(db, table, "tenant_id TEXT DEFAULT ''");
   }
+  addColumn(db, 'tenants', 'staff_limit INTEGER NOT NULL DEFAULT 4 CHECK(staff_limit BETWEEN 1 AND 999)');
   addColumn(db, 'users', 'session_version INTEGER NOT NULL DEFAULT 1');
   addColumn(db, 'users', "last_login_at TEXT NOT NULL DEFAULT ''");
   db.run('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone)');
@@ -229,9 +234,12 @@ test('旧测试数据全部归入 13800000001 的测试租户', async () => {
     testSupervisorPhone: '13800000001',
     testTenantId: 'tenant-test',
     testTenantName: '全流程测试企业',
+    testStaffLimit: 4,
+    nowIso: '2026-08-19T00:00:00.000Z',
   });
   assert.equal(result.applied, true);
   assert.equal(one(db, "SELECT tenant_id FROM users WHERE phone='13800000002'").tenant_id, 'tenant-test');
+  assert.equal(one(db, "SELECT staff_limit FROM tenants WHERE id='tenant-test'").staff_limit, 4);
   assert.equal(assertTenantIntegrity(db).ok, true);
 });
 
@@ -239,7 +247,8 @@ test('存在无法归属的历史记录时迁移回滚', async () => {
   const db = await legacyFixture();
   const migrationInput = {
     testSupervisorPhone: '13800000001', testTenantId: 'tenant-test',
-    testTenantName: '全流程测试企业', nowIso: '2026-08-19T00:00:00.000Z',
+    testTenantName: '全流程测试企业', testStaffLimit: 4,
+    nowIso: '2026-08-19T00:00:00.000Z',
   };
   db.run("INSERT INTO users(phone,password,name,role) VALUES('13900000000','x','孤立主管','主管')");
   assert.throws(() => applyTenantMigration(db, migrationInput), /TENANT_MIGRATION_CONFLICT/);
@@ -265,15 +274,22 @@ function assertTenantIntegrity(db) {
   });
   const supervisors = all(db, `SELECT tenant_id, COUNT(*) AS count FROM users
     WHERE role = '主管' AND status = 'active' GROUP BY tenant_id HAVING COUNT(*) <> 1`);
-  return { ok: empty.length === 0 && supervisors.length === 0, empty, supervisors };
+  const invalidLimits = all(db, 'SELECT id,staff_limit FROM tenants WHERE staff_limit < 1 OR staff_limit > 999');
+  return {
+    ok: empty.length === 0 && supervisors.length === 0 && invalidLimits.length === 0,
+    empty, supervisors, invalidLimits,
+  };
 }
 
 function applyTenantMigration(db, input) {
   const preview = inspectTenantMigration(db, input);
   if (preview.conflicts.length) throw migrationError(preview.conflicts);
   return transaction(db, () => {
-    db.run(`INSERT INTO tenants(id,name,status,created_at,updated_at)
-      VALUES(?,?,'active',?,?)`, [input.testTenantId, input.testTenantName, input.nowIso, input.nowIso]);
+    db.run(`INSERT INTO tenants(id,name,status,staff_limit,created_at,updated_at)
+      VALUES(?,?,'active',?,?,?)`, [
+      input.testTenantId, input.testTenantName, input.testStaffLimit,
+      input.nowIso, input.nowIso,
+    ]);
     for (const table of TENANT_TABLES) {
       if (tableExists(db, table)) db.run(`UPDATE ${table} SET tenant_id = ? WHERE COALESCE(tenant_id,'') = ''`, [input.testTenantId]);
     }
@@ -641,7 +657,7 @@ git rm routes/attendance.js test/attendance-delete.test.js
 git commit -m "feat: 隔离企业排班绩效报告和 AI 数据"
 ```
 
-### 任务 7：限定企业人员注册、四人容量和离职
+### 任务 7：限定企业人员注册、可配置总容量和离职
 
 **文件：**
 - 修改：`routes/auth.js`
@@ -651,6 +667,7 @@ git commit -m "feat: 隔离企业排班绩效报告和 AI 数据"
 - 修改：`test/staff-lifecycle.test.js`
 - 修改：`test/team-capacity.test.js`
 - 修改：`test/tenant-isolation.test.js`
+- 修改：`test/helpers/tenant-fixture.js`
 
 - [ ] **步骤 1：编写同租户审批、离职和容量测试**
 
@@ -659,9 +676,47 @@ async function lifecycleTenantFixture() {
   const db = await createFullTestDB();
   const seeded = seedTenant(db, {
     tenantId: 'tenant-a', managerId: 1, managerPhone: '13800000001',
-    workers: 3, keepers: 1, includeHistoricalTicket: true,
+    staffLimit: 5, workers: 4, keepers: 1, includeHistoricalTicket: true,
   });
-  return { db, workerA: seeded.workers[0], managerA: seeded.manager };
+  return { db, workerA: seeded.workers[0] };
+}
+
+function seedTenant(db, input) {
+  const managerProfileId = input.managerId;
+  db.run(`INSERT INTO tenants
+    (id,name,status,owner_user_id,staff_limit,created_at,updated_at)
+    VALUES(?,?,'active',NULL,?,?,?)`, [
+    input.tenantId, input.name || input.tenantId,
+    input.staffLimit ?? 4, '2026-08-19T00:00:00.000Z', '2026-08-19T00:00:00.000Z',
+  ]);
+  db.run(`INSERT INTO users(id,phone,password,name,role,status,tenant_id,session_version)
+    VALUES(?,?,?,'主管','主管','active',?,1)`, [input.managerId, input.managerPhone, 'fixture-hash', input.tenantId]);
+  db.run(`INSERT INTO staff_profiles
+    (id,user_id,name,position,manager_id,employment_status,tenant_id,created_at,updated_at)
+    VALUES(?,?, '主管','主管',NULL,'active',?,'2026-08-19','2026-08-19')`,
+  [managerProfileId, input.managerId, input.tenantId]);
+  db.run('UPDATE tenants SET owner_user_id=? WHERE id=?', [input.managerId, input.tenantId]);
+  const workers = [];
+  const totalWorkers = Number(input.workers || 0);
+  const totalKeepers = Number(input.keepers || 0);
+  for (let index = 0; index < totalWorkers + totalKeepers; index += 1) {
+    const userId = input.managerId + index + 1;
+    const role = index < totalWorkers ? 'worker' : 'keeper';
+    const position = role === 'worker' ? '维修师傅' : '物业管家';
+    const profileId = userId;
+    db.run(`INSERT INTO users(id,phone,password,name,role,status,tenant_id,session_version)
+      VALUES(?,?,?,?,?,'active',?,1)`, [userId, `1${String(userId).padStart(10, '0')}`, 'fixture-hash', `${position}${index + 1}`, role, input.tenantId]);
+    db.run(`INSERT INTO staff_profiles
+      (id,user_id,name,position,manager_id,employment_status,tenant_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,'active',?,'2026-08-19','2026-08-19')`,
+    [profileId, userId, `${position}${index + 1}`, position, managerProfileId, input.tenantId]);
+    if (role === 'worker') workers.push({ id: userId, profileId });
+  }
+  if (input.includeHistoricalTicket && workers[0]) {
+    db.run(`INSERT INTO tickets(id,type,created,assignee_user_id,assignee_staff_profile_id,tenant_id)
+      VALUES('A-OLD','repair','2026-08-01',?,?,?)`, [workers[0].id, workers[0].profileId, input.tenantId]);
+  }
+  return { manager: { id: input.managerId, profileId: managerProfileId }, workers };
 }
 
 test('邀请码注册申请继承邀请码租户且只能由本企业主管审批', async (t) => {
@@ -673,12 +728,34 @@ test('邀请码注册申请继承邀请码租户且只能由本企业主管审�
 });
 
 test('离职释放名额但历史工单保留已离职身份', async () => {
-  const { db, workerA, managerA } = await lifecycleTenantFixture();
-  const result = departStaff(db, workerA.id, TENANT_A_MANAGER);
+  const { db, workerA } = await lifecycleTenantFixture();
+  departStaff(db, workerA.id, TENANT_A_MANAGER);
   assert.equal(one(db, 'SELECT id FROM users WHERE id=?', [workerA.id]), null);
   assert.equal(one(db, 'SELECT employment_status FROM staff_profiles WHERE id=?', [workerA.profileId]).employment_status, 'departed');
   assert.equal(one(db, "SELECT tenant_id FROM tickets WHERE id='A-OLD'").tenant_id, 'tenant-a');
-  assert.equal(teamUsage(db, managerA.profileId, { tenantId: 'tenant-a' }).worker, 2);
+  assert.deepEqual(teamUsage(db, 'tenant-a'), { activeCount: 4, limit: 5, remaining: 1 });
+});
+
+test('容量只限制总人数，不限制维修师傅和管家比例', async () => {
+  const { db } = await lifecycleTenantFixture();
+  assert.deepEqual(teamUsage(db, 'tenant-a'), { activeCount: 5, limit: 5, remaining: 0 });
+  assert.throws(
+    () => assertTeamCapacity(db, 'tenant-a'),
+    error => error.code === 'TEAM_CAPACITY_FULL' && error.status === 409
+  );
+});
+
+test('企业主管不能通过人员接口修改企业人员上限', async (t) => {
+  const { server } = await twoTenantFixture(t);
+  const response = await api(server, '/api/users', TENANT_A_MANAGER, {
+    method: 'POST',
+    body: JSON.stringify({
+      phone: '13899990001', password: 'FixturePass!123', name: '测试师傅',
+      role: 'worker', community_id: 'tenant-a-community', staffLimit: 999,
+    }),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.code, 'CLIENT_STAFF_LIMIT_FORBIDDEN');
 });
 ```
 
@@ -697,14 +774,41 @@ function assertSameTenant(actorUser, targetTenantId) {
   }
 }
 
-function teamUsage(db, managerProfileId, { tenantId, excludeProfileId } = {}) {
-  return all(db, `SELECT position FROM staff_profiles
-    WHERE tenant_id=? AND manager_id=? AND employment_status='active'
-      AND (? IS NULL OR id<>?)`, [tenantId, managerProfileId, excludeProfileId ?? null, excludeProfileId ?? null]);
+const MIN_STAFF_LIMIT = 1;
+const MAX_STAFF_LIMIT = 999;
+
+function normalizeStaffLimit(value, fallback = 4) {
+  const limit = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(limit) || limit < MIN_STAFF_LIMIT || limit > MAX_STAFF_LIMIT) {
+    throw lifecycleError('人员上限必须是 1—999 的整数', 'INVALID_STAFF_LIMIT', 400);
+  }
+  return limit;
+}
+
+function teamUsage(db, tenantId, { excludeProfileId = null } = {}) {
+  const tenant = one(db, 'SELECT staff_limit FROM tenants WHERE id=?', [tenantId]);
+  if (!tenant) throw lifecycleError('企业不存在', 'TENANT_NOT_FOUND', 404);
+  const row = one(db, `SELECT COUNT(*) AS count FROM staff_profiles
+    WHERE tenant_id=? AND employment_status='active'
+      AND position NOT IN ('主管','平台管理员')
+      AND (? IS NULL OR id<>?)`, [tenantId, excludeProfileId, excludeProfileId]);
+  const activeCount = Number(row.count);
+  const limit = Number(tenant.staff_limit);
+  return { activeCount, limit, remaining: Math.max(0, limit - activeCount) };
+}
+
+function assertTeamCapacity(db, tenantId, options = {}) {
+  const usage = teamUsage(db, tenantId, options);
+  if (usage.activeCount >= usage.limit) {
+    const error = lifecycleError('该企业在职人员已达到上限', 'TEAM_CAPACITY_FULL', 409);
+    error.details = { usage };
+    throw error;
+  }
+  return usage;
 }
 ```
 
-创建账号、审批申请、人员档案、社区成员关系和生命周期审计均写入 actor 的 `tenant_id`。离职目标必须匹配同租户且角色只能是 `worker/keeper`；先保留 `staff_profile` 历史身份，再删除登录账号并递增关联会话版本。用户列表只返回当前租户普通人员，不返回任何主管或平台管理员。
+删除 `TEAM_LIMITS`、`ROLE_CAPACITY_FULL`、维修师傅子限额和物业管家子限额，并从 `services/team-capacity.js` 导出 `normalizeStaffLimit`、`teamUsage`、`assertTeamCapacity`。创建账号或审批普通人员时，在同一个写事务内读取当前租户 `staff_limit` 并统计在职普通人员，防止并发请求同时越过上限。企业人员接口收到 `staff_limit` 或 `staffLimit` 时返回 400 `CLIENT_STAFF_LIMIT_FORBIDDEN`。创建账号、审批申请、人员档案、社区成员关系和生命周期审计均写入 actor 的 `tenant_id`。离职目标必须匹配同租户且角色只能是 `worker/keeper`；先保留 `staff_profile` 历史身份，再删除登录账号。用户列表只返回当前租户普通人员，不返回任何主管或平台管理员。
 
 - [ ] **步骤 4：运行人员与安全回归测试**
 
@@ -716,7 +820,7 @@ function teamUsage(db, managerProfileId, { tenantId, excludeProfileId } = {}) {
 
 ```bash
 git add routes/auth.js services/staff-lifecycle.js services/team-capacity.js services/account-lifecycle.js test/staff-lifecycle.test.js test/team-capacity.test.js test/tenant-isolation.test.js test/helpers/tenant-fixture.js
-git commit -m "feat: 限定企业四人团队和离职生命周期"
+git commit -m "feat: 按企业人员上限管理团队生命周期"
 ```
 
 ### 任务 8：实现企业主管公开申请和平台审核服务
@@ -736,8 +840,9 @@ test('申请通过在一个事务内创建空租户和唯一主管', async () =>
   const application = await submitEnterpriseApplication(db, {
     enterpriseName: '甲物业', supervisorName: '甲主管', phone: '13900000001', password: 'SecurePass!123',
   });
-  const approved = approveEnterpriseApplication(db, application.id, PLATFORM_OWNER);
+  const approved = approveEnterpriseApplication(db, application.id, PLATFORM_OWNER, { staffLimit: 12 });
   assert.equal(one(db, 'SELECT owner_user_id FROM tenants WHERE id=?', [approved.tenantId]).owner_user_id, approved.userId);
+  assert.equal(one(db, 'SELECT staff_limit FROM tenants WHERE id=?', [approved.tenantId]).staff_limit, 12);
   assert.equal(one(db, 'SELECT COUNT(*) AS count FROM users WHERE tenant_id=?', [approved.tenantId]).count, 1);
   assert.equal(one(db, 'SELECT password_hash FROM enterprise_applications WHERE id=?', [application.id]).password_hash, '');
 });
@@ -746,7 +851,8 @@ test('重复审核和手机号占用返回冲突且不创建第二租户', async
   const application = await submitEnterpriseApplication(db, {
     enterpriseName: '乙物业', supervisorName: '乙主管', phone: '13900000002', password: 'SecurePass!456',
   });
-  approveEnterpriseApplication(db, application.id, PLATFORM_OWNER);
+  const approved = approveEnterpriseApplication(db, application.id, PLATFORM_OWNER);
+  assert.equal(one(db, 'SELECT staff_limit FROM tenants WHERE id=?', [approved.tenantId]).staff_limit, 4);
   assert.throws(() => approveEnterpriseApplication(db, application.id, PLATFORM_OWNER), /APPLICATION_ALREADY_REVIEWED/);
   assert.equal(one(db, 'SELECT COUNT(*) AS count FROM tenants').count, 1);
 });
@@ -772,14 +878,17 @@ async function submitEnterpriseApplication(db, input) {
   return one(db, 'SELECT id,status FROM enterprise_applications WHERE id=last_insert_rowid()');
 }
 
-function approveEnterpriseApplication(db, id, actor) {
+const { normalizeStaffLimit } = require('./team-capacity');
+
+function approveEnterpriseApplication(db, id, actor, options = {}) {
   assertPlatformOwner(actor);
   return transaction(db, () => {
     const app = one(db, "SELECT * FROM enterprise_applications WHERE id=? AND status='pending'", [id]);
     if (!app) throw conflict('APPLICATION_ALREADY_REVIEWED');
     const tenantId = crypto.randomUUID();
-    db.run(`INSERT INTO tenants(id,name,status,created_at,updated_at)
-      VALUES(?,?,'active',?,?)`, [tenantId, app.enterprise_name, nowIso(), nowIso()]);
+    const staffLimit = normalizeStaffLimit(options.staffLimit, 4);
+    db.run(`INSERT INTO tenants(id,name,status,staff_limit,created_at,updated_at)
+      VALUES(?,?,'active',?,?,?)`, [tenantId, app.enterprise_name, staffLimit, nowIso(), nowIso()]);
     db.run(`INSERT INTO users(phone,password,name,role,status,tenant_id,session_version)
       VALUES(?,?,?,'主管','active',?,1)`, [app.phone, app.password_hash, app.supervisor_name, tenantId]);
     const userId = Number(one(db, 'SELECT last_insert_rowid() AS id').id);
@@ -787,7 +896,7 @@ function approveEnterpriseApplication(db, id, actor) {
     createSupervisorProfile(db, { tenantId, userId, name: app.supervisor_name, phone: app.phone });
     db.run(`UPDATE enterprise_applications SET status='approved',password_hash='',reviewed_by_user_id=?,reviewed_at=? WHERE id=?`, [actor.id, nowIso(), id]);
     writePlatformAudit(db, actor, 'enterprise.approve', tenantId, userId, { applicationId: Number(id) });
-    return { tenantId, userId };
+    return { tenantId, userId, staffLimit };
   });
 }
 ```
@@ -841,6 +950,23 @@ test('主管访问平台接口返回 403，平台账号可审核和停用企业'
   assert.equal((await api(server, '/api/platform/overview', PLATFORM_OWNER_TOKEN)).status, 200);
   assert.equal((await api(server, '/api/platform/tenants/tenant-a/disable', PLATFORM_OWNER_TOKEN, { method: 'POST' })).status, 200);
 });
+
+test('平台管理员可调整企业总人数上限但不能低于当前在职人数', async (t) => {
+  const { db, server } = await platformFixture(t);
+  const owner = { id: 900, session_version: 1 };
+  const raised = await api(server, '/api/platform/tenants/tenant-a', owner, {
+    method: 'PATCH', body: JSON.stringify({ staffLimit: 8 }),
+  });
+  assert.equal(raised.status, 200);
+  assert.equal(raised.body.tenant.staff_limit, 8);
+  const audit = one(db, "SELECT summary_json FROM platform_audit_logs WHERE action='tenant.update' ORDER BY id DESC LIMIT 1");
+  assert.deepEqual(JSON.parse(audit.summary_json).staffLimit, { before: 4, after: 8 });
+  const rejected = await api(server, '/api/platform/tenants/tenant-a', owner, {
+    method: 'PATCH', body: JSON.stringify({ staffLimit: 1 }),
+  });
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.body.code, 'STAFF_LIMIT_BELOW_ACTIVE_COUNT');
+});
 ```
 
 - [ ] **步骤 2：运行平台 API 测试并确认失败**
@@ -858,7 +984,7 @@ router.get('/applications', requireAuth, requirePlatformOwner, listApplications)
 router.post('/applications/:id/approve', requireAuth, requirePlatformOwner, approveApplication);
 router.post('/applications/:id/reject', requireAuth, requirePlatformOwner, rejectApplication);
 router.get('/tenants', requireAuth, requirePlatformOwner, listTenants);
-router.patch('/tenants/:id', requireAuth, requirePlatformOwner, renameTenant);
+router.patch('/tenants/:id', requireAuth, requirePlatformOwner, updateTenant);
 router.post('/tenants/:id/disable', requireAuth, requirePlatformOwner, disableTenant);
 router.post('/tenants/:id/restore', requireAuth, requirePlatformOwner, restoreTenant);
 router.post('/tenants/:id/reset-supervisor-password', requireAuth, requirePlatformOwner, resetSupervisorPassword);
@@ -879,15 +1005,21 @@ enterpriseRouter.post('/enterprise-applications', enterpriseApplicationLimiter, 
 
 ```js
 async function platformFixture(t) {
-  const fixture = await twoTenantFixture(t);
-  fixture.db.run(`INSERT INTO users
+  const db = await createFullTestDB();
+  seedTenant(db, { tenantId: 'tenant-a', managerId: 1, managerPhone: '13800000001', staffLimit: 4, workers: 2 });
+  seedTenant(db, { tenantId: 'tenant-b', managerId: 101, managerPhone: '13900000001', staffLimit: 7, workers: 0 });
+  db.run(`INSERT INTO users
     (id,phone,password,name,role,status,tenant_id,session_version)
     VALUES(900,'13222514178','fixture-hash','句子工单管理员','platform_owner','active','',1)`);
-  return fixture;
+  const server = await startHttpServer(db);
+  t.after(server.close);
+  return { db, server };
 }
 ```
 
-平台企业列表返回 `name`、主管姓名/手机号、状态、创建时间、主管 `last_login_at`、普通人员用量、小区数和工单数。重命名只接受 2—80 个字符的非空企业名称并写平台审计。
+平台企业列表返回 `name`、主管姓名/手机号、状态、创建时间、主管 `last_login_at`、`active_staff_count`、`staff_limit`、小区数和工单数。`PATCH /api/platform/tenants/:id` 可独立或同时修改企业名称和 `staffLimit`：名称只接受 2—80 个字符，人员上限只接受 1—999 的整数。服务端在同一个写事务内统计在职普通人员；新上限低于当前人数时返回 409 `STAFF_LIMIT_BELOW_ACTIVE_COUNT`，不写入任何字段。成功后写 `tenant.update` 平台审计，`summary_json` 只包含 `name`、`staffLimit` 的原值和新值。
+
+`POST /api/platform/applications/:id/approve` 接受可选 `{ staffLimit }`，省略时使用 4；非法范围返回 400 `INVALID_STAFF_LIMIT`。
 
 初始化命令只从 `PLATFORM_PROVISIONING_SECRET`、`PLATFORM_OWNER_PASSWORD` 读取密钥和密码，要求参数 `--confirm`；日志仅输出用户 ID、手机号后四位和 created/unchanged，不输出任何密钥或哈希。停用/恢复/重置密码均递增相关用户 `session_version`。
 
@@ -937,6 +1069,15 @@ test('平台脚本收到 401 或 403 时清除平台 token 并返回登录页', 
   assert.match(script, /platform_token/);
   assert.match(script, /location\.replace\('\/platform-login\.html'\)/);
 });
+
+test('企业维护页面显示人员用量并允许平台管理员编辑上限', () => {
+  const admin = fs.readFileSync('public/platform-admin.html', 'utf8');
+  const script = fs.readFileSync('public/js/platform-admin.js', 'utf8');
+  assert.match(admin, /人员上限/);
+  assert.match(script, /active_staff_count/);
+  assert.match(script, /staff_limit/);
+  assert.match(script, /staffLimit/);
+});
 ```
 
 - [ ] **步骤 2：运行页面测试并确认失败**
@@ -957,6 +1098,10 @@ test('平台脚本收到 401 或 403 时清除平台 token 并返回登录页', 
   <section id="auditPanel" aria-label="平台审计日志"></section>
 </main>
 ```
+
+企业维护表格固定显示“人员用量”列，格式为 `active_staff_count/staff_limit`。编辑弹窗使用 `<input name="staffLimit" type="number" min="1" max="999" step="1">`；保存时提交 `{ name, staffLimit }`。若服务端返回 `STAFF_LIMIT_BELOW_ACTIVE_COUNT`，页面显示“人员上限不能低于当前在职人数”，并保留用户输入供修改。
+
+企业申请审核弹窗也显示同一人员上限输入框，默认值为 4；点击通过时随审核请求提交 `staffLimit`。
 
 前端请求只使用 `sessionStorage.platform_token`，不得复用企业端 localStorage token。审核拒绝必须要求非空原因；停用企业和重置密码必须二次确认；任何列表都不得渲染密码、哈希、JWT 或 Supabase/AI 密钥。
 
@@ -999,11 +1144,13 @@ test('生产迁移保留测试数据并创建平台账号和空白发财企业',
     platformOwnerPassword: 'OwnerSecure!123',
     blankSupervisorPhone: '17713302589', blankSupervisorName: '发财',
     blankSupervisorPassword: 'BlankSecure!123', blankTenantName: '发财企业',
+    testStaffLimit: 4, blankStaffLimit: 4,
   });
   const blank = one(db, "SELECT tenant_id FROM users WHERE phone='17713302589'");
   assert.equal(one(db, 'SELECT COUNT(*) AS count FROM tickets WHERE tenant_id=?', [blank.tenant_id]).count, 0);
   assert.equal(one(db, 'SELECT COUNT(*) AS count FROM staff_profiles WHERE tenant_id=? AND position<>\'主管\'', [blank.tenant_id]).count, 0);
   assert.equal(one(db, "SELECT role FROM users WHERE phone='13222514178'").role, 'platform_owner');
+  assert.equal(one(db, 'SELECT staff_limit FROM tenants WHERE id=?', [blank.tenant_id]).staff_limit, 4);
   assert.equal(summary.integrity.ok, true);
 });
 ```
@@ -1027,7 +1174,7 @@ async function retainedFixture() {
 
 - [ ] **步骤 3：实现固定账号迁移并移除旧启动入口**
 
-`applyProductionTenantMigration` 的事务顺序固定为：迁移原数据到测试租户 → 创建平台管理员 → 创建空白租户 → 创建“发财”唯一主管及主管档案 → 运行 `assertTenantIntegrity` → 提交。空白租户不得创建默认小区、班次模板、绩效规则、邀请码、工单或普通人员。
+`applyProductionTenantMigration` 的事务顺序固定为：迁移原数据到人员上限为 4 的测试租户 → 创建平台管理员 → 创建人员上限为 4 的空白租户 → 创建“发财”唯一主管及主管档案 → 运行 `assertTenantIntegrity` → 提交。空白租户不得创建默认小区、班次模板、绩效规则、邀请码、工单或普通人员。
 
 `index-new.js` 删除 `runStartupStandaloneManager`，保留显式 CLI 迁移。生产服务不得通过启动环境变量静默创建或提权账号。
 
@@ -1065,6 +1212,7 @@ test('生产文档包含平台初始化、迁移、回滚和租户隔离规则',
   assert.match(readme, /tenant:dry-run/);
   assert.match(readme, /MIGRATE-MULTI-TENANT/);
   assert.match(api, /\/api\/platform\/applications/);
+  assert.match(api, /staffLimit/);
   assert.match(security, /跨租户读取返回 404/);
   assert.doesNotMatch(`${readme}${api}${security}`, /OwnerSecure!123|BlankSecure!123/);
 });
@@ -1080,7 +1228,7 @@ test('生产文档包含平台初始化、迁移、回滚和租户隔离规则',
 
 文档必须明确生产顺序：停止写入 → 下载并校验 Supabase 快照 → 本地 dry-run → 保存迁移前备份 → apply → 运行验收脚本 → 上传新快照 → 部署 → 验证三个固定账号 → 保留旧快照。环境变量只列名称和用途，不给示例真密钥：`PLATFORM_PROVISIONING_SECRET`、`PLATFORM_OWNER_PASSWORD`、`BLANK_SUPERVISOR_PASSWORD`、`JWT_SECRET`、Supabase 服务端配置。
 
-`docs/API.md` 为每个平台接口写明方法、路径、角色、请求字段、成功响应和 400/401/403/404/409 响应。`介绍.md` 更新为平台—企业—主管—四人团队层级，不再描述全局主管。
+`docs/API.md` 为每个平台接口写明方法、路径、角色、请求字段、成功响应和 400/401/403/404/409 响应，并说明 `staffLimit` 的 1—999 范围及低于在职人数时的 409 错误。`介绍.md` 更新为平台—企业—主管—可配置人数团队层级，不再描述全局主管或固定岗位比例。
 
 - [ ] **步骤 4：运行文档、安全和配置测试**
 
@@ -1111,15 +1259,17 @@ test('多租户验收摘要覆盖固定账号、空白企业和孤立数据', as
     testSupervisorPhone: '13800000001',
     platformOwnerPhone: '13222514178', platformOwnerName: '句子工单管理员', platformOwnerPassword: 'FixtureOwner!123',
     blankSupervisorPhone: '17713302589', blankSupervisorName: '发财', blankSupervisorPassword: 'FixtureBlank!123',
-    blankTenantName: '发财企业',
+    blankTenantName: '发财企业', testStaffLimit: 4, blankStaffLimit: 4,
   });
   const summary = verifyMultiTenant(db);
   assert.deepEqual(summary.accounts, {
     platformOwner: true, testSupervisor: true, blankSupervisor: true,
   });
   assert.equal(summary.blankTenant.businessRows, 0);
+  assert.equal(summary.blankTenant.staffLimit, 4);
   assert.equal(summary.integrity.ok, true);
   assert.equal(summary.crossTenantLeaks.length, 0);
+  assert.deepEqual(summary.invalidLimits, []);
 });
 ```
 
@@ -1138,11 +1288,18 @@ function verifyMultiTenant(db) {
     testSupervisor: Boolean(one(db, "SELECT id FROM users WHERE phone='13800000001' AND role='主管' AND tenant_id<>''")),
     blankSupervisor: Boolean(one(db, "SELECT id FROM users WHERE phone='17713302589' AND role='主管' AND tenant_id<>''")),
   };
-  return { accounts, integrity: assertTenantIntegrity(db), blankTenant: inspectBlankTenant(db), crossTenantLeaks: inspectRelationships(db) };
+  const invalidLimits = all(db, 'SELECT id,staff_limit FROM tenants WHERE staff_limit < 1 OR staff_limit > 999');
+  return {
+    accounts,
+    integrity: assertTenantIntegrity(db),
+    blankTenant: inspectBlankTenant(db),
+    crossTenantLeaks: inspectRelationships(db),
+    invalidLimits,
+  };
 }
 ```
 
-脚本只读数据库并以非零退出码报告：空 `tenant_id`、企业主管数量异常、跨租户外键、发财租户出现业务数据、平台管理员绑定租户、测试账号丢失。输出不能包含密码哈希或密钥。
+脚本只读数据库并以非零退出码报告：空 `tenant_id`、企业主管数量异常、跨租户外键、人员上限超出 1—999、发财租户出现业务数据、平台管理员绑定租户、测试账号丢失。输出不能包含密码哈希或密钥。
 
 - [ ] **步骤 4：运行全部自动化验证**
 
