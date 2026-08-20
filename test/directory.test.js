@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function fixture() {
@@ -46,7 +46,7 @@ async function fixture() {
 
 test('同小区通讯录只返回 active 人员必要字段', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/staff/directory?community_id=c1`, {
     headers: authHeader({ id: 2, role: 'worker' }),
@@ -60,7 +60,7 @@ test('同小区通讯录只返回 active 人员必要字段', async (t) => {
 
 test('跨小区通讯录和未登录访问被拒绝', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const forbidden = await fetch(`${server.url}/api/staff/directory?community_id=c2`, {
     headers: authHeader({ id: 2, role: 'worker' }),
@@ -73,7 +73,7 @@ test('跨小区通讯录和未登录访问被拒绝', async (t) => {
 test('姓名相同的人员不会通过旧权限表串到通讯录', async (t) => {
   const db = await fixture();
   db.run("INSERT INTO community_permissions (community_id, staff_name) VALUES ('c1', '张三')");
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/staff/directory?community_id=c1`, {
     headers: authHeader({ id: 2, role: 'worker' }),

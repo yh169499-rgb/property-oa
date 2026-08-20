@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const initSqlJs = require('sql.js');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 test('持久化状态接口仅允许主管查看并返回同步字段', async () => {
@@ -15,8 +15,8 @@ test('持久化状态接口仅允许主管查看并返回同步字段', async ()
     role TEXT,
     status TEXT DEFAULT 'active'
   )`);
-  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (1, '13800000001', 'x', '主管', 'admin')");
-  const server = await startHttpServer(db);
+  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (1, '13800000001', 'x', '主管', '主管')");
+  const server = await tenantServer(db);
   try {
     const anonymous = await fetch(`${server.url}/api/persistence/status`);
     assert.equal(anonymous.status, 401);

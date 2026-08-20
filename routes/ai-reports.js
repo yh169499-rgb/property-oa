@@ -34,8 +34,15 @@ function tableExists(db, table) {
   return rows(db, "SELECT 1 present FROM sqlite_master WHERE type = 'table' AND name = ?", [table]).length > 0;
 }
 
+function hasColumn(db, table, column) {
+  return tableExists(db, table)
+    && rows(db, `PRAGMA table_info(${table})`).some((row) => row.name === column);
+}
+
 function scopedTarget(db, user, requestedId) {
-  const profiles = rows(db, 'SELECT id, user_id, name, manager_id FROM staff_profiles');
+  const tenantId = String(user.tenant_id || '');
+  const profiles = rows(db, `SELECT id, user_id, name, manager_id FROM staff_profiles
+    WHERE tenant_id = ?`, [tenantId]);
   const own = profiles.find((profile) => Number(profile.user_id) === Number(user.id));
   const targetId = Number(requestedId);
   const target = profiles.find((profile) => Number(profile.id) === targetId);
@@ -61,7 +68,9 @@ function scopedTarget(db, user, requestedId) {
 function assertCommunityScope(db, user, target, communityId) {
   if (!communityId) return;
   if (tableExists(db, 'communities')) {
-    const exists = rows(db, 'SELECT 1 present FROM communities WHERE id = ?', [communityId]).length > 0;
+    const exists = rows(db, `SELECT 1 present FROM communities
+      WHERE id = ?${hasColumn(db, 'communities', 'tenant_id') ? ' AND tenant_id = ?' : ''}`,
+    [communityId, ...(hasColumn(db, 'communities', 'tenant_id') ? [user.tenant_id] : [])]).length > 0;
     if (!exists) {
       const error = new Error('无权分析该小区报告');
       error.status = 403;
@@ -72,13 +81,16 @@ function assertCommunityScope(db, user, target, communityId) {
   if (isSupervisorUser(user)) return;
   const member = tableExists(db, 'community_memberships') && rows(db, `
     SELECT 1 present FROM community_memberships
-     WHERE community_id = ? AND staff_profile_id = ? LIMIT 1`,
-  [communityId, Number(target.id)]).length > 0;
+     WHERE tenant_id = ? AND community_id = ? AND staff_profile_id = ? LIMIT 1`,
+  [user.tenant_id, communityId, Number(target.id)]).length > 0;
   const historicalTicket = tableExists(db, 'tickets') && rows(db, `
     SELECT 1 present FROM tickets
      WHERE community_id = ?
+       ${hasColumn(db, 'tickets', 'tenant_id') ? 'AND tenant_id = ?' : ''}
        AND (assignee_user_id = ? OR (NULLIF(worker, '') IS NOT NULL AND worker = ?))
-     LIMIT 1`, [communityId, Number(target.user_id), target.name]).length > 0;
+     LIMIT 1`, [communityId,
+    ...(hasColumn(db, 'tickets', 'tenant_id') ? [user.tenant_id] : []),
+    Number(target.user_id), target.name]).length > 0;
   if (!member && !historicalTicket) {
     const error = new Error('无权分析该小区报告');
     error.status = 403;
@@ -97,6 +109,15 @@ function fail(res, error) {
   return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
 }
 
+function rejectClientTenant(req, res) {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  if (!Object.hasOwn(source, 'tenant_id') && !Object.hasOwn(source, 'tenantId')) return false;
+  res.status(400).json({
+    error: '企业身份由服务端确定', code: 'CLIENT_TENANT_FORBIDDEN',
+  });
+  return true;
+}
+
 function createAiReportRouter(options = {}) {
   const config = options.config || defaultConfig;
   const analyzeReport = options.analyzeReport || aiReportService.analyzeReport;
@@ -111,6 +132,11 @@ function createAiReportRouter(options = {}) {
       error: 'AI 报告请求过于频繁，请稍后再试',
       code: 'AI_REPORT_RATE_LIMITED',
     }),
+  });
+
+  router.use(requireAuth, (req, res, next) => {
+    if (rejectClientTenant(req, res)) return;
+    next();
   });
 
   router.get('/reports/ai/status', requireAuth, (_req, res) => {
@@ -144,11 +170,11 @@ function createAiReportRouter(options = {}) {
       const db = database.getDB();
       const profiles = rows(db, `
         SELECT id FROM staff_profiles
-         WHERE COALESCE(employment_status, 'active') <> 'inactive'
+         WHERE tenant_id = ? AND COALESCE(employment_status, 'active') <> 'inactive'
          ORDER BY id
-      `);
+      `, [req.user.tenant_id]);
       const communityId = String(req.body.community_id || req.body.communityId || '');
-      const filters = { from, to, communityId };
+      const filters = { from, to, communityId, tenantId: req.user.tenant_id };
       const report = getAllStaffReport(db, filters, profiles.map((profile) => profile.id));
       const result = await analyzeReport({
         db,
@@ -156,6 +182,7 @@ function createAiReportRouter(options = {}) {
         filters: { ...filters, community_id: communityId },
         staffProfileId: null,
         actorUserId: req.user.id,
+        tenantId: req.user.tenant_id,
         config,
         persist: database.saveDB,
       });
@@ -184,7 +211,7 @@ function createAiReportRouter(options = {}) {
       const target = scopedTarget(db, req.user, req.params.staff_id);
       const communityId = String(req.body.community_id || req.body.communityId || '');
       assertCommunityScope(db, req.user, target, communityId);
-      const filters = { from, to, communityId };
+      const filters = { from, to, communityId, tenantId: req.user.tenant_id };
       const report = getStaffReport(db, target.id, filters);
       const result = await analyzeReport({
         db,
@@ -192,6 +219,7 @@ function createAiReportRouter(options = {}) {
         filters: { ...filters, community_id: communityId },
         staffProfileId: target.id,
         actorUserId: req.user.id,
+        tenantId: req.user.tenant_id,
         config,
         persist: database.saveDB,
       });

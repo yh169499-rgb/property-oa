@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const initSqlJs = require('sql.js');
-const { ensureWorkforceSchema } = require('../workforce-schema');
+const { ensureWorkforceSchema, backfillDefaultPerformanceRules } = require('../workforce-schema');
 const { runStartupRetainedMigration } = require('../services/startup-retained-migration');
 
 async function fixture() {
@@ -28,6 +28,7 @@ async function fixture() {
     id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT DEFAULT '', created TEXT NOT NULL
   )`);
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   return db;
 }
 

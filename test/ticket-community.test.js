@@ -2,13 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function fixture(communities) {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
   db.run(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY, phone TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
+      name TEXT NOT NULL, role TEXT NOT NULL
+    );
     CREATE TABLE tickets (
       id TEXT PRIMARY KEY, type TEXT DEFAULT 'repair', cat TEXT DEFAULT '其他',
       desc TEXT DEFAULT '', loc TEXT DEFAULT '', priority TEXT DEFAULT 'normal',
@@ -21,6 +25,8 @@ async function fixture(communities) {
     CREATE TABLE communities (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT DEFAULT '', created TEXT NOT NULL
     );
+    INSERT INTO users (id, phone, password, name, role)
+      VALUES (1, '13800000001', 'x', '主管', '主管');
   `);
   ensureWorkforceSchema(db);
   for (const community of communities) {
@@ -38,14 +44,14 @@ async function create(server, body) {
 
 test('单小区缺省归属该小区，多小区缺省返回 COMMUNITY_REQUIRED', async (t) => {
   const single = await fixture([{ id: 'only', name: '唯一小区' }]);
-  const singleServer = await startHttpServer(single);
+  const singleServer = await tenantServer(single);
   t.after(() => singleServer.close());
   const created = await create(singleServer, { id: 'single-ticket', desc: '漏水' });
   assert.equal(created.response.status, 200);
   assert.equal(created.body.record.community_id, 'only');
 
   const multi = await fixture([{ id: 'c1', name: '一号小区' }, { id: 'c2', name: '二号小区' }]);
-  const multiServer = await startHttpServer(multi);
+  const multiServer = await tenantServer(multi);
   t.after(() => multiServer.close());
   const missing = await create(multiServer, { id: 'missing-ticket', desc: '漏水' });
   assert.equal(missing.response.status, 400);
@@ -54,7 +60,7 @@ test('单小区缺省归属该小区，多小区缺省返回 COMMUNITY_REQUIRED'
 
 test('兼容 communityId、拒绝未知和冲突小区', async (t) => {
   const db = await fixture([{ id: 'c1', name: '一号小区' }, { id: 'c2', name: '二号小区' }]);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const alias = await create(server, { id: 'alias-ticket', communityId: 'c1', desc: '跳闸' });
   assert.equal(alias.response.status, 200);
@@ -69,7 +75,7 @@ test('兼容 communityId、拒绝未知和冲突小区', async (t) => {
 
 test('唯一小区名称可解析，重名名称拒绝', async (t) => {
   const db = await fixture([{ id: 'c1', name: '一号小区' }, { id: 'c2', name: '重复小区' }, { id: 'c3', name: '重复小区' }]);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const resolved = await create(server, { id: 'name-ticket', community_name: '一号小区', desc: '漏水' });
   assert.equal(resolved.response.status, 200);

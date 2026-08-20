@@ -4,8 +4,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
-const { queryOne, queryAll, run, saveDB, getDB } = require('../db');
-const { generateToken, requireAuth, requireAdmin } = require('../middleware/auth');
+const database = require('../db');
+const { queryOne, queryAll, run, getDB } = database;
+const { generateToken, requireAuth, requireAdmin, requireTenantUser } = require('../middleware/auth');
 const {
   createStaffAccount,
   approvePendingRegistration,
@@ -16,49 +17,58 @@ function usersHaveStatusColumn() {
   return queryAll('PRAGMA table_info(users)').some(column => column.name === 'status');
 }
 
-const PASSWORD_MIN_LENGTH = 8;
-const PASSWORD_MAX_LENGTH = 128;
-
-function validateNewPassword(value) {
-  if (typeof value !== 'string' || value.length < PASSWORD_MIN_LENGTH) {
-    return '密码至少 8 位';
-  }
-  if (value.length > PASSWORD_MAX_LENGTH) {
-    return '密码不能超过 128 位';
-  }
-  return '';
+function tableHasColumn(table, column) {
+  return queryAll(`PRAGMA table_info(${table})`).some(item => item.name === column);
 }
 
 // POST /api/login
 router.post('/login', async (req, res) => {
-  const { phone, password, rememberMe } = req.body;
-  if (!phone || !password) return res.status(400).json({ error: '请输入手机号和密码' });
-  if (typeof password !== 'string' || password.length > PASSWORD_MAX_LENGTH) {
-    return res.status(400).json({ error: '密码长度无效' });
+  try {
+    const { phone, password, rememberMe } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: '请输入手机号和密码' });
+    const user = queryOne(`SELECT u.*,t.status AS tenant_status FROM users u
+      LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.phone=?`, [phone]);
+    if (!user) return res.status(401).json({ error: '手机号未注册' });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ error: '密码错误' });
+    if (user.role === 'platform_owner') {
+      return res.status(403).json({ error: '平台账号请使用平台登录入口', code: 'PLATFORM_LOGIN_REQUIRED' });
+    }
+    if (String(user.status || '') !== 'active' || !user.tenant_id || user.tenant_status !== 'active') {
+      return res.status(403).json({ error: '账号或企业已停用' });
+    }
+    const nowIso = new Date().toISOString();
+    run('UPDATE users SET last_login_at=? WHERE id=?', [nowIso, user.id]);
+    try {
+      await database.saveDB();
+    } catch (error) {
+      run('UPDATE users SET last_login_at=? WHERE id=?', [user.last_login_at ?? null, user.id]);
+      throw error;
+    }
+    const token = generateToken(user, rememberMe);
+    res.json({ success: true, token, user: {
+      id: user.id, phone: user.phone, name: user.name, role: user.role, tenant_id: user.tenant_id,
+    } });
+  } catch (_) {
+    res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
   }
-  const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
-  if (!user) return res.status(401).json({ error: '手机号未注册' });
-  if (String(user.status || 'active') !== 'active') return res.status(403).json({ error: '账号已停用，请联系主管' });
-  const valid = await bcrypt.compare(password, user.password);
-  if (!valid) return res.status(401).json({ error: '密码错误' });
-  const token = generateToken(user, rememberMe);
-  res.json({ success: true, token, user: { id: user.id, phone: user.phone, name: user.name, role: user.role } });
 });
 
 // POST /api/reset-password
-router.post('/reset-password', requireAuth, async (req, res) => {
+router.post('/reset-password', requireAuth, requireTenantUser, async (req, res) => {
   const { phone, newPassword } = req.body;
   if (!phone || !newPassword) return res.status(400).json({ error: '手机号和新密码必填' });
-  const passwordError = validateNewPassword(newPassword);
-  if (passwordError) return res.status(400).json({ error: passwordError });
+  if (newPassword.length < 4) return res.status(400).json({ error: '密码至少4位' });
   const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
-  if (!user) return res.status(404).json({ error: '该手机号未注册' });
+  if (!user || user.role === 'platform_owner' || user.tenant_id !== req.user.tenant_id) {
+    return res.status(404).json({ error: '用户不存在', code: 'USER_NOT_FOUND' });
+  }
   const canReset = String(req.user.id) === String(user.id)
-    || ['admin', 'manager', 'supervisor', '主管', '经理'].includes(String(req.user.role || '').trim().toLowerCase());
+    || req.user.role === '主管';
   if (!canReset) return res.status(403).json({ error: '只能修改自己的密码，或由主管操作' });
   const hash = await bcrypt.hash(newPassword, 10);
-  run('UPDATE users SET password = ? WHERE phone = ?', [hash, phone]);
-  await saveDB();
+  run('UPDATE users SET password = ?, session_version = session_version + 1 WHERE phone = ?', [hash, phone]);
+  await database.saveDB();
   res.json({ success: true, message: '密码已重置' });
 });
 
@@ -66,30 +76,33 @@ router.post('/reset-password', requireAuth, async (req, res) => {
 router.post('/register', async (req, res) => {
   const { phone, password, name, role, skill, inviteCode } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
-  const passwordError = validateNewPassword(password);
-  if (passwordError) return res.status(400).json({ error: passwordError });
-  if (!/^1[3-9]\d{9}$/.test(String(phone))) return res.status(400).json({ error: '手机号格式无效' });
-  if (typeof inviteCode !== 'string') return res.status(400).json({ error: '邀请码格式无效' });
   if (!inviteCode) return res.status(400).json({ error: '请输入邀请码' });
-  const invite = queryOne('SELECT * FROM invite_codes WHERE code = ?', [inviteCode.toUpperCase()]);
+  const invite = queryOne(`SELECT i.*, c.tenant_id AS community_tenant_id
+    FROM invite_codes i LEFT JOIN communities c ON c.id = i.community_id
+    WHERE i.code = ?`, [inviteCode.toUpperCase()]);
   if (!invite) return res.status(400).json({ error: '邀请码无效' });
+  const tenantId = String(invite.tenant_id || invite.community_tenant_id || '').trim();
+  if (!tenantId) return res.status(400).json({ error: '邀请码未绑定企业', code: 'TENANT_CONTEXT_REQUIRED' });
   const existUser = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
   if (existUser) return res.status(400).json({ error: '该手机号已注册，请直接登录' });
   const existPending = queryOne("SELECT * FROM pending_registrations WHERE phone = ? AND status = 'pending'", [phone]);
   if (existPending) return res.status(400).json({ error: '该手机号已提交注册申请，请等待审核' });
   const hash = await bcrypt.hash(password, 10);
-  run(
-    'INSERT INTO pending_registrations (phone, password, name, role, skill, community_id, status, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [phone, hash, name, ['keeper'].includes(String(role || '').toLowerCase()) ? 'keeper' : 'worker', skill || '', invite.community_id, 'pending', new Date().toISOString()]
-  );
-  await saveDB();
+  const columns = ['phone', 'password', 'name', 'role', 'skill', 'community_id', 'status', 'created'];
+  const values = [phone, hash, name, ['keeper'].includes(String(role || '').toLowerCase()) ? 'keeper' : 'worker', skill || '', invite.community_id, 'pending', new Date().toISOString()];
+  if (tableHasColumn('pending_registrations', 'tenant_id')) {
+    columns.unshift('tenant_id');
+    values.unshift(tenantId);
+  }
+  run(`INSERT INTO pending_registrations (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`, values);
+  await database.saveDB();
   res.json({ success: true, message: '注册申请已提交，请等待主管审核' });
 });
 
 // GET /api/pending-registrations
 router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
   const rows = queryAll(`SELECT id, phone, name, role, skill, community_id, status, created
-    FROM pending_registrations WHERE status = 'pending' ORDER BY created DESC`);
+    FROM pending_registrations WHERE status = 'pending' AND tenant_id = ? ORDER BY created DESC`, [req.user.tenant_id]);
   res.json({ data: rows, pending_count: rows.length });
 });
 
@@ -97,7 +110,7 @@ router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
 router.post('/pending-registrations/:id/approve', requireAuth, requireAdmin, async (req, res) => {
   try {
     const approved = approvePendingRegistration(getDB(), req.params.id, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, message: '已通过', user: approved });
   } catch (error) {
     if (String(error.message || '').includes('UNIQUE')) {
@@ -109,10 +122,10 @@ router.post('/pending-registrations/:id/approve', requireAuth, requireAdmin, asy
 
 // POST /api/pending-registrations/:id/reject
 router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, async (req, res) => {
-  const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ?', [req.params.id]);
+  const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ? AND tenant_id = ?', [req.params.id, req.user.tenant_id]);
   if (!reg) return res.status(404).json({ error: '记录不存在' });
-  run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ?", [req.params.id]);
-  await saveDB();
+  run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ? AND tenant_id = ?", [req.params.id, req.user.tenant_id]);
+  await database.saveDB();
   res.json({ success: true, message: '已拒绝' });
 });
 
@@ -120,9 +133,6 @@ router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, asyn
 router.post('/users', requireAuth, requireAdmin, async (req, res) => {
   const { phone, password, name, role, skill, community_id, communityId } = req.body;
   if (!phone || !password || !name) return res.status(400).json({ error: '手机号、密码、姓名必填' });
-  const passwordError = validateNewPassword(password);
-  if (passwordError) return res.status(400).json({ error: passwordError });
-  if (!/^1[3-9]\d{9}$/.test(String(phone))) return res.status(400).json({ error: '手机号格式无效' });
   try {
     const hash = await bcrypt.hash(password, 10);
     const created = createStaffAccount(getDB(), {
@@ -133,7 +143,7 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
       skill,
       communityId: community_id || communityId || 'default',
     }, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, user: created });
   } catch (e) {
     if (e.message.includes('UNIQUE')) return res.status(400).json({ error: '该手机号已注册', code: 'PHONE_ALREADY_REGISTERED' });
@@ -148,9 +158,11 @@ router.get('/users', requireAuth, requireAdmin, (req, res) => {
         FROM users u
         LEFT JOIN staff_profiles sp ON sp.user_id = u.id
         WHERE COALESCE(u.status, 'active') = 'active'
+          AND u.tenant_id = ?
+          AND LOWER(TRIM(u.role)) IN ('worker', 'keeper')
           AND (sp.id IS NULL OR COALESCE(sp.employment_status, 'active') = 'active')
-        ORDER BY u.id`)
-    : queryAll('SELECT id, phone, name, role FROM users ORDER BY id').map(user => ({ ...user, status: 'active' }));
+        ORDER BY u.id`, [req.user.tenant_id])
+    : queryAll('SELECT id, phone, name, role FROM users WHERE tenant_id = ? AND LOWER(TRIM(role)) IN (\'worker\', \'keeper\') ORDER BY id', [req.user.tenant_id]).map(user => ({ ...user, status: 'active' }));
   res.json({ data: users });
 });
 
@@ -159,11 +171,11 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   const userId = Number(req.params.id);
   if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ error: '用户 ID 无效' });
   if (userId === Number(req.user.id)) return res.status(400).json({ error: '不能删除当前登录的主管账号' });
-  const target = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+  const target = queryOne('SELECT * FROM users WHERE id = ? AND tenant_id = ?', [userId, req.user.tenant_id]);
   if (!target) return res.status(404).json({ error: '用户不存在' });
   try {
     const departed = departStaff(getDB(), userId, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, departed: true, profileId: departed.profileId, message: '人员已离职，账号已删除，历史记录已保留' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || '人员离职失败，请稍后重试', code: error.code });

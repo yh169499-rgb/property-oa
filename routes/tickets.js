@@ -16,7 +16,6 @@ const {
 } = require('../services/ticket-activity');
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
-const { assertDispatchAvailable } = require('../services/dispatch-availability');
 const { isSupervisorUser } = require('../services/roles');
 const {
   STAFF_TICKET_TYPES,
@@ -78,6 +77,108 @@ function tableHasColumn(table, column) {
   return queryAll(`PRAGMA table_info(${table})`).some((row) => row.name === column);
 }
 
+function clientTenantProvided(body) {
+  return body && (
+    Object.prototype.hasOwnProperty.call(body, 'tenant_id')
+    || Object.prototype.hasOwnProperty.call(body, 'tenantId')
+  );
+}
+
+function clientTenantError(res) {
+  return res.status(400).json({
+    error: '租户归属由服务端确定，客户端不得传入',
+    code: 'CLIENT_TENANT_FORBIDDEN',
+  });
+}
+
+function ticketForTenant(req, ticketId) {
+  if (!tableHasColumn('tickets', 'tenant_id')) {
+    return queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
+  }
+  return queryOne('SELECT * FROM tickets WHERE id = ? AND tenant_id = ?', [ticketId, req.user.tenant_id]);
+}
+
+function ticketExists(ticketId) {
+  return Boolean(queryOne('SELECT id FROM tickets WHERE id = ?', [ticketId]));
+}
+
+function writeTarget(req, res, ticketId) {
+  const row = ticketForTenant(req, ticketId);
+  if (row) return row;
+  if (tableHasColumn('tickets', 'tenant_id') && ticketExists(ticketId)) {
+    res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
+  } else {
+    res.status(404).json({ error: '工单不存在' });
+  }
+  return null;
+}
+
+function communityError(message, code) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = code;
+  return error;
+}
+
+function resolveTicketCommunity(db, body, tenantId) {
+  if (!tableHasColumn('communities', 'tenant_id')) return resolveCommunity(db, body);
+  const id = body.community_id == null ? '' : String(body.community_id).trim();
+  const alias = body.communityId == null ? '' : String(body.communityId).trim();
+  if (id && alias && id !== alias) {
+    throw communityError('community_id 与 communityId 不一致', 'COMMUNITY_CONFLICT');
+  }
+  const requestedId = id || alias;
+  if (requestedId) {
+    const community = queryOne(
+      'SELECT id, name FROM communities WHERE id = ? AND tenant_id = ?',
+      [requestedId, tenantId]
+    );
+    if (!community) throw communityError('指定小区不存在', 'COMMUNITY_NOT_FOUND');
+    return { id: community.id, name: community.name, resolution: 'explicit_id' };
+  }
+  const name = String(body.community_name || body.communityName || '').trim();
+  if (name) {
+    const matches = queryAll(
+      'SELECT id, name FROM communities WHERE TRIM(name) = TRIM(?) AND tenant_id = ? ORDER BY created',
+      [name, tenantId]
+    );
+    if (!matches.length) throw communityError('指定小区不存在', 'COMMUNITY_NOT_FOUND');
+    if (matches.length > 1) throw communityError('小区名称不唯一，请改用小区 ID', 'COMMUNITY_AMBIGUOUS');
+    return { id: matches[0].id, name: matches[0].name, resolution: 'explicit_name' };
+  }
+  const communities = queryAll(
+    'SELECT id, name FROM communities WHERE tenant_id = ? ORDER BY created',
+    [tenantId]
+  );
+  if (communities.length !== 1) throw communityError('多小区场景必须指定小区', 'COMMUNITY_REQUIRED');
+  return { id: communities[0].id, name: communities[0].name, resolution: 'single_community' };
+}
+
+function activePerformanceRuleId(db, tenantId) {
+  if (!tableExists('performance_rule_versions')) return null;
+  if (!tableHasColumn('performance_rule_versions', 'tenant_id')) {
+    return getActiveRule(db)?.id || null;
+  }
+  const active = queryOne(`SELECT id FROM performance_rule_versions
+    WHERE tenant_id = ? AND is_active = 1 ORDER BY version_no DESC LIMIT 1`, [tenantId]);
+  if (active) return Number(active.id);
+  const latest = queryOne(`SELECT id FROM performance_rule_versions
+    WHERE tenant_id = ? ORDER BY version_no DESC LIMIT 1`, [tenantId]);
+  return latest ? Number(latest.id) : null;
+}
+
+function performanceRuleBelongsToTenant(ruleId, tenantId) {
+  if (ruleId == null || ruleId === '') return true;
+  if (!tableExists('performance_rule_versions')) return false;
+  if (!tableHasColumn('performance_rule_versions', 'tenant_id')) {
+    return Boolean(queryOne('SELECT id FROM performance_rule_versions WHERE id = ?', [ruleId]));
+  }
+  return Boolean(queryOne(
+    'SELECT id FROM performance_rule_versions WHERE id = ? AND tenant_id = ?',
+    [ruleId, tenantId]
+  ));
+}
+
 function safeTicketId(value) {
   const id = String(value || '');
   if (!id || id === '.' || id === '..' || id.includes('\0') || id.includes('/') || id.includes('\\')) return null;
@@ -88,13 +189,22 @@ function accessibleCommunityIds(req) {
   if (isSupervisorUser(req.user)) return null;
   const ids = [];
   if (tableExists('community_memberships') && tableExists('staff_profiles')) {
+    const tenantScope = tableHasColumn('community_memberships', 'tenant_id')
+      && tableHasColumn('staff_profiles', 'tenant_id')
+      ? ` AND COALESCE(cm.tenant_id, '') IN ('', ?)
+          AND COALESCE(sp.tenant_id, '') IN ('', ?)`
+      : '';
+    const params = [req.user.id];
+    if (tenantScope) params.push(req.user.tenant_id, req.user.tenant_id);
     queryAll(`SELECT DISTINCT community_id FROM community_memberships cm
       JOIN staff_profiles sp ON sp.id = cm.staff_profile_id
-      WHERE sp.user_id = ? AND COALESCE(sp.employment_status, 'active') = 'active'`, [req.user.id])
+      WHERE sp.user_id = ? AND COALESCE(sp.employment_status, 'active') = 'active'${tenantScope}`, params)
       .forEach(row => ids.push(String(row.community_id)));
   }
   if (tableExists('community_permissions')) {
-    queryAll('SELECT DISTINCT community_id FROM community_permissions WHERE staff_name = ?', [req.user.name])
+    const tenantScope = tableHasColumn('community_permissions', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    const params = tenantScope ? [req.user.name, req.user.tenant_id] : [req.user.name];
+    queryAll(`SELECT DISTINCT community_id FROM community_permissions WHERE staff_name = ?${tenantScope}`, params)
       .forEach(row => ids.push(String(row.community_id)));
   }
   return [...new Set(ids.length ? ids : ['default'])];
@@ -110,19 +220,11 @@ function assertCommunityAccess(req, communityId) {
   }
 }
 
-function dispatchErrorResponse(res, error) {
-  return res.status(error.status || 409).json({
-    error: error.message,
-    code: error.code,
-    conflicting_ticket_ids: error.conflictingTicketIds || [],
-  });
-}
-
 function canAccessTicket(req, ticketId) {
   // Legacy installations may not have the stable assignee columns until the
   // startup migration completes. SELECT * keeps this guard non-throwing; the
   // missing identity is then rejected by canReadTicket for ordinary staff.
-  const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
+  const row = ticketForTenant(req, ticketId);
   return canReadTicket(req, row);
 }
 
@@ -138,8 +240,11 @@ function identifyIssueSignature(cat, desc, message) {
   const matched = keywords.filter(k => text.includes(k));
   return matched.length ? matched.sort().join(',') : cat;
 }
-function getRepeatMatches(communityId, repeatKey, issueSignature) {
-  const candidates = queryAll('SELECT * FROM tickets WHERE community_id = ? AND repeat_key = ? ORDER BY created DESC', [communityId, repeatKey]);
+function getRepeatMatches(tenantId, communityId, repeatKey, issueSignature) {
+  const tenantAware = tableHasColumn('tickets', 'tenant_id');
+  const candidates = tenantAware
+    ? queryAll('SELECT * FROM tickets WHERE tenant_id = ? AND community_id = ? AND repeat_key = ? ORDER BY created DESC', [tenantId, communityId, repeatKey])
+    : queryAll('SELECT * FROM tickets WHERE community_id = ? AND repeat_key = ? ORDER BY created DESC', [communityId, repeatKey]);
   return candidates.filter(row => {
     const rSig = identifyIssueSignature(row.cat, row.desc, row.message);
     return rSig === issueSignature;
@@ -150,6 +255,13 @@ function raiseRecurringPriority(p) {
   const idx = order.indexOf(p);
   return idx < order.length - 1 ? order[idx + 1] : p;
 }
+
+router.use((req, res, next) => {
+  if (clientTenantProvided(req.query) || clientTenantProvided(req.body)) {
+    return clientTenantError(res);
+  }
+  next();
+});
 
 // GET /api/tickets
 router.get('/', requireAuth, (req, res) => {
@@ -168,7 +280,14 @@ router.get('/', requireAuth, (req, res) => {
   }
   // A pre-migration ticket table can lack `type`; preserve its historical
   // repair-like list behavior while current schemas enforce the type scope.
-  const scope = ticketReadScope(req, '', { hasTypeColumn: tableHasColumn('tickets', 'type') });
+  const scope = ticketReadScope(req, '', {
+    hasTypeColumn: tableHasColumn('tickets', 'type'),
+    hasTenantColumn: tableHasColumn('tickets', 'tenant_id'),
+    // A pre-migration legacy table has no `type` column. Keep its historical
+    // rows readable during the one-time migration; all current schemas carry
+    // `type` and therefore require an exact tenant match.
+    allowLegacyEmptyTenant: true,
+  });
   const where = filters.length ? filters.join(' AND ') : '1 = 1';
   const rows = queryAll(
     `SELECT * FROM tickets WHERE ${where}${scope.sql} ORDER BY created DESC`,
@@ -179,9 +298,10 @@ router.get('/', requireAuth, (req, res) => {
 
 // GET /api/tickets/:id
 router.get('/:id', requireAuth, (req, res) => {
-  const row = req.query.community_id
-    ? queryOne('SELECT * FROM tickets WHERE id = ? AND community_id = ?', [req.params.id, req.query.community_id])
-    : queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
+  const base = ticketForTenant(req, req.params.id);
+  const row = base && req.query.community_id && String(base.community_id) !== String(req.query.community_id)
+    ? null
+    : base;
   if (!row || !canReadTicket(req, row)) return res.status(404).json({ error: '工单不存在' });
   res.json({ data: rowToTicket(row) });
 });
@@ -189,13 +309,14 @@ router.get('/:id', requireAuth, (req, res) => {
 // POST /api/tickets
 router.post('/', requireAuth, async (req, res) => {
   const t = req.body || {};
+  if (clientTenantProvided(t)) return clientTenantError(res);
   const supervisor = isSupervisorUser(req.user);
   const type = String(t.type || 'repair').trim().toLowerCase();
   if (!STAFF_TICKET_TYPES.has(type)) {
     return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
   }
   let community;
-  try { community = resolveCommunity(getDB(), t); }
+  try { community = resolveTicketCommunity(getDB(), t, req.user.tenant_id); }
   catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
   try { assertCommunityAccess(req, community.id); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
@@ -223,26 +344,15 @@ router.post('/', requireAuth, async (req, res) => {
   let assignee = null;
   const requestedWorker = supervisor ? String(t.worker || '').trim() : '';
   if (requestedWorker) {
-    try { assignee = resolveAssignee(getDB(), requestedWorker, req.user.id); }
+    try { assignee = resolveAssignee(getDB(), requestedWorker, req.user.id, req.user.tenant_id); }
     catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
   }
   if (requestedStatus === 'doing' && !assignee) {
     return res.status(400).json({ error: '处理中工单必须指定处理人', code: 'INVALID_TICKET_INITIAL_STATE' });
   }
-  if (assignee) {
-    try {
-      assertDispatchAvailable(getDB(), {
-        staffProfileId: assignee.assigneeStaffProfileId,
-        assignedAt: now,
-        estimatedHours: Number(t.estimated_hours) || 1,
-      });
-    } catch (error) {
-      return dispatchErrorResponse(res, error);
-    }
-  }
   const repeatKey = buildRepeatKey(type, cat, loc);
   const issueSignature = identifyIssueSignature(cat, t.desc, t.message);
-  const matches = getRepeatMatches(communityId, repeatKey, issueSignature);
+  const matches = getRepeatMatches(req.user.tenant_id, communityId, repeatKey, issueSignature);
   const createdMs = Date.parse(now) || Date.now();
 
   // 15分钟内同类未完成 → 合并
@@ -252,9 +362,12 @@ router.post('/', requireAuth, async (req, res) => {
   });
   if (recentOpen) {
     const feedbackCount = (Number(recentOpen.feedback_count) || 1) + 1;
-    run('UPDATE tickets SET feedback_count = ?, repeat_key = ? WHERE id = ?', [feedbackCount, repeatKey, recentOpen.id]);
+    const tenantSql = tableHasColumn('tickets', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    const tenantParams = tenantSql ? [req.user.tenant_id] : [];
+    run(`UPDATE tickets SET feedback_count = ?, repeat_key = ? WHERE id = ?${tenantSql}`,
+      [feedbackCount, repeatKey, recentOpen.id, ...tenantParams]);
     await saveDB();
-    const mergedTicket = rowToTicket(queryOne('SELECT * FROM tickets WHERE id = ?', [recentOpen.id]));
+    const mergedTicket = rowToTicket(ticketForTenant(req, recentOpen.id));
     return res.json({ success: true, action: 'merged', merged: true, mergedInto: recentOpen.id, record: mergedTicket });
   }
 
@@ -270,24 +383,28 @@ router.post('/', requireAuth, async (req, res) => {
   const priority = isRecurring ? raiseRecurringPriority(requestedPriority) : requestedPriority;
 
   try {
+    const tenantAware = tableHasColumn('tickets', 'tenant_id');
+    const tenantColumn = tenantAware ? 'tenant_id, ' : '';
+    const tenantPlaceholder = tenantAware ? '?, ' : '';
+    const values = [id, type, cat, t.desc || '', loc, priority, requestedStatus,
+      assignee ? assignee.displayName : '', t.message || '', now,
+      supervisor ? (t.estimated_hours || 0) : 0,
+      supervisor ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
+      repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1,
+      activePerformanceRuleId(getDB(), req.user.tenant_id),
+      assignee ? assignee.assigneeUserId : null,
+      assignee ? assignee.assigneeStaffProfileId : null,
+      assignee ? now : ''];
+    if (tenantAware) values.unshift(req.user.tenant_id);
     run(
-      `INSERT INTO tickets (id, type, cat, desc, loc, priority, status, worker, message,
+      `INSERT INTO tickets (${tenantColumn}id, type, cat, desc, loc, priority, status, worker, message,
         created, estimated_hours, session_id, community_id, repeat_key, repeat_of,
         repeat_count, is_recurring, recurrence_note, feedback_count,
         performance_rule_version_id, assignee_user_id, assignee_staff_profile_id, assigned_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, type, cat, t.desc || '', loc, priority, requestedStatus,
-        assignee ? assignee.displayName : '', t.message || '', now,
-        supervisor ? (t.estimated_hours || 0) : 0,
-        supervisor ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
-        repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1,
-        getActiveRule(getDB())?.id || null,
-        assignee ? assignee.assigneeUserId : null,
-        assignee ? assignee.assigneeStaffProfileId : null,
-        assignee ? now : '']
-    );
+       VALUES (${tenantPlaceholder}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      values);
     await saveDB();
-    const row = queryOne('SELECT * FROM tickets WHERE id = ?', [id]);
+    const row = ticketForTenant(req, id);
     const ticket = rowToTicket(row);
     res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
@@ -297,15 +414,23 @@ router.post('/', requireAuth, async (req, res) => {
 
 // PATCH /api/tickets/:id
 router.patch('/:id', requireAuth, async (req, res) => {
-  const updates = req.body;
+  const updates = req.body || {};
+  if (clientTenantProvided(updates)) return clientTenantError(res);
   if (updates._action !== undefined && updates._action !== 'urge') {
     return res.status(400).json({ error: '不支持的工单动作' });
   }
   const db = getDB();
-  const before = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
-  if (!before) return res.status(404).json({ error: '工单不存在' });
+  const before = writeTarget(req, res, req.params.id);
+  if (!before) return;
   try { assertTicketMutation(req, before, updates); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
+  if (updates.performance_rule_version_id !== undefined
+      && !performanceRuleBelongsToTenant(updates.performance_rule_version_id, req.user.tenant_id)) {
+    return res.status(400).json({
+      error: '绩效规则版本不存在',
+      code: 'PERFORMANCE_RULE_NOT_FOUND',
+    });
+  }
   const action = detectTicketAction(before, updates);
   const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', metadata: 'metadata', performance_rule_version_id: 'performance_rule_version_id' };
   const sets = [], values = [];
@@ -317,18 +442,8 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const workerName = String(updates.worker || '').trim();
     let assignee = null;
     if (workerName) {
-      try { assignee = resolveAssignee(db, workerName, req.user.id); }
+      try { assignee = resolveAssignee(db, workerName, req.user.id, req.user.tenant_id); }
       catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
-      try {
-        assertDispatchAvailable(db, {
-          staffProfileId: assignee.assigneeStaffProfileId,
-          assignedAt: new Date().toISOString(),
-          estimatedHours: Number(updates.estimated_hours ?? before.estimated_hours) || 1,
-          excludeTicketId: before.id,
-        });
-      } catch (error) {
-        return dispatchErrorResponse(res, error);
-      }
     }
     sets.push('assignee_user_id = ?', 'assignee_staff_profile_id = ?', 'assigned_at = ?');
     values.push(
@@ -342,25 +457,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
     if (workerName && before.performance_rule_version_id == null) {
       sets.push('performance_rule_version_id = ?');
-      values.push(getActiveRule(db)?.id || null);
-    }
-  }
-  if (updates.estimated_hours !== undefined
-      && before.assignee_staff_profile_id != null
-      && before.assigned_at
-      && !(updates.worker !== undefined
-        && (updates.worker !== before.worker
-          || before.assignee_user_id == null
-          || before.assignee_staff_profile_id == null))) {
-    try {
-      assertDispatchAvailable(db, {
-        staffProfileId: before.assignee_staff_profile_id,
-        assignedAt: before.assigned_at,
-        estimatedHours: Number(updates.estimated_hours) || 1,
-        excludeTicketId: before.id,
-      });
-    } catch (error) {
-      return dispatchErrorResponse(res, error);
+      values.push(activePerformanceRuleId(db, req.user.tenant_id));
     }
   }
   let community = null;
@@ -368,7 +465,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
       || Object.prototype.hasOwnProperty.call(updates, 'communityId')
       || Object.prototype.hasOwnProperty.call(updates, 'community_name')
       || Object.prototype.hasOwnProperty.call(updates, 'communityName')) {
-    try { community = resolveCommunity(db, updates); }
+    try { community = resolveTicketCommunity(db, updates, req.user.tenant_id); }
     catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
     try { assertCommunityAccess(req, community.id); }
     catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
@@ -377,17 +474,21 @@ router.patch('/:id', requireAuth, async (req, res) => {
   }
   if (!sets.length) return res.status(400).json({ error: '无更新字段' });
   values.push(req.params.id);
+  const tenantAware = tableHasColumn('tickets', 'tenant_id');
+  if (tenantAware) values.push(req.user.tenant_id);
   let transactionStarted = false;
   try {
     db.run('BEGIN');
     transactionStarted = true;
-    run(`UPDATE tickets SET ${sets.join(', ')} WHERE id = ?`, values);
+    run(`UPDATE tickets SET ${sets.join(', ')} WHERE id = ?${tenantAware ? ' AND tenant_id = ?' : ''}`, values);
     if (req.user && action) {
+      const profileTenantAware = tableHasColumn('staff_profiles', 'tenant_id');
       const actorProfile = queryOne(
-        'SELECT id FROM staff_profiles WHERE user_id = ?',
-        [req.user.id]
+        `SELECT id FROM staff_profiles WHERE user_id = ?${profileTenantAware ? " AND COALESCE(tenant_id, '') IN ('', ?)" : ''}`,
+        profileTenantAware ? [req.user.id, req.user.tenant_id] : [req.user.id]
       );
       recordTicketActivity(db, {
+        tenantId: req.user.tenant_id,
         ticketId: req.params.id,
         actorUserId: req.user.id,
         actorStaffId: actorProfile ? actorProfile.id : null,
@@ -399,7 +500,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     db.run('COMMIT');
     transactionStarted = false;
     await saveDB();
-    const row = queryOne('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
+    const row = ticketForTenant(req, req.params.id);
     if (!row) return res.status(404).json({ error: '工单不存在' });
     res.json({ success: true, community_resolution: community, record: rowToTicket(row) });
   } catch (e) {
@@ -412,7 +513,11 @@ router.patch('/:id', requireAuth, async (req, res) => {
 
 // DELETE /api/tickets/:id (admin only)
 router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
-  run('DELETE FROM tickets WHERE id = ?', [req.params.id]);
+  const ticket = writeTarget(req, res, req.params.id);
+  if (!ticket) return;
+  const tenantAware = tableHasColumn('tickets', 'tenant_id');
+  run(`DELETE FROM tickets WHERE id = ?${tenantAware ? ' AND tenant_id = ?' : ''}`,
+    tenantAware ? [req.params.id, req.user.tenant_id] : [req.params.id]);
   await saveDB();
   res.json({ success: true });
 });
@@ -421,8 +526,14 @@ router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
 router.post('/:id/photos', requireAuth, (req, res, next) => {
   const ticketId = req.params.id;
   if (!safeTicketId(ticketId)) return res.status(400).json({ error: '工单编号不合法', code: 'INVALID_TICKET_ID' });
-  const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
-  if (!row || !canReadTicket(req, row)) return res.status(404).json({ error: '工单不存在' });
+  const row = ticketForTenant(req, ticketId);
+  if (!row) {
+    if (tableHasColumn('tickets', 'tenant_id') && ticketExists(ticketId)) {
+      return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
+    }
+    return res.status(404).json({ error: '工单不存在' });
+  }
+  if (!canReadTicket(req, row)) return res.status(404).json({ error: '工单不存在' });
   req.ticketRow = row;
   next();
 }, upload.array('photos', 10), (req, res) => {
@@ -443,7 +554,7 @@ router.post('/:id/photos', requireAuth, (req, res, next) => {
 // GET /api/tickets/:id/photos
 router.get('/:id/photos', requireAuth, (req, res) => {
   if (!safeTicketId(req.params.id)) return res.status(400).json({ error: '工单编号不合法', code: 'INVALID_TICKET_ID' });
-  const ticket = queryOne('SELECT community_id, assignee_user_id FROM tickets WHERE id = ?', [req.params.id]);
+  const ticket = ticketForTenant(req, req.params.id);
   if (!ticket || !canReadTicket(req, ticket)) return res.status(404).json({ error: '工单不存在' });
   const photoFile = path.join(config.UPLOAD_DIR, `${req.params.id}.json`);
   if (!fs.existsSync(photoFile)) return res.json({ data: [] });

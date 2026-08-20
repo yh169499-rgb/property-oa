@@ -35,6 +35,19 @@ function reportError(res, error) {
   return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
 }
 
+function rejectClientTenant(req, res) {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  if (!Object.hasOwn(source, 'tenant_id') && !Object.hasOwn(source, 'tenantId')) return false;
+  res.status(400).json({
+    error: '企业身份由服务端确定', code: 'CLIENT_TENANT_FORBIDDEN',
+  });
+  return true;
+}
+
+function hasColumn(table, column) {
+  return queryAll(`PRAGMA table_info(${table})`).some((row) => row.name === column);
+}
+
 // ============ 句子秒懂 Token ============
 let cachedAccessToken = null;
 let tokenExpiresAt = 0;
@@ -64,26 +77,49 @@ async function triggerJzmWorkflowEvent(sessionId, message, options = {}) {
 }
 
 // ============ 定时提醒 ============
-let reminderInterval = 0, reminderTimer = null;
-let slaInterval = 0, slaTimer = null;
+const reminderTimers = new Map();
+const slaTimers = new Map();
 
-function getWaitingTicketsReminder() {
-  const waitTickets = queryAll("SELECT * FROM tickets WHERE status = 'wait'");
+function getIntervalSetting(tenantId, key) {
+  const row = queryOne(`SELECT value FROM tenant_settings
+    WHERE tenant_id = ? AND key = ?`, [tenantId, key]);
+  const value = Number(row?.value || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function setIntervalSetting(tenantId, key, intervalMinutes) {
+  const value = Math.max(0, Number(intervalMinutes) || 0);
+  const now = new Date().toISOString();
+  run(`INSERT INTO tenant_settings(tenant_id,key,value,created_at,updated_at)
+    VALUES(?,?,?,?,?)
+    ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+  [tenantId, key, String(value), now, now]);
+  return value;
+}
+
+function getWaitingTicketsReminder(tenantId) {
+  const waitTickets = queryAll(`SELECT * FROM tickets
+    WHERE tenant_id = ? AND status = 'wait'`, [tenantId]);
   return waitTickets.length ? `当前还有 ${waitTickets.length} 张工单待派单，请尽快处理。` : null;
 }
 
-function startReminders() {
-  if (reminderTimer) clearInterval(reminderTimer);
+function startReminders(tenantId) {
+  const existing = reminderTimers.get(tenantId);
+  if (existing) clearInterval(existing);
+  reminderTimers.delete(tenantId);
+  const reminderInterval = getIntervalSetting(tenantId, 'reminder_interval_minutes') * 60000;
   if (reminderInterval <= 0) return;
-  reminderTimer = setInterval(async () => {
-    const reminder = getWaitingTicketsReminder();
+  const timer = setInterval(async () => {
+    const reminder = getWaitingTicketsReminder(tenantId);
     if (reminder) await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, reminder).catch(() => {});
   }, reminderInterval);
+  reminderTimers.set(tenantId, timer);
 }
 
-function checkSlaOverdue() {
+function checkSlaOverdue(tenantId) {
   const now = Date.now();
-  const active = queryAll("SELECT * FROM tickets WHERE status IN ('wait','doing','confirm','pending')");
+  const active = queryAll(`SELECT * FROM tickets
+    WHERE tenant_id = ? AND status IN ('wait','doing','confirm','pending')`, [tenantId]);
   return active.filter(row => {
     const hours = (now - new Date(row.created).getTime()) / 3600000;
     const threshold = config.SLA_THRESHOLDS[row.priority] || 24;
@@ -91,25 +127,38 @@ function checkSlaOverdue() {
   }).map(row => ({ id: row.id, cat: row.cat, loc: row.loc, worker: row.worker, priority: row.priority, hoursOverdue: +((Date.now() - new Date(row.created).getTime()) / 3600000 - (config.SLA_THRESHOLDS[row.priority] || 24)).toFixed(1) }));
 }
 
-function startSlaAlerts() {
-  if (slaTimer) clearInterval(slaTimer);
+function startSlaAlerts(tenantId) {
+  const existing = slaTimers.get(tenantId);
+  if (existing) clearInterval(existing);
+  slaTimers.delete(tenantId);
+  const slaInterval = getIntervalSetting(tenantId, 'sla_interval_minutes') * 60000;
   if (slaInterval <= 0) return;
-  slaTimer = setInterval(async () => {
-    const overdue = checkSlaOverdue();
+  const timer = setInterval(async () => {
+    const overdue = checkSlaOverdue(tenantId);
     if (overdue.length) {
       const msg = `⚠️ SLA超时：${overdue.length}张工单超时\n` + overdue.map(t => `• ${t.id}｜${t.cat}｜超${t.hoursOverdue}h`).join('\n');
       await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, msg).catch(() => {});
     }
   }, slaInterval);
+  slaTimers.set(tenantId, timer);
 }
 
 // ============ 路由 ============
+
+router.use(requireAuth, (req, res, next) => {
+  if (rejectClientTenant(req, res)) return;
+  next();
+});
 
 // POST /api/notify
 router.post('/notify', requireAuth, async (req, res) => {
   const { ticketId, event } = req.body;
   const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
   if (!row) return res.status(404).json({ error: '工单不存在' });
+  if (Object.prototype.hasOwnProperty.call(row, 'tenant_id')
+      && String(row.tenant_id || '') !== String(req.user.tenant_id || '')) {
+    return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
+  }
   if (!canAccessTicket(req, ticketId)) return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
   if (!config.NOTIFY_WEBHOOK) return res.json({ success: false, error: '未配置 NOTIFY_WEBHOOK' });
   try {
@@ -120,7 +169,7 @@ router.post('/notify', requireAuth, async (req, res) => {
 
 // GET /api/reminder/trigger
 router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
-  const reminder = getWaitingTicketsReminder();
+  const reminder = getWaitingTicketsReminder(req.user.tenant_id);
   if (reminder) {
     await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, reminder).catch(() => {});
     res.json({ success: true, message: '已推送' });
@@ -128,21 +177,37 @@ router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // GET/POST /api/settings/reminder
-router.get('/settings/reminder', requireAuth, requireAdmin, (req, res) => { res.json({ intervalMinutes: reminderInterval / 60000 }); });
-router.post('/settings/reminder', requireAuth, requireAdmin, (req, res) => {
-  const { intervalMinutes } = req.body;
-  reminderInterval = Math.max(0, Number(intervalMinutes) || 0) * 60000;
-  startReminders();
-  res.json({ success: true, intervalMinutes: reminderInterval / 60000, message: reminderInterval > 0 ? `每${reminderInterval/60000}分钟推送` : '已关闭' });
+router.get('/settings/reminder', requireAuth, requireAdmin, (req, res) => {
+  res.json({ intervalMinutes: getIntervalSetting(req.user.tenant_id, 'reminder_interval_minutes') });
+});
+router.post('/settings/reminder', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const intervalMinutes = setIntervalSetting(
+      req.user.tenant_id, 'reminder_interval_minutes', req.body.intervalMinutes
+    );
+    await saveDB();
+    startReminders(req.user.tenant_id);
+    res.json({ success: true, intervalMinutes, message: intervalMinutes > 0 ? `每${intervalMinutes}分钟推送` : '已关闭' });
+  } catch (error) {
+    reportError(res, error);
+  }
 });
 
 // GET/POST /api/settings/sla
-router.get('/settings/sla', requireAuth, requireAdmin, (req, res) => { res.json({ intervalMinutes: slaInterval / 60000 }); });
-router.post('/settings/sla', requireAuth, requireAdmin, (req, res) => {
-  const { intervalMinutes } = req.body;
-  slaInterval = Math.max(0, Number(intervalMinutes) || 0) * 60000;
-  startSlaAlerts();
-  res.json({ success: true, intervalMinutes: slaInterval / 60000 });
+router.get('/settings/sla', requireAuth, requireAdmin, (req, res) => {
+  res.json({ intervalMinutes: getIntervalSetting(req.user.tenant_id, 'sla_interval_minutes') });
+});
+router.post('/settings/sla', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const intervalMinutes = setIntervalSetting(
+      req.user.tenant_id, 'sla_interval_minutes', req.body.intervalMinutes
+    );
+    await saveDB();
+    startSlaAlerts(req.user.tenant_id);
+    res.json({ success: true, intervalMinutes });
+  } catch (error) {
+    reportError(res, error);
+  }
 });
 
 // GET/POST /api/settings/performance
@@ -151,10 +216,10 @@ router.get('/settings/performance', requireAuth, (req, res) => {
   try {
     res.json({
       data: {
-        active: getActiveRule(getDB()),
+        active: getActiveRule(getDB(), req.user.tenant_id),
         // 登录用户可读取当前规则；历史版本属于管理数据，仅主管可见。
         versions: req.user && isSupervisorUser(req.user)
-          ? listRuleVersions(getDB()) : [],
+          ? listRuleVersions(getDB(), req.user.tenant_id) : [],
       },
     });
   } catch (error) {
@@ -164,11 +229,13 @@ router.get('/settings/performance', requireAuth, (req, res) => {
 
 router.post('/settings/performance/versions', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const active = createRuleVersion(getDB(), req.body || {}, req.user.id);
+    const active = createRuleVersion(
+      getDB(), req.body || {}, req.user.id, req.user.tenant_id
+    );
     // 发布成功必须等待持久化，避免进程重启后规则版本回滚。
     await saveDB();
     return res.status(201).json({
-      data: { active, versions: listRuleVersions(getDB()) },
+      data: { active, versions: listRuleVersions(getDB(), req.user.tenant_id) },
     });
   } catch (error) {
     return reportError(res, error);
@@ -176,9 +243,11 @@ router.post('/settings/performance/versions', requireAuth, requireAdmin, async (
 });
 
 // GET /api/sla/overdue
-router.get('/sla/overdue', requireAuth, requireAdmin, (req, res) => { res.json({ data: checkSlaOverdue() }); });
+router.get('/sla/overdue', requireAuth, requireAdmin, (req, res) => {
+  res.json({ data: checkSlaOverdue(req.user.tenant_id) });
+});
 router.get('/sla/alert', requireAuth, requireAdmin, async (req, res) => {
-  const overdue = checkSlaOverdue();
+  const overdue = checkSlaOverdue(req.user.tenant_id);
   if (!overdue.length) return res.json({ success: true, message: '无超时' });
   const msg = `⚠️ SLA超时：${overdue.length}张\n` + overdue.map(t => `• ${t.id}｜${t.cat}｜超${t.hoursOverdue}h`).join('\n');
   await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, msg).catch(() => {});
@@ -195,7 +264,8 @@ router.get('/report', requireAuth, (req, res) => {
           code: 'AUTH_REQUIRED',
         });
       }
-      const profiles = queryAll('SELECT id, user_id, manager_id FROM staff_profiles');
+      const profiles = queryAll(`SELECT id, user_id, manager_id FROM staff_profiles
+        WHERE tenant_id = ?`, [req.user.tenant_id]);
       const own = profiles.find((profile) => Number(profile.user_id) === Number(req.user.id));
       if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
       const target = Number(req.query.staff_id);
@@ -204,6 +274,7 @@ router.get('/report', requireAuth, (req, res) => {
         return res.status(403).json({ error: '无权查看该人员', code: 'REPORT_SCOPE_FORBIDDEN' });
       }
       const data = getStaffReport(require('../db').getDB(), target, {
+        tenantId: req.user.tenant_id,
         from: req.query.from,
         to: req.query.to,
         communityId: req.query.community_id,
@@ -220,9 +291,14 @@ router.get('/report', requireAuth, (req, res) => {
     return res.status(403).json({ error: '请使用人员报告接口查看本人数据', code: 'REPORT_SCOPE_FORBIDDEN' });
   }
   const completion = completionExpression(getDB());
+  const ticketTenantAware = hasColumn('tickets', 'tenant_id');
+  const tenantSql = ticketTenantAware ? 'tenant_id = ? AND ' : '';
+  const tenantParams = ticketTenantAware ? [req.user.tenant_id] : [];
   let all = communityId
-    ? queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t WHERE community_id = ?`, [communityId])
-    : queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t`);
+    ? queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t
+        WHERE ${tenantSql}community_id = ?`, [...tenantParams, communityId])
+    : queryAll(`SELECT t.*, ${completion} report_finished FROM tickets t
+        ${ticketTenantAware ? 'WHERE tenant_id = ?' : ''}`, tenantParams);
   const fromDate = new Date(from), toDate = new Date(to);
   const inRange = all.filter(r => new Date(r.created) >= fromDate && new Date(r.created) <= toDate);
   const done = inRange.filter(r => r.status === 'done' && r.report_finished);

@@ -9,26 +9,26 @@
     "dev": "node index-new.js",
     "migrate": "node migrate-passwords.js",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
-    "test:workforce": "node --test --test-concurrency=1 test/*workforce*.test.js test/organization.test.js test/shifts.test.js test/attendance.test.js test/calendar.test.js test/reporting.test.js",
+    "test:workforce": "node --test --test-concurrency=1 test/*workforce*.test.js test/organization.test.js test/shifts.test.js test/calendar.test.js test/reporting.test.js",
     "migrate:supabase": "node scripts/migrate-sqlite-to-supabase.js",
     "verify:supabase": "node scripts/verify-supabase-persistence.js",
     "seed:workforce-demo": "SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js",
     "verify:e2e": "node scripts/verify-e2e.js",
     "retained:dry-run": "node scripts/prepare-retained-test-data.js",
     "retained:apply": "node scripts/prepare-retained-test-data.js --apply --confirm=RETAINED-TEST-DATA",
-    "retained:verify": "node scripts/verify-retained-test-data.js"
+    "retained:verify": "node scripts/verify-retained-test-data.js",
+    "tenant:dry-run": "node scripts/migrate-multi-tenant.js",
+    "tenant:apply": "node scripts/migrate-multi-tenant.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "2.8.5",
-    "express": "^4.22.2",
+    "express": "4.22.2",
     "express-rate-limit": "^8.6.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
     "node-fetch": "2.7.0",
+    "path-to-regexp": "0.1.13",
     "sql.js": "^1.11.0"
-  },
-  "overrides": {
-    "path-to-regexp": "0.1.13"
   }
 }

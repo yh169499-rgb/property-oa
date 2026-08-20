@@ -1,4 +1,4 @@
-const { findSoleSupervisorProfile, assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
+const { findSupervisorProfile, assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
 const { isSupervisorUser, positionForRole } = require('./roles');
 
 function all(db, sql, params = []) {
@@ -12,6 +12,18 @@ function all(db, sql, params = []) {
 
 function one(db, sql, params = []) {
   return all(db, sql, params)[0] || null;
+}
+
+function hasColumn(db, table, column) {
+  try {
+    return all(db, `PRAGMA table_info(${table})`).some((row) => row.name === column);
+  } catch (_) {
+    return false;
+  }
+}
+
+function tenantMode(actorUser) {
+  return Boolean(String(actorUser?.tenant_id || '').trim());
 }
 
 function lifecycleError(message, code, status = 400) {
@@ -42,6 +54,7 @@ function inTransaction(db, work) {
 function ensureLifecycleAuditSchema(db) {
   db.run(`CREATE TABLE IF NOT EXISTS staff_lifecycle_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL DEFAULT '',
     actor_user_id INTEGER NOT NULL,
     target_user_id INTEGER NOT NULL,
     target_staff_profile_id INTEGER NOT NULL,
@@ -49,6 +62,9 @@ function ensureLifecycleAuditSchema(db) {
     created_at TEXT NOT NULL,
     metadata TEXT NOT NULL DEFAULT '{}'
   )`);
+  if (!hasColumn(db, 'staff_lifecycle_audit', 'tenant_id')) {
+    db.run("ALTER TABLE staff_lifecycle_audit ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''");
+  }
   db.run(`CREATE INDEX IF NOT EXISTS idx_staff_lifecycle_target
     ON staff_lifecycle_audit (target_user_id, action)`);
 }
@@ -56,8 +72,9 @@ function ensureLifecycleAuditSchema(db) {
 function writeAudit(db, values) {
   ensureLifecycleAuditSchema(db);
   db.run(`INSERT INTO staff_lifecycle_audit
-    (actor_user_id, target_user_id, target_staff_profile_id, action, created_at, metadata)
-    VALUES (?, ?, ?, ?, ?, ?)`, [
+    (tenant_id, actor_user_id, target_user_id, target_staff_profile_id, action, created_at, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    values.tenantId || '',
     values.actorUserId,
     values.targetUserId,
     values.profileId,
@@ -87,29 +104,45 @@ function normalizeInput(input) {
 function insertStaff(db, rawInput, actorUser, auditAction = 'create', auditMetadata = {}) {
   assertSupervisor(actorUser);
   const input = normalizeInput(rawInput);
-  const manager = findSoleSupervisorProfile(db);
-  assertTeamCapacity(db, manager.id, input.role);
-  if (!one(db, 'SELECT id FROM communities WHERE id = ?', [input.communityId])) {
+  const tenantId = String(actorUser.tenant_id || '').trim();
+  const manager = findSupervisorProfile(db, actorUser.id, tenantId || null);
+  if (!manager) throw lifecycleError('未找到当前主管档案', 'SUPERVISOR_PROFILE_NOT_FOUND', 404);
+  if (tenantId) assertTeamCapacity(db, tenantId);
+  else assertTeamCapacity(db, manager.id, input.role);
+  const community = tenantId
+    ? one(db, 'SELECT id FROM communities WHERE id = ? AND tenant_id = ?', [input.communityId, tenantId])
+    : one(db, 'SELECT id FROM communities WHERE id = ?', [input.communityId]);
+  if (!community) {
     throw lifecycleError('小区不存在', 'COMMUNITY_NOT_FOUND', 404);
   }
 
-  db.run(
-    'INSERT INTO users (phone, password, name, role, status) VALUES (?, ?, ?, ?, ?)',
-    [input.phone, input.passwordHash, input.name, input.role, 'active']
-  );
+  const userColumns = ['phone', 'password', 'name', 'role', 'status'];
+  const userValues = [input.phone, input.passwordHash, input.name, input.role, 'active'];
+  if (hasColumn(db, 'users', 'tenant_id')) {
+    userColumns.push('tenant_id');
+    userValues.push(tenantId || null);
+  }
+  db.run(`INSERT INTO users (${userColumns.join(', ')}) VALUES (${userColumns.map(() => '?').join(', ')})`, userValues);
   const userId = Number(one(db, 'SELECT last_insert_rowid() AS id').id);
+  const profileColumns = ['user_id', 'name', 'phone', 'position', 'skill', 'manager_id', 'employment_status', 'created_at', 'updated_at'];
+  const profileValues = [userId, input.name, input.phone, positionForRole(input.role), input.skill, manager.id, 'active', input.nowIso, input.nowIso];
+  if (hasColumn(db, 'staff_profiles', 'tenant_id')) {
+    profileColumns.unshift('tenant_id');
+    profileValues.unshift(tenantId || '');
+  }
   db.run(`INSERT INTO staff_profiles
-    (user_id, name, phone, position, skill, manager_id, employment_status,
-     created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`, [
-    userId, input.name, input.phone, positionForRole(input.role), input.skill,
-    manager.id, input.nowIso, input.nowIso,
-  ]);
+    (${profileColumns.join(', ')}) VALUES (${profileColumns.map(() => '?').join(', ')})`, profileValues);
   const profileId = Number(one(db, 'SELECT last_insert_rowid() AS id').id);
+  const membershipColumns = ['community_id', 'staff_profile_id', 'created_at'];
+  const membershipValues = [input.communityId, profileId, input.nowIso];
+  if (hasColumn(db, 'community_memberships', 'tenant_id')) {
+    membershipColumns.unshift('tenant_id');
+    membershipValues.unshift(tenantId || '');
+  }
   db.run(`INSERT INTO community_memberships
-    (community_id, staff_profile_id, created_at) VALUES (?, ?, ?)`,
-  [input.communityId, profileId, input.nowIso]);
+    (${membershipColumns.join(', ')}) VALUES (${membershipColumns.map(() => '?').join(', ')})`, membershipValues);
   writeAudit(db, {
+    tenantId,
     actorUserId: actorUser.id,
     targetUserId: userId,
     profileId,
@@ -117,7 +150,7 @@ function insertStaff(db, rawInput, actorUser, auditAction = 'create', auditMetad
     createdAt: input.nowIso,
     metadata: { role: input.role, communityId: input.communityId, ...auditMetadata },
   });
-  return { userId, profileId, role: input.role, managerProfileId: manager.id };
+  return { userId, profileId, role: input.role, managerProfileId: manager.id, tenantId: tenantId || undefined };
 }
 
 function createStaffAccount(db, input, actorUser) {
@@ -127,7 +160,10 @@ function createStaffAccount(db, input, actorUser) {
 function approvePendingRegistration(db, registrationId, actorUser) {
   return inTransaction(db, () => {
     assertSupervisor(actorUser);
-    const registration = one(db, 'SELECT * FROM pending_registrations WHERE id = ?', [registrationId]);
+    const tenantId = String(actorUser.tenant_id || '').trim();
+    const registration = tenantId
+      ? one(db, 'SELECT * FROM pending_registrations WHERE id = ? AND tenant_id = ?', [registrationId, tenantId])
+      : one(db, 'SELECT * FROM pending_registrations WHERE id = ?', [registrationId]);
     if (!registration) throw lifecycleError('记录不存在', 'REGISTRATION_NOT_FOUND', 404);
     if (registration.status !== 'pending') {
       throw lifecycleError('该申请已处理', 'REGISTRATION_ALREADY_PROCESSED');
@@ -139,6 +175,7 @@ function approvePendingRegistration(db, registrationId, actorUser) {
       role: registration.role,
       skill: registration.skill,
       communityId: registration.community_id,
+      ...(tenantId ? { tenantId } : {}),
       nowIso: new Date().toISOString(),
     }, actorUser, 'approve', { registrationId: Number(registrationId) });
     db.run("UPDATE pending_registrations SET status = 'approved' WHERE id = ? AND status = 'pending'", [registrationId]);
@@ -148,6 +185,7 @@ function approvePendingRegistration(db, registrationId, actorUser) {
       phone: registration.phone,
       name: registration.name,
       communityId: registration.community_id,
+      ...(tenantId ? { tenantId } : {}),
     };
   });
 }
@@ -165,13 +203,16 @@ function departStaff(db, userId, actorUser) {
     throw lifecycleError('不能删除当前登录的主管账号', 'CANNOT_DEPART_SELF', 409);
   }
   return inTransaction(db, () => {
-    const user = one(db, 'SELECT * FROM users WHERE id = ?', [numericUserId]);
+    const tenantId = String(actorUser.tenant_id || '').trim();
+    const user = tenantId
+      ? one(db, 'SELECT * FROM users WHERE id = ? AND tenant_id = ?', [numericUserId, tenantId])
+      : one(db, 'SELECT * FROM users WHERE id = ?', [numericUserId]);
     if (!user) {
       ensureLifecycleAuditSchema(db);
       const audit = one(db, `SELECT target_staff_profile_id
         FROM staff_lifecycle_audit
-        WHERE target_user_id = ? AND action = 'depart'
-        ORDER BY id DESC LIMIT 1`, [numericUserId]);
+        WHERE target_user_id = ? AND action = 'depart'${tenantId ? ' AND tenant_id = ?' : ''}
+        ORDER BY id DESC LIMIT 1`, [numericUserId, ...(tenantId ? [tenantId] : [])]);
       if (audit) {
         return {
           departed: true,
@@ -182,6 +223,9 @@ function departStaff(db, userId, actorUser) {
       }
       throw lifecycleError('用户不存在', 'USER_NOT_FOUND', 404);
     }
+    if (tenantId && !['worker', 'keeper'].includes(String(user.role || '').trim().toLowerCase())) {
+      throw lifecycleError('只能办理本企业维修师傅或物业管家离职', 'STAFF_ROLE_FORBIDDEN', 403);
+    }
     const targetIsSupervisor = isSupervisorUser(user);
     if (targetIsSupervisor) {
       const otherSupervisor = all(db, "SELECT * FROM users WHERE id <> ? AND COALESCE(status, 'active') = 'active'", [numericUserId])
@@ -189,27 +233,46 @@ function departStaff(db, userId, actorUser) {
       if (!otherSupervisor) throw lifecycleError('系统至少需要保留一名有效主管', 'LAST_SUPERVISOR', 409);
     }
 
-    const profile = one(db, 'SELECT * FROM staff_profiles WHERE user_id = ?', [numericUserId]);
+    const profile = tenantId
+      ? one(db, 'SELECT * FROM staff_profiles WHERE user_id = ? AND tenant_id = ?', [numericUserId, tenantId])
+      : one(db, 'SELECT * FROM staff_profiles WHERE user_id = ?', [numericUserId]);
     if (!profile) throw lifecycleError('未找到人员档案', 'STAFF_PROFILE_NOT_FOUND', 404);
+    if (tenantId && !normalizedStaffRole(profile.position)) {
+      throw lifecycleError('只能办理本企业维修师傅或物业管家离职', 'STAFF_ROLE_FORBIDDEN', 403);
+    }
     const nowIso = actorUser.nowIso || new Date().toISOString();
     const shanghaiDate = actorUser.shanghaiDate || new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date());
 
+    // Rows created before the tenant migration may carry an empty tenant id;
+    // the stable assignee/actor user id still proves ownership for this
+    // targeted historical backfill. Migrated rows always use the exact tenant.
+    const ticketTenant = tenantId && hasColumn(db, 'tickets', 'tenant_id')
+      ? " AND (tenant_id = ? OR COALESCE(tenant_id, '') = '')" : '';
+    const activityTenant = tenantId && hasColumn(db, 'ticket_activity_logs', 'tenant_id')
+      ? " AND (tenant_id = ? OR COALESCE(tenant_id, '') = '')" : '';
     db.run(`UPDATE tickets
       SET assignee_staff_profile_id = COALESCE(assignee_staff_profile_id, ?), assignee_user_id = NULL
-      WHERE assignee_user_id = ?`, [profile.id, numericUserId]);
-    db.run(`UPDATE ticket_activity_logs
-      SET actor_staff_id = COALESCE(actor_staff_id, ?), actor_user_id = NULL
-      WHERE actor_user_id = ?`, [profile.id, numericUserId]);
+      WHERE assignee_user_id = ?${ticketTenant}`, [profile.id, numericUserId, ...(ticketTenant ? [tenantId] : [])]);
+    if (hasColumn(db, 'ticket_activity_logs', 'actor_user_id')) {
+      db.run(`UPDATE ticket_activity_logs
+        SET actor_staff_id = COALESCE(actor_staff_id, ?), actor_user_id = NULL
+        WHERE actor_user_id = ?${activityTenant}`, [profile.id, numericUserId, ...(activityTenant ? [tenantId] : [])]);
+    }
+    const profileTenant = tenantId && hasColumn(db, 'staff_profiles', 'tenant_id') ? ' AND tenant_id = ?' : '';
     db.run(`UPDATE staff_profiles SET
       user_id = NULL, employment_status = 'departed', departed_at = ?,
       departed_by_user_id = ?, phone = ?, updated_at = ?
-      WHERE id = ?`, [nowIso, actorUser.id, maskedPhone(profile.phone || user.phone), nowIso, profile.id]);
-    db.run('DELETE FROM community_memberships WHERE staff_profile_id = ?', [profile.id]);
-    db.run('DELETE FROM shift_assignments WHERE staff_id = ? AND work_date >= ?', [profile.id, shanghaiDate]);
-    db.run('DELETE FROM staff_status WHERE name = ?', [profile.name]);
+      WHERE id = ?${profileTenant}`, [nowIso, actorUser.id, maskedPhone(profile.phone || user.phone), nowIso, profile.id, ...(profileTenant ? [tenantId] : [])]);
+    const membershipTenant = tenantId && hasColumn(db, 'community_memberships', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    db.run(`DELETE FROM community_memberships WHERE staff_profile_id = ?${membershipTenant}`, [profile.id, ...(membershipTenant ? [tenantId] : [])]);
+    const shiftTenant = tenantId && hasColumn(db, 'shift_assignments', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    db.run(`DELETE FROM shift_assignments WHERE staff_id = ? AND work_date >= ?${shiftTenant}`, [profile.id, shanghaiDate, ...(shiftTenant ? [tenantId] : [])]);
+    const statusTenant = tenantId && hasColumn(db, 'staff_status', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    db.run(`DELETE FROM staff_status WHERE name = ?${statusTenant}`, [profile.name, ...(statusTenant ? [tenantId] : [])]);
     writeAudit(db, {
+      tenantId,
       actorUserId: actorUser.id,
       targetUserId: numericUserId,
       profileId: Number(profile.id),
@@ -217,8 +280,8 @@ function departStaff(db, userId, actorUser) {
       createdAt: nowIso,
       metadata: { employmentStatus: 'departed' },
     });
-    db.run('DELETE FROM users WHERE id = ?', [numericUserId]);
-    return { departed: true, userId: numericUserId, profileId: Number(profile.id), name: profile.name };
+    db.run(`DELETE FROM users WHERE id = ?${tenantId ? ' AND tenant_id = ?' : ''}`, [numericUserId, ...(tenantId ? [tenantId] : [])]);
+    return { departed: true, userId: numericUserId, profileId: Number(profile.id), name: profile.name, tenantId: tenantId || undefined };
   });
 }
 

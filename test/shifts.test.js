@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createTestDB } = require('./helpers/test-db');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const {
   resolveShiftWindow,
@@ -15,7 +15,7 @@ const {
 async function fixture() {
   const db = await createTestDB();
   ensureWorkforceSchema(db);
-  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (1, '1', 'x', '管理员', 'admin'), (2, '2', 'x', '员工', 'worker')");
+  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (1, '1', 'x', '管理员', '主管'), (2, '2', 'x', '员工', 'worker')");
   db.run("INSERT INTO staff_profiles (id, user_id, name) VALUES (10, 2, '员工甲'), (11, NULL, '员工乙')");
   db.run("INSERT INTO shift_templates (id, name, start_time, end_time, created_by) VALUES (20, '白班', '08:00', '18:00', 1), (21, '夜班', '22:00', '06:00', 1)");
   return db;
@@ -131,7 +131,7 @@ test('PATCH conflict preserves both original assignments and rejects invalid tem
     staffId: 11, workDate: '2026-07-31', assignmentType: 'rest',
   }, 1);
   const before = listAssignments(db).map(({ id, staff_id, work_date }) => ({ id, staff_id, work_date }));
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const headers = {
     'Content-Type': 'application/json',
@@ -161,7 +161,7 @@ test('PATCH conflict preserves both original assignments and rejects invalid tem
 
 test('ordinary user cannot manage templates or create assignments', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   for (const [path, body] of [
     ['/api/shift-templates', { name: '白班', startTime: '08:00', endTime: '18:00' }],
@@ -178,7 +178,7 @@ test('ordinary user cannot manage templates or create assignments', async (t) =>
 
 test('admin can delete unused templates but referenced templates are protected', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const headers = { ...authHeader({ id: 1, role: 'admin' }) };
 
@@ -201,7 +201,7 @@ test('admin can delete unused templates but referenced templates are protected',
 
 test('ordinary user cannot delete shift templates', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/shift-templates/20`, {
     method: 'DELETE', headers: authHeader({ id: 2, role: 'worker' }),

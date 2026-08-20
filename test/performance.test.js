@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
-const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { ensureWorkforceSchema, backfillDefaultPerformanceRules } = require('../workforce-schema');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function fixture() {
@@ -22,9 +22,10 @@ async function fixture() {
     );
   `);
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
-      (1, '13800000001', 'x', '主管', 'lead'),
+      (1, '13800000001', 'x', '主管', '主管'),
       (2, '13800000002', 'x', '师傅', 'worker');
     INSERT INTO staff_profiles (id, user_id, name, position) VALUES
       (1, 1, '主管', '主管'), (2, 2, '师傅', '维修师傅');
@@ -166,7 +167,7 @@ test('评分日期缺失或倒序时返回稳定日期错误', async () => {
 
 test('绩效规则设置接口仅主管可发布并返回历史版本', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const get = async (path, headers) => {
     const response = await fetch(`${server.url}${path}`, { headers });

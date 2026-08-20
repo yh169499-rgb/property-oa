@@ -6,7 +6,7 @@ const path = require('node:path');
 const initSqlJs = require('sql.js');
 const config = require('../config');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const { canAccessTicket } = require('../routes/tickets');
 
@@ -108,7 +108,7 @@ async function request(server, path, user, options = {}) {
 }
 
 test('普通员工列表仅返回当前账号被派发的三类工单', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   const mine = await request(server, '/api/tickets', WORKER_A);
@@ -123,7 +123,7 @@ test('普通员工列表仅返回当前账号被派发的三类工单', async (t
 });
 
 test('普通员工即使是本人负责也不能读取或操作未知类型工单', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   const list = await request(server, '/api/tickets', WORKER_A);
@@ -139,7 +139,7 @@ test('普通员工即使是本人负责也不能读取或操作未知类型工�
 
 test('普通员工创建工单时由服务端强制初始状态、优先级、时间和未派单身份', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const startedAt = Date.now();
 
@@ -167,7 +167,7 @@ test('普通员工创建工单时由服务端强制初始状态、优先级、�
 
 test('创建拒绝未知工单类型，主管创建处理中工单必须稳定派单', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   const unknown = await request(server, '/api/tickets', SUPERVISOR, {
@@ -214,7 +214,7 @@ test('旧 tickets 表缺少派单身份列时普通员工快速拒绝、主管�
 });
 
 test('查询参数只缩小普通员工账号范围，不能通过同名或小区扩大范围', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   const filtered = await request(
@@ -230,7 +230,7 @@ test('查询参数只缩小普通员工账号范围，不能通过同名或小�
 });
 
 test('普通员工读取他人工单详情、附件列表和上传统一返回 404', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   for (const path of ['/api/tickets/R-B', '/api/tickets/R-B/photos']) {
@@ -249,7 +249,7 @@ test('普通员工可上传并下载本人工单附件，他人访问原始附�
     config.UPLOAD_DIR = originalUploadDir;
     fs.rmSync(uploadDir, { recursive: true, force: true });
   });
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   const form = new FormData();
@@ -275,7 +275,7 @@ test('普通员工可上传并下载本人工单附件，他人访问原始附�
 });
 
 test('主管保留工单全局读取和查询筛选能力', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   const filtered = await request(server, '/api/tickets?type=help&community_id=c1', SUPERVISOR);
@@ -289,7 +289,7 @@ test('主管保留工单全局读取和查询筛选能力', async (t) => {
 
 test('维修师傅和管家均可处理本人的三类工单但不能直接完成', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   for (const [user, ids] of [
@@ -316,7 +316,7 @@ test('维修师傅和管家均可处理本人的三类工单但不能直接完�
 });
 
 test('普通员工操作他人工单返回 403，非法状态转换返回稳定 400', async (t) => {
-  const server = await startHttpServer(await fixture());
+  const server = await tenantServer(await fixture());
   t.after(() => server.close());
 
   for (const id of ['R-B', 'C-B', 'H-B']) {
@@ -335,7 +335,7 @@ test('普通员工操作他人工单返回 403，非法状态转换返回稳定 
 
 test('普通员工不能修改主管字段', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   const forbiddenPatches = [
@@ -360,7 +360,7 @@ test('普通员工不能修改主管字段', async (t) => {
 
 test('只有主管可稳定派单并最终完成，重名或非在职直属人员拒绝派单', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   const ambiguous = await patchTicket(server, 'UNASSIGNED', SUPERVISOR, { worker: '同名师傅', status: 'doing' });

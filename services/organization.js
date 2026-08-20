@@ -1,5 +1,6 @@
 const { MANAGER_ROLES } = require('./roles');
-const { assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
+const { assertTeamCapacity, normalizedStaffRole, isTenantCapacity } = require('./team-capacity');
+const { assertTenantWriteTarget } = require('./tenant-context');
 
 function normalizeId(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -104,29 +105,27 @@ function rowsFrom(db, sql, params = []) {
   return rows;
 }
 
-function updateManager(db, staffId, managerId, options = {}) {
+function updateManager(db, tenantId, staffId, managerId, options = {}) {
   const staff = normalizeId(staffId);
   const manager = normalizeId(managerId);
+  assertTenantWriteTarget(db, {
+    table: 'staff_profiles', id: staff, tenantId,
+    notFoundCode: 'PROFILE_NOT_FOUND', notFoundMessage: '人员档案不存在',
+  });
+  if (manager !== null) {
+    assertTenantWriteTarget(db, {
+      table: 'staff_profiles', id: manager, tenantId,
+      notFoundCode: 'MANAGER_NOT_FOUND', notFoundMessage: '直属上级档案不存在',
+    });
+  }
   const profiles = rowsFrom(
     db,
-    'SELECT id, position, manager_id, employment_status FROM staff_profiles'
+    `SELECT id, position, manager_id, employment_status FROM staff_profiles
+     WHERE tenant_id = ?`,
+    [tenantId]
   );
   const existingProfile = profiles.find((profile) => normalizeId(profile.id) === staff);
-  if (!existingProfile) {
-    const error = new Error('人员档案不存在');
-    error.status = 404;
-    error.code = 'PROFILE_NOT_FOUND';
-    error.details = { staffId: staff };
-    throw error;
-  }
   const managerProfile = profiles.find((profile) => normalizeId(profile.id) === manager);
-  if (manager !== null && !managerProfile) {
-    const error = new Error('直属上级档案不存在');
-    error.status = 404;
-    error.code = 'MANAGER_NOT_FOUND';
-    error.details = { managerId: manager };
-    throw error;
-  }
   const path = cyclePath(profiles, staff, manager);
   if (path) {
     const error = new Error('不能把本人或下级设为直属上级');
@@ -169,13 +168,22 @@ function updateManager(db, staffId, managerId, options = {}) {
       error.details = { managerId: manager };
       throw error;
     }
-    assertTeamCapacity(db, manager, staffRole, { excludeProfileId: staff });
+    if (isTenantCapacity(db)) {
+      assertTeamCapacity(db, tenantId, { excludeProfileId: staff });
+    } else {
+      assertTeamCapacity(db, manager, staffRole, { excludeProfileId: staff });
+    }
   }
   db.run(
-    'UPDATE staff_profiles SET manager_id = ?, updated_at = ? WHERE id = ?',
-    [manager, new Date().toISOString(), staff]
+    `UPDATE staff_profiles SET manager_id = ?, updated_at = ?
+     WHERE id = ? AND tenant_id = ?`,
+    [manager, new Date().toISOString(), staff, tenantId]
   );
-  return rowsFrom(db, 'SELECT * FROM staff_profiles WHERE id = ?', [staff])[0] || null;
+  return rowsFrom(
+    db,
+    'SELECT * FROM staff_profiles WHERE id = ? AND tenant_id = ?',
+    [staff, tenantId]
+  )[0] || null;
 }
 
 module.exports = {

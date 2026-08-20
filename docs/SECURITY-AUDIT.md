@@ -1,67 +1,96 @@
 # 数据安全审查与运行手册
 
-## 已落实的安全边界
+## 威胁边界
 
-1. 主管是唯一最高管理角色；注册申请只能成为维修师傅或物业管家，不能由客户端提交主管角色。
-2. JWT 不再只验证签名。每个请求都会读取账号当前状态，停用账号后既有令牌立即失效。
-3. 删除人员采用可审计的停用：登录权限撤销，人员档案置为 inactive，清理小区成员关系、排班、考勤和状态；工单及操作日志保留，避免历史报告断链。
-4. 工单、附件、小区、状态、报告、提醒、SLA、班次模板等接口都必须登录；写入型管理接口需要主管权限。
-5. 附件限制为图片/PDF、10MB/文件、10 个/次；JSON 请求体限制为 1MB；附件下载也必须登录并通过工单小区范围校验。
-6. Render 健康检查使用公开 `/api/health`，业务状态接口不再作为匿名探针。
-7. 普通人员的小区、通知、在岗状态和附件请求按本人小区/工单范围过滤，邀请码和旧版全量报告不向普通人员开放。
-8. 排班查询对普通人员强制收敛到本人档案，主管才可以读取全员班次和请假备注。
-9. 当前登录态按浏览器标签页隔离；密码写入限制为 8–128 位，避免弱密码和超长 bcrypt 资源消耗。
-10. 生产启动拒绝缺失或弱 JWT_SECRET；旧版未完成权限隔离的 `index.js` 默认禁止启动。
-11. Express 关闭版本指纹并增加基础安全响应头；上传和未捕获异常统一返回稳定错误，不返回堆栈路径。
-12. 生产依赖已升级并锁定安全版本，`npm audit --omit=dev` 当前为 0 个漏洞。
+系统在一个 SQLite 数据库和一套 Express 服务中承载多个企业，因此租户过滤是强安全边界，不是界面筛选。信任边界包括：互联网客户端与 API、平台域与企业域、不同 `tenant_id` 之间、运行服务与 Render 持久盘、运行服务与 Supabase Storage，以及生产快照与运维工作站。
 
-## 数据存储检查清单
+主要威胁是伪造 JWT 角色/租户、跨租户枚举 ID、平台权限被企业会话复用、停用后旧会话继续可用、企业申请中的凭据泄露、审计日志收集敏感值、远程快照损坏/回退，以及迁移部分成功造成混合租户。
 
-- SQLite 文件由 `DB_PATH` 指定，Render 使用 `/var/data/data.db` 持久磁盘。
-- Supabase Storage 同步由 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`SUPABASE_STORAGE_BUCKET`、`SUPABASE_DB_OBJECT` 控制；服务端密钥绝不写入前端。
-- `SUPABASE_SYNC_REQUIRED=true` 时首次同步失败会阻止启动；生产建议开启并配置备份桶策略。
-- 主管可通过 `/api/persistence/status` 查看最近同步时间、待上传状态和错误。
-- 模拟数据不会在 Render 启动时自动写入；`render.yaml` 已关闭 `SEED_WORKFORCE_DEMO`。
+## 角色与权限边界
 
-## 模拟数据与全流程测试
+- 全平台只有一个 `platform_owner`（唯一平台运维），其 `tenant_id` 为空。平台运维可审核申请、停用/恢复企业、调整人员上限和重置主管凭据，但不能进入企业工单或企业工作台。
+- 每家企业有且仅有一名主管。主管只能管理本企业，不能创建主管、改写 `tenant_id`、修改 `staff_limit` 或访问 `/api/platform/*`。
+- 普通人员先受租户边界限制，再受本人、角色和小区权限限制。跨租户详情读取统一返回 `404`，列表不返回他租户记录。
+- `staff_limit` 默认 4，范围 1–999，仅计算在职普通人员。上限不得低于当前在职人数。
 
-仅在测试数据库执行：
+## JWT 与数据库身份恢复
 
-```bash
-DEMO_PASSWORD='仅用于测试的临时密码' \
-SEED_WORKFORCE_DEMO=true \
-DB_PATH=/tmp/property-oa-demo.db \
-node scripts/seed-workforce-demo.js
-```
+JWT 只提供用户定位信息和会话版本。认证中间件对每个受保护请求都进行数据库恢复身份：重新读取账号角色、账号状态、`tenant_id`、当前 `session_version` 与租户状态。JWT claims 中伪造的角色或租户不得覆盖数据库身份。
 
-种子数据包含主管、维修师傅、管家、班次模板、跨夜班、请假、考勤、待派单/处理中/待确认/已完成工单以及可用于报告和绩效计算的关联数据。脚本按手机号、模板名、排班日期和工单 ID 幂等执行，不会重复插入。
+以下事件必须递增 `session_version`：重置主管凭据、停用或恢复租户、账号权限改变。离职则直接删除登录账号。版本不一致、账号不存在/不可用、或租户停用时，旧 token 立即返回 `401`，不等待 JWT 自然过期。
 
-演示账号手机号：`13800000011`（主管）、`13800000012`（维修师傅）、`13800000013`（物业管家）。密码只取 `DEMO_PASSWORD` 环境变量，不写入仓库或文档。
+## 租户停用与人员离职
 
-## 固定 7 账号生产迁移与回滚
+租户停用是可恢复的平台控制：企业数据不删除，但主管和全部普通人员都无法新登录，旧会话同时失效。恢复后数据仍在，用户必须重新登录。
 
-`retained:*` 命令用于一次性规范固定测试账号并补齐 `MOCK-E2E` 全流程数据，不允许作为 Render 启动种子运行：
+普通人员离职在单一事务中删除登录账号、解除当前人员关系并释放名额。人员档案、历史工单、工单活动和报告引用保留，不可将新人复用旧身份；所有历史界面统一标记“已离职”。
 
-```bash
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:dry-run -- --source=/absolute/path/to/candidate.db
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:apply -- --source=/absolute/path/to/candidate.db
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:verify -- --source=/absolute/path/to/candidate.db
-```
+## 平台独立登录与企业申请
 
-安全顺序：
+平台独立登录只使用 `/api/platform/login` 和平台专用限流，不复用企业登录页、企业 token 存储或企业权限中间件。`requirePlatformOwner` 必须在数据库身份恢复之后执行。
 
-1. 暂停人工写入，下载 Render `/var/data/data.db` 和 Supabase `production/data.db` 两份原始备份。
-2. 比较 SHA-256、表集合和记录数；不一致时，以冻结写入后下载的 Render 数据为候选主库，Supabase 原文件保留为第二回滚点。
-3. 仅在候选副本运行 dry-run；确认摘要后再执行 apply。apply 要求绝对路径、固定确认口令和运行时 `RETAINED_TEST_PASSWORD`，并在同目录先生成 `.before-retained-*.db` 备份再原子写回。
-4. `retained:verify` 必须返回 `ok: true`，再替换 Render 数据库并运行 `npm run migrate:supabase`、`npm run verify:supabase`。
-5. 逐一验证 7 个账号；验证普通人员不能访问主管管理功能，并验证任一已停用账号及其旧 JWT 均返回 401。
-6. 重启 Render 后再次验证数据。验收完成前不得删除 Render、Supabase 和 apply 自动生成的三个回滚点。
+公开企业申请只收集企业名称、主管名称、手机号和凭据。申请凭据在服务端立即使用 bcrypt 处理，申请密码只存 bcrypt 密码哈希，不存明文。审核页和 API 不返回哈希。通过时在事务内转入正式账号并清除申请记录的哈希；拒绝时立即清除哈希。
 
-回滚时先停止服务写入，把执行前 Render 备份恢复到 `/var/data/data.db`，再将同一文件同步至 Supabase，最后运行 `npm run verify:supabase`。迁移工具的输出只包含路径、计数和问题码，不包含密码、哈希、JWT 或服务端密钥。
+## 审计和日志卫生
 
-## 仍需外部配置的事项
+平台审计记录操作人、动作、目标企业/用户、时间和经白名单选取的变更摘要。审计、应用日志、迁移摘要和错误响应不得记录密码、password hash、token/JWT、API key、Supabase key、`JWT_SECRET` 或初始化密钥。手机号若出现在初始化日志中只显示后四位。
 
-- 忘记密码流程目前要求登录后修改本人密码；无短信/邮件供应商时，忘记密码由主管处理。接入短信供应商后，应将一次性验证码存哈希、限时、限次并作废。
-- 同源部署默认关闭跨域；如前后端分域，生产环境应设置 `CORS_ORIGINS` 为实际前端域名列表。
-- 应在 Render 设置高熵 `JWT_SECRET`、Supabase service role key 和 AI/通知密钥，并定期轮换。
-- `SUPABASE_SYNC_REQUIRED` 当前由部署配置控制；生产应在确认 Storage bucket、策略和 service role key 正确后设置为 `true`，让远程快照同步失败时阻止启动，避免误以本地旧库提供服务。
+重置凭据的审计摘要只记录动作结果和目标账号 ID；企业更新摘要只记录 `name`/`staffLimit` 的前后值。自由文本原因入库前必须限长并防止日志注入。
+
+## Supabase 快照完整性
+
+生产 SQLite 的 Render 持久盘副本是在线写入源，Supabase Storage 是服务端快照层。每次下载、迁移、上传和回滚都要校验：
+
+- 整文件 SHA-256；
+- SQLite 可打开性与完整性检查；
+- 表集合和每表记录数；
+- 多租户完整性：业务表无空 `tenant_id`、每企业唯一主管、`staff_limit` 在 1–999；
+- 远程对象的版本/校验和与本地候选副本一致。
+
+新快照必须上传到新对象，校验成功后才切换；不覆盖旧快照。Supabase 服务端配置只在后端运行时注入，不进入前端或数据库。
+
+## 生产备份、迁移与回滚
+
+安全顺序不得跳步：
+
+1. 停止写入，并在整个迁移、部署和验收期间继续冻结。
+2. 冻结写入后的 Render `/var/data/data.db` 是唯一权威候选；先将它复制到 `/absolute/path/multi-tenant-candidate.db`，后续不再更换候选路径。
+3. 下载并校验 Supabase 快照，Supabase 只作对照和备份。比较 SHA-256、表集合和记录数；任一不一致都必须中止，先同步或排障，不得迁移旧远端快照。
+4. 保存迁移前备份及其校验和、表集合和记录数摘要。
+5. 只对候选副本执行 `npm run tenant:dry-run -- --source=/absolute/path/multi-tenant-candidate.db`。
+6. 仍只对同一候选副本执行 `npm run tenant:apply -- --confirm=MIGRATE-MULTI-TENANT --source=/absolute/path/multi-tenant-candidate.db`。
+7. 仍只对同一候选副本执行 `npm run verify:multi-tenant -- --source=/absolute/path/multi-tenant-candidate.db`。
+8. 验收候选库的租户归属、唯一主管、人数上限、历史引用和空白企业。
+9. 上传新快照为新的不可变 Supabase 对象；校验该对象后，再原子切换 `SUPABASE_DB_OBJECT`，不直接覆盖旧快照。
+10. 部署新版本，但仍不对外恢复写入。
+11. 保持停止写入，验证三个固定账号登录、跨租户隔离、完整性、持久化；全部验收通过后才恢复写入。
+12. 保留旧快照、Render 原备份和候选库备份，直到观察期结束。
+
+回滚条件：快照/表记录校验失败、存在空 `tenant_id`、企业多主管、跨租户可见、历史工单断链、三个固定账号任一验证失败，以及部署后数据/认证错误。回滚步骤：验收失败时仍冻结写入，在该状态下回滚，因此不丢失部署后写入。回滚时保留故障快照，恢复迁移前 Render 备份，把同一备份上传为另一不可变 Supabase 回滚对象并校验，原子切回 `SUPABASE_DB_OBJECT`，再恢复旧版本。
+
+提前恢复写入会要求另外设计可验证的增量重放，不作为本流程允许路径。
+
+## 固定账号验收
+
+- `13222514178`：句子工单管理员，`platform_owner`，无 tenant，只能进入平台域。
+- `13800000001`：测试企业唯一主管，保留原测试人员及全部 mock 数据。
+- `17713302589`：发财企业唯一主管“发财”，不写入 mock 数据，首次登录应显示空白企业。
+
+验收还必须证明：平台运维访问企业工单被拒绝；两家企业列表互不可见；跨租户详情统一 `404`；租户停用使旧会话失效；离职人员登录账号被删除、释放名额且历史工单标记“已离职”。
+
+## 生产环境变量
+
+文档只记名称和用途，不记录任何值：
+
+| 名称 | 用途 |
+| --- | --- |
+| `PLATFORM_PROVISIONING_SECRET` | 限制平台运维初始化命令 |
+| `PLATFORM_OWNER_PASSWORD` | 初始化平台运维账号 |
+| `BLANK_SUPERVISOR_PASSWORD` | 迁移时初始化发财企业主管 |
+| `JWT_SECRET` | JWT 签名与校验 |
+| `SUPABASE_URL` | Supabase 服务端端点 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Storage 服务端访问凭据 |
+| `SUPABASE_STORAGE_BUCKET` | 私有快照桶定位 |
+| `SUPABASE_DB_OBJECT` | 生产快照对象定位 |
+| `SUPABASE_BACKUP_PREFIX` | 备份对象命名空间 |
+| `SUPABASE_SYNC_REQUIRED` | 快照不可用时的安全启动闸门 |

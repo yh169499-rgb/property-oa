@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const database = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
-const { isSupervisorUser } = require('../services/roles');
 const {
   resolveShiftWindow,
   validateAssignment,
@@ -43,6 +42,15 @@ function patchValue(body, camelKey, snakeKey, fallback) {
   return fallback;
 }
 
+function rejectClientTenant(req, res) {
+  const source = { ...(req.query || {}), ...(req.body || {}) };
+  if (!Object.hasOwn(source, 'tenant_id') && !Object.hasOwn(source, 'tenantId')) return false;
+  res.status(400).json({
+    error: '企业身份由服务端确定', code: 'CLIENT_TENANT_FORBIDDEN',
+  });
+  return true;
+}
+
 function templateInput(body, current = {}) {
   const value = {
     name: body.name ?? current.name,
@@ -66,8 +74,14 @@ function templateInput(body, current = {}) {
   return value;
 }
 
+router.use(requireAuth, (req, res, next) => {
+  if (rejectClientTenant(req, res)) return;
+  next();
+});
+
 router.get('/shift-templates', requireAuth, (req, res) => {
-  res.json({ data: all('SELECT * FROM shift_templates ORDER BY id') });
+  res.json({ data: all('SELECT * FROM shift_templates WHERE tenant_id = ? ORDER BY id',
+    [req.user.tenant_id]) });
 });
 
 router.post('/shift-templates', requireAuth, requireAdmin, async (req, res) => {
@@ -75,13 +89,14 @@ router.post('/shift-templates', requireAuth, requireAdmin, async (req, res) => {
     const value = templateInput(req.body);
     database.run(
       `INSERT INTO shift_templates
-       (name, start_time, end_time, color, grace_minutes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [value.name, value.startTime, value.endTime, value.color,
+       (tenant_id, name, start_time, end_time, color, grace_minutes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.tenant_id, value.name, value.startTime, value.endTime, value.color,
         Number(value.graceMinutes), req.user.id]
     );
     await database.saveDB();
-    res.status(201).json({ data: one('SELECT * FROM shift_templates WHERE id = last_insert_rowid()') });
+    res.status(201).json({ data: one(`SELECT * FROM shift_templates
+      WHERE id = last_insert_rowid() AND tenant_id = ?`, [req.user.tenant_id]) });
   } catch (error) {
     sendError(res, error);
   }
@@ -89,28 +104,32 @@ router.post('/shift-templates', requireAuth, requireAdmin, async (req, res) => {
 
 router.patch('/shift-templates/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const current = one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]);
+    const current = one('SELECT * FROM shift_templates WHERE id = ? AND tenant_id = ?',
+      [req.params.id, req.user.tenant_id]);
     if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
     const value = templateInput(req.body, current);
     database.run(
       `UPDATE shift_templates SET name = ?, start_time = ?, end_time = ?,
-       color = ?, grace_minutes = ? WHERE id = ?`,
+       color = ?, grace_minutes = ? WHERE id = ? AND tenant_id = ?`,
       [value.name, value.startTime, value.endTime, value.color,
-        Number(value.graceMinutes), req.params.id]
+        Number(value.graceMinutes), req.params.id, req.user.tenant_id]
     );
     await database.saveDB();
-    res.json({ data: one('SELECT * FROM shift_templates WHERE id = ?', [req.params.id]) });
+    res.json({ data: one('SELECT * FROM shift_templates WHERE id = ? AND tenant_id = ?',
+      [req.params.id, req.user.tenant_id]) });
   } catch (error) {
     sendError(res, error);
   }
 });
 
 router.delete('/shift-templates/:id', requireAuth, requireAdmin, async (req, res) => {
-  const current = one('SELECT id FROM shift_templates WHERE id = ?', [req.params.id]);
+  const current = one('SELECT id FROM shift_templates WHERE id = ? AND tenant_id = ?',
+    [req.params.id, req.user.tenant_id]);
   if (!current) return res.status(404).json({ error: '班次模板不存在', code: 'SHIFT_TEMPLATE_NOT_FOUND' });
   const references = one(
-    'SELECT COUNT(*) AS count FROM shift_assignments WHERE template_id = ?',
-    [req.params.id]
+    `SELECT COUNT(*) AS count FROM shift_assignments
+      WHERE template_id = ? AND tenant_id = ?`,
+    [req.params.id, req.user.tenant_id]
   );
   if (Number(references && references.count) > 0) {
     return res.status(409).json({
@@ -119,25 +138,17 @@ router.delete('/shift-templates/:id', requireAuth, requireAdmin, async (req, res
       details: { references: Number(references.count) },
     });
   }
-  database.run('DELETE FROM shift_templates WHERE id = ?', [req.params.id]);
+  database.run('DELETE FROM shift_templates WHERE id = ? AND tenant_id = ?',
+    [req.params.id, req.user.tenant_id]);
   await database.saveDB();
   return res.json({ success: true });
 });
 
 router.get('/shifts', requireAuth, (req, res) => {
   try {
-    const filters = { ...req.query };
-    if (!isSupervisorUser(req.user)) {
-      const own = one(
-        'SELECT id FROM staff_profiles WHERE user_id = ? AND COALESCE(employment_status, \'active\') = \'active\'',
-        [req.user.id]
-      );
-      if (!own) return res.status(404).json({ error: '人员档案不存在', code: 'PROFILE_NOT_FOUND' });
-      // 忽略客户端传入的 staff_id/staffId，避免枚举他人的班次和请假备注。
-      filters.staff_id = own.id;
-      filters.staffId = own.id;
-    }
-    res.json({ data: listAssignments(database.getDB(), filters) });
+    res.json({ data: listAssignments(database.getDB(), {
+      ...req.query, tenantId: req.user.tenant_id,
+    }) });
   } catch (error) {
     sendError(res, error);
   }
@@ -145,7 +156,9 @@ router.get('/shifts', requireAuth, (req, res) => {
 
 router.post('/shifts', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const row = createAssignment(database.getDB(), req.body, req.user.id);
+    const row = createAssignment(database.getDB(), req.body, req.user.id, {
+      tenantId: req.user.tenant_id,
+    });
     await database.saveDB();
     res.status(201).json({ data: row });
   } catch (error) {
@@ -155,7 +168,9 @@ router.post('/shifts', requireAuth, requireAdmin, async (req, res) => {
 
 router.post('/shifts/batch', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const rows = createBatchAssignments(database.getDB(), req.body, req.user.id);
+    const rows = createBatchAssignments(database.getDB(), req.body, req.user.id, {
+      tenantId: req.user.tenant_id,
+    });
     await database.saveDB();
     res.status(201).json({ data: rows });
   } catch (error) {
@@ -165,7 +180,8 @@ router.post('/shifts/batch', requireAuth, requireAdmin, async (req, res) => {
 
 router.patch('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const current = one('SELECT * FROM shift_assignments WHERE id = ?', [req.params.id]);
+    const current = one('SELECT * FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+      [req.params.id, req.user.tenant_id]);
     if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
     const value = validateAssignment({
       staffId: patchValue(req.body, 'staffId', 'staff_id', current.staff_id),
@@ -179,7 +195,9 @@ router.patch('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
       leaveType: patchValue(req.body, 'leaveType', 'leave_type', current.leave_type),
       note: req.body.note ?? current.note,
     });
-    const updated = updateAssignment(database.getDB(), current.id, value, req.user.id);
+    const updated = updateAssignment(database.getDB(), current.id, value, req.user.id, {
+      tenantId: req.user.tenant_id,
+    });
     await database.saveDB();
     res.json({ data: updated });
   } catch (error) {
@@ -188,9 +206,11 @@ router.patch('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
 });
 
 router.delete('/shifts/:id', requireAuth, requireAdmin, async (req, res) => {
-  const current = one('SELECT id FROM shift_assignments WHERE id = ?', [req.params.id]);
+  const current = one('SELECT id FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+    [req.params.id, req.user.tenant_id]);
   if (!current) return res.status(404).json({ error: '排班不存在', code: 'SHIFT_NOT_FOUND' });
-  database.run('DELETE FROM shift_assignments WHERE id = ?', [req.params.id]);
+  database.run('DELETE FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+    [req.params.id, req.user.tenant_id]);
   await database.saveDB();
   res.json({ success: true });
 });
