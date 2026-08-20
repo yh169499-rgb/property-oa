@@ -229,7 +229,7 @@ TENANT_MIGRATION_TENANT_NAME=全流程测试企业
 TENANT_MIGRATION_STAFF_LIMIT=4
 ```
 
-保存并重新部署后，日志出现“启动租户迁移完成”且服务进入 Live，即表示迁移成功。确认服务正常后，应立即删除 `TENANT_MIGRATION_CONFIRM`，并将 `APPLY_TENANT_MIGRATION_ON_START` 改为 `false`；迁移已完成时即使暂时保留开关也不会重复写入。若日志出现 `TENANT_MIGRATION_CONFLICT`，请停止部署并先处理冲突，不要关闭生产租户校验。
+保存并重新部署后，日志出现“启动租户迁移完成”且服务进入 Live，即表示迁移成功。启动迁移会清理无法关联人员或小区的 `ai_report_analyses` 缓存；这些是可重新生成的 AI 缓存，不是工单报告原始数据，清理不会删除工单。确认服务正常后，应立即删除 `TENANT_MIGRATION_CONFIRM`，并将 `APPLY_TENANT_MIGRATION_ON_START` 改为 `false`；迁移已完成时即使暂时保留开关也不会重复写入。若日志仍出现 `TENANT_MIGRATION_CONFLICT`，请停止部署并先处理冲突，不要关闭生产租户校验。
 
 ### 固定生产账号与多租户迁移
 

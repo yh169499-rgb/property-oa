@@ -58,3 +58,23 @@ test('开启并确认后自动迁移、持久化且可重复启动', async () =>
   assert.deepEqual(second, { applied: false, reason: 'already-migrated' });
   assert.equal(saves, 1);
 });
+
+test('启动迁移清理无法关联人员或小区的 AI 缓存后继续迁移', async () => {
+  const db = await legacyFixture();
+  db.run(`INSERT INTO ai_report_analyses (
+      tenant_id, staff_profile_id, community_id, range_from, range_to,
+      report_hash, model, prompt_version, analysis_json, created_at
+    ) VALUES ('', 999, 'missing-community', '2026-08-01', '2026-08-05',
+      'orphan-hash', 'qwen', 'v1', '{}', 'old')`);
+  const result = await runStartupTenantMigration({
+    db,
+    env: {
+      APPLY_TENANT_MIGRATION_ON_START: 'true',
+      TENANT_MIGRATION_CONFIRM: 'MIGRATE-MULTI-TENANT',
+    },
+    persist: async () => {},
+  });
+  assert.equal(result.applied, true);
+  assert.equal(result.summary.orphanAiReportsRemoved, 1);
+  assert.equal(one(db, 'SELECT COUNT(*) AS count FROM ai_report_analyses').count, 0);
+});
