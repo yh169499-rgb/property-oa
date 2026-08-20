@@ -43,6 +43,12 @@ async function fixture() {
   `);
   ensureWorkforceSchema(db);
   db.run(`
+    INSERT INTO users (id, name, phone, password, role) VALUES
+      (1, '组长账号', '13800000101', 'x', 'lead'),
+      (2, '组长账号二', '13800000102', 'x', 'lead'),
+      (3, '师傅账号', '13800000103', 'x', 'worker'),
+      (4, '树外账号', '13800000104', 'x', 'worker'),
+      (5, '主管账号', '13800000105', 'x', '主管');
     INSERT INTO staff_profiles (id, user_id, name, position, manager_id) VALUES
       (1, 1, '主管', '主管', NULL),
       (2, 2, '组长', '组长', 1),
@@ -102,7 +108,7 @@ test('AI 状态与分析接口要求登录并返回六段式润色结果', async
 
   const team = await jsonRequest(server, '/api/reports/staff/all/ai-analysis', {
     method: 'POST',
-    headers: { ...authHeader({ id: 1, role: '主管' }), 'Content-Type': 'application/json' },
+    headers: { ...authHeader({ id: 5, role: '主管' }), 'Content-Type': 'application/json' },
     body: JSON.stringify({ from: '2026-08-01', to: '2026-08-31', community_id: 'c1' }),
   });
   assert.equal(team.response.status, 200);
