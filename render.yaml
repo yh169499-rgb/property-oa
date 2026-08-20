@@ -37,14 +37,12 @@ services:
         value: "false"
       - key: SEED_WORKFORCE_DEMO
         value: "false"
-      # 独立空白主管迁移默认关闭；填好密码后再在 Render 中改为 true 并手动部署。
-      - key: APPLY_STANDALONE_MANAGER_ON_START
-        value: "false"
-      - key: STANDALONE_MANAGER_PHONE
-        value: "13222514178"
-      - key: STANDALONE_MANAGER_NAME
-        value: 发财
-      - key: STANDALONE_MANAGER_PASSWORD
+      # 平台运维初始化和空白企业凭据只由 Render 安全注入。
+      - key: PLATFORM_PROVISIONING_SECRET
+        sync: false
+      - key: PLATFORM_OWNER_PASSWORD
+        sync: false
+      - key: BLANK_SUPERVISOR_PASSWORD
         sync: false
       - key: JWT_SECRET
         generateValue: true
