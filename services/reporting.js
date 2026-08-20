@@ -54,8 +54,11 @@ function shanghaiMonthRange(nowIso = new Date().toISOString()) {
   };
 }
 
-function allTimeRange(db, nowIso = new Date().toISOString()) {
-  const first = one(db, "SELECT MIN(created) created FROM tickets WHERE NULLIF(created, '') IS NOT NULL");
+function allTimeRange(db, nowIso = new Date().toISOString(), tenantId = '') {
+  const columns = ticketColumns(db);
+  const first = one(db, `SELECT MIN(created) created FROM tickets
+    WHERE ${columns.has('tenant_id') ? 'tenant_id = ? AND ' : ''}NULLIF(created, '') IS NOT NULL`,
+  columns.has('tenant_id') ? [String(tenantId || '')] : []);
   const now = new Date(nowIso);
   const fallback = shanghaiDateFromInstant(now.toISOString());
   const firstDate = first.created && Number.isFinite(Date.parse(first.created))
@@ -182,8 +185,10 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const noStaff = ids.length === 0;
   const staffPlaceholders = ids.map(() => '?').join(',');
   const columns = ticketColumns(db);
+  const tenantPredicate = columns.has('tenant_id') ? 't.tenant_id = ? AND ' : '';
   const staffPredicates = [];
-  const baseParams = [];
+  const baseParams = columns.has('tenant_id')
+    ? [String(filters.tenantId ?? filters.tenant_id ?? '')] : [];
   if (!noStaff && columns.has('assignee_user_id')) {
     staffPredicates.push(`t.assignee_user_id IN (SELECT user_id FROM staff_profiles WHERE id IN (${staffPlaceholders}))`);
     baseParams.push(...ids);
@@ -203,7 +208,7 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const received = one(db, `
     SELECT COUNT(*) total
       FROM tickets t
-     WHERE ${staffPredicate}${community.sql}
+     WHERE ${tenantPredicate}${staffPredicate}${community.sql}
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?`,
   [...baseParams, range.from, range.toExclusive]);
@@ -213,7 +218,7 @@ function reportForStaffIds(db, staffIds, filters = {}) {
   const categories = rows(db, `
     SELECT ${categoryExpression} category, COUNT(*) total
       FROM tickets t
-     WHERE ${staffPredicate}${community.sql}
+     WHERE ${tenantPredicate}${staffPredicate}${community.sql}
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?
      GROUP BY ${categoryExpression}
@@ -231,7 +236,7 @@ function reportForStaffIds(db, staffIds, filters = {}) {
       SUM(CASE WHEN ${feedbackCondition} THEN 1 ELSE 0 END) feedback,
       SUM(CASE WHEN ${returnedCondition} THEN 1 ELSE 0 END) returned
       FROM tickets t
-     WHERE ${staffPredicate}${community.sql}
+     WHERE ${tenantPredicate}${staffPredicate}${community.sql}
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) >= ?
        AND COALESCE(NULLIF(t.assigned_at, ''), t.created) < ?`,
   [...baseParams, range.from, range.toExclusive]);
@@ -241,7 +246,7 @@ function reportForStaffIds(db, staffIds, filters = {}) {
     SELECT COALESCE(NULLIF(t.assigned_at, ''), t.created) start_time,
            ${completion} completion_time, t.estimated_hours
       FROM tickets t
-     WHERE ${staffPredicate}${community.sql}
+     WHERE ${tenantPredicate}${staffPredicate}${community.sql}
        AND t.status = 'done' AND ${completion} IS NOT NULL
        AND ${completion} >= ? AND ${completion} < ?`,
   [...baseParams, range.from, range.toExclusive]);
@@ -252,7 +257,7 @@ function reportForStaffIds(db, staffIds, filters = {}) {
       SUM(CASE WHEN t.status = 'doing' THEN 1 ELSE 0 END) doing,
       SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) pending,
       SUM(CASE WHEN t.status = 'wait' THEN 1 ELSE 0 END) waiting
-      FROM tickets t WHERE ${staffPredicate}${community.sql}`,
+      FROM tickets t WHERE ${tenantPredicate}${staffPredicate}${community.sql}`,
   baseParams);
   return {
     range,
@@ -282,7 +287,11 @@ function getStaffReport(db, staffId, filters = {}) {
     error.code = 'INVALID_STAFF_ID';
     throw error;
   }
-  const profile = rows(db, 'SELECT * FROM staff_profiles WHERE id = ?', [id])[0];
+  const tenantId = filters.tenantId ?? filters.tenant_id;
+  const profile = tenantId === undefined
+    ? rows(db, 'SELECT * FROM staff_profiles WHERE id = ?', [id])[0]
+    : rows(db, 'SELECT * FROM staff_profiles WHERE id = ? AND tenant_id = ?',
+      [id, String(tenantId)])[0];
   if (!profile) {
     const error = new Error('人员档案不存在');
     error.status = 404;
@@ -302,11 +311,13 @@ function getAllStaffReport(db, filters = {}, staffIds) {
   const requested = Array.isArray(staffIds)
     ? [...new Set(staffIds.map(Number).filter(Number.isInteger))]
     : null;
+    const tenantId = filters.tenantId ?? filters.tenant_id;
     const profiles = rows(db, `
       SELECT * FROM staff_profiles
-     WHERE (${requested ? 'id IN (' + (requested.length ? requested.map(() => '?').join(',') : '0') + ')' : '1 = 1'})
+     WHERE ${tenantId === undefined ? '' : 'tenant_id = ? AND '}
+       (${requested ? 'id IN (' + (requested.length ? requested.map(() => '?').join(',') : '0') + ')' : '1 = 1'})
      ORDER BY id
-  `, requested || []);
+  `, [...(tenantId === undefined ? [] : [String(tenantId)]), ...(requested || [])]);
   const ids = profiles.map((profile) => Number(profile.id));
   const aggregate = reportForStaffIds(db, ids, filters);
   const staffReports = profiles.map((profile) => {
@@ -348,15 +359,17 @@ function getAllStaffReport(db, filters = {}, staffIds) {
 function getManagerReport(db, staffId, filters = {}) {
   const ownReport = getStaffReport(db, staffId, filters);
   const manager = ownReport.staff;
-  const profiles = rows(db, 'SELECT id, manager_id FROM staff_profiles');
+  const tenantId = String(filters.tenantId ?? filters.tenant_id ?? manager.tenant_id ?? '');
+  const profiles = rows(db, `SELECT id, manager_id FROM staff_profiles
+    WHERE tenant_id = ?`, [tenantId]);
   const teamIds = descendantIds(profiles, manager.id).map(Number);
   const range = rangeFor(filters);
   const actions = rows(db, `
     SELECT action, COUNT(*) count
-      FROM ticket_activity_logs
-     WHERE actor_staff_id = ? AND created_at >= ? AND created_at < ?
+     FROM ticket_activity_logs
+     WHERE tenant_id = ? AND actor_staff_id = ? AND created_at >= ? AND created_at < ?
      GROUP BY action`,
-  [Number(manager.id), range.from, range.toExclusive]);
+  [tenantId, Number(manager.id), range.from, range.toExclusive]);
   return {
     manager,
     range,
@@ -370,16 +383,20 @@ function getManagerReport(db, staffId, filters = {}) {
 }
 
 function getDashboardStats(db, filters = {}) {
+  const tenantId = String(filters.tenantId ?? filters.tenant_id ?? '');
+  const columns = ticketColumns(db);
   const range = filters.range === 'all'
-    ? allTimeRange(db, filters.now)
+    ? allTimeRange(db, filters.now, tenantId)
     : shanghaiMonthRange(filters.now);
   const community = communityClause(filters);
   const ticketStaff = ticketStaffClause(filters);
   const monthly = rows(db, `
     SELECT type, status, created, estimated_hours
       FROM tickets t
-     WHERE t.created >= ? AND t.created < ?${community.sql}${ticketStaff.sql}`,
-  [range.from, range.toExclusive, ...community.params, ...ticketStaff.params]);
+     WHERE ${columns.has('tenant_id') ? 't.tenant_id = ? AND ' : ''}
+       t.created >= ? AND t.created < ?${community.sql}${ticketStaff.sql}`,
+  [...(columns.has('tenant_id') ? [tenantId] : []), range.from, range.toExclusive,
+    ...community.params, ...ticketStaff.params]);
   const byType = { repair: 0, complaint: 0, help: 0 };
   for (const ticket of monthly) byType[ticket.type] = (byType[ticket.type] || 0) + 1;
   const completion = completionExpression(db);
@@ -387,37 +404,24 @@ function getDashboardStats(db, filters = {}) {
     SELECT COALESCE(NULLIF(t.assigned_at, ''), t.created) start_time,
            ${completion} completion_time, t.estimated_hours
       FROM tickets t
-     WHERE t.status = 'done' AND ${completion} IS NOT NULL
+     WHERE ${columns.has('tenant_id') ? 't.tenant_id = ? AND ' : ''}
+       t.status = 'done' AND ${completion} IS NOT NULL
        AND ${completion} >= ? AND ${completion} < ?${community.sql}${ticketStaff.sql}`,
-  [range.from, range.toExclusive, ...community.params, ...ticketStaff.params]);
+  [...(columns.has('tenant_id') ? [tenantId] : []), range.from, range.toExclusive,
+    ...community.params, ...ticketStaff.params]);
   const metrics = completedMetrics(done);
   const urgent = one(db, `
     SELECT COUNT(*) total FROM tickets t
-     WHERE t.priority = 'urgent' AND t.status <> 'done'${community.sql}${ticketStaff.sql}`,
-  [...community.params, ...ticketStaff.params]);
+     WHERE ${columns.has('tenant_id') ? 't.tenant_id = ? AND ' : ''}
+       t.priority = 'urgent' AND t.status <> 'done'${community.sql}${ticketStaff.sql}`,
+  [...(columns.has('tenant_id') ? [tenantId] : []), ...community.params, ...ticketStaff.params]);
   const today = shanghaiDayRange(new Date((new Date(filters.now || Date.now())).getTime() + SHANGHAI_OFFSET_MS)
     .toISOString().slice(0, 10));
   const actionStaff = directStaffClause(filters, 'actor_staff_id');
   const managerActions = one(db, `
     SELECT COUNT(*) total FROM ticket_activity_logs
-     WHERE created_at >= ? AND created_at < ?${actionStaff.sql}`,
-  [today.from, today.toExclusive, ...actionStaff.params]);
-  const attendanceStaff = directStaffClause(filters, 'staff_id');
-  const attendance = one(db, `
-    SELECT COUNT(*) actual FROM attendance_records
-     WHERE work_date = ?${attendanceStaff.sql}`,
-  [shanghaiDateFromInstant(today.from), ...attendanceStaff.params]);
-  const attendanceRecords = rows(db, `
-    SELECT ar.id, ar.staff_id, sp.name, ar.work_date, ar.status,
-           ar.check_in_at, ar.check_out_at
-      FROM attendance_records ar
-      LEFT JOIN staff_profiles sp ON sp.id = ar.staff_id
-     WHERE ar.work_date = ?${attendanceStaff.sql}
-     ORDER BY ar.staff_id, ar.id`,
-  [shanghaiDateFromInstant(today.from), ...attendanceStaff.params]);
-  const attendanceExceptions = attendanceRecords.filter((record) => (
-    !['normal', 'rest', 'leave'].includes(String(record.status || '').toLowerCase())
-  )).length;
+     WHERE tenant_id = ? AND created_at >= ? AND created_at < ?${actionStaff.sql}`,
+  [tenantId, today.from, today.toExclusive, ...actionStaff.params]);
   return {
     range,
     monthTotal: monthly.length,
@@ -426,11 +430,6 @@ function getDashboardStats(db, filters = {}) {
     averageHours: metrics.averageHours,
     onTimeRate: metrics.onTimeRate,
     todayManagerActions: Number(managerActions.total || 0),
-    teamAttendance: {
-      actual: Number(attendance.actual || 0),
-      exceptions: attendanceExceptions,
-      records: attendanceRecords,
-    },
   };
 }
 

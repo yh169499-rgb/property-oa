@@ -107,7 +107,7 @@ async function fixture() {
   return db;
 }
 
-test('aggregates people, shifts, attendance, tickets and same-staff conflicts', async (t) => {
+test('aggregates people, shifts, tickets and same-staff conflicts without attendance', async (t) => {
   const db = await fixture();
   t.after(() => db.close());
   const { buildDayCalendar } = require('../services/calendar');
@@ -117,7 +117,7 @@ test('aggregates people, shifts, attendance, tickets and same-staff conflicts', 
   assert.equal(result.people.length, 5);
   assert.equal(result.people.find((person) => person.id === 11).shift.assignmentType, 'work');
   assert.equal(result.people.find((person) => person.id === 11).shift.templateName, '');
-  assert.equal(result.people.find((person) => person.id === 11).attendance.status, 'normal');
+  assert.equal(Object.hasOwn(result.people.find((person) => person.id === 11), 'attendance'), false);
   assert.equal(result.people.find((person) => person.id === 12).shift.assignmentType, 'leave');
   assert.equal(result.events[0].ticketId, 'WX1001');
   assert.equal(result.conflicts.length, 1);

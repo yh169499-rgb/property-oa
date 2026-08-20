@@ -120,31 +120,45 @@ function validateAssignment(input) {
   return value;
 }
 
-function prepareAssignment(db, input) {
+function tenantIdFrom(db, input = {}, options = {}) {
+  const supplied = options.tenantId ?? input.tenantId ?? input.tenant_id;
+  if (supplied !== undefined && supplied !== null) return String(supplied);
+  // Direct service unit tests may not pass an authenticated identity. If their
+  // migrated fixture has exactly one tenant, infer it; HTTP routes always pass
+  // the database-authenticated tenant explicitly.
+  const candidates = queryAll(db, `SELECT DISTINCT tenant_id FROM staff_profiles
+    WHERE COALESCE(tenant_id, '') <> '' ORDER BY tenant_id`);
+  return candidates.length === 1 ? String(candidates[0].tenant_id) : '';
+}
+
+function prepareAssignment(db, input, options = {}) {
   const value = validateAssignment(input);
-  if (!queryOne(db, 'SELECT id FROM staff_profiles WHERE id = ?', [value.staffId])) {
+  const tenantId = tenantIdFrom(db, input, options);
+  if (!queryOne(db, 'SELECT id FROM staff_profiles WHERE id = ? AND tenant_id = ?',
+    [value.staffId, tenantId])) {
     throw assignmentError('人员档案不存在', 'STAFF_NOT_FOUND', 404);
   }
   if (value.assignmentType === 'work' && value.templateId) {
     const template = queryOne(
       db,
-      'SELECT id, start_time, end_time FROM shift_templates WHERE id = ?',
-      [value.templateId]
+      'SELECT id, start_time, end_time FROM shift_templates WHERE id = ? AND tenant_id = ?',
+      [value.templateId, tenantId]
     );
     if (!template) throw assignmentError('班次模板不存在', 'SHIFT_TEMPLATE_NOT_FOUND', 404);
     const window = resolveShiftWindow(value.workDate, template.start_time, template.end_time);
     value.startAt = window.startAt;
     value.endAt = window.endAt;
   }
+  value.tenantId = tenantId;
   return value;
 }
 
 function createAssignment(db, input, operatorUserId, options = {}) {
-  const value = prepareAssignment(db, input);
+  const value = prepareAssignment(db, input, options);
   const existing = queryOne(
     db,
-    'SELECT id FROM shift_assignments WHERE staff_id = ? AND work_date = ?',
-    [value.staffId, value.workDate]
+    'SELECT id FROM shift_assignments WHERE tenant_id = ? AND staff_id = ? AND work_date = ?',
+    [value.tenantId, value.staffId, value.workDate]
   );
   if (existing && !options.overwrite) {
     throw assignmentError('该人员当天已有排班', 'SHIFT_ALREADY_EXISTS', 409, {
@@ -155,24 +169,29 @@ function createAssignment(db, input, operatorUserId, options = {}) {
   if (existing) {
     db.run(
       `UPDATE shift_assignments SET assignment_type = ?, template_id = ?, start_at = ?,
-       end_at = ?, leave_type = ?, note = ?, created_by = ?, updated_at = ? WHERE id = ?`,
+       end_at = ?, leave_type = ?, note = ?, created_by = ?, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`,
       [value.assignmentType, value.templateId, value.startAt, value.endAt,
-        value.leaveType, value.note, operatorUserId, now, existing.id]
+        value.leaveType, value.note, operatorUserId, now, existing.id, value.tenantId]
     );
-    return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ?', [existing.id]);
+    return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+      [existing.id, value.tenantId]);
   }
   db.run(
     `INSERT INTO shift_assignments
-     (staff_id, work_date, assignment_type, template_id, start_at, end_at,
+     (tenant_id, staff_id, work_date, assignment_type, template_id, start_at, end_at,
       leave_type, note, created_by, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [value.staffId, value.workDate, value.assignmentType, value.templateId,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [value.tenantId, value.staffId, value.workDate, value.assignmentType, value.templateId,
       value.startAt, value.endAt, value.leaveType, value.note, operatorUserId, now]
   );
-  return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = last_insert_rowid()');
+  return queryOne(db,
+    'SELECT * FROM shift_assignments WHERE id = last_insert_rowid() AND tenant_id = ?',
+    [value.tenantId]);
 }
 
-function createBatchAssignments(db, input, operatorUserId) {
+function createBatchAssignments(db, input, operatorUserId, options = {}) {
+  const tenantId = tenantIdFrom(db, input, options);
   const staffIds = input.staffIds ?? input.staff_ids;
   const dates = input.dates;
   if (!Array.isArray(staffIds) || !staffIds.length || !Array.isArray(dates) || !dates.length) {
@@ -185,10 +204,11 @@ function createBatchAssignments(db, input, operatorUserId) {
     const key = `${staffId}\u0000${workDate}`;
     if (seen.has(key)) duplicateConflicts.push({ staffId: Number(staffId), workDate });
     seen.add(key);
-    return prepareAssignment(db, { ...input, staffId, workDate });
+    return prepareAssignment(db, { ...input, staffId, workDate }, { tenantId });
   });
   const existingConflicts = pairs.filter(({ staffId, workDate }) =>
-    queryOne(db, 'SELECT id FROM shift_assignments WHERE staff_id = ? AND work_date = ?', [staffId, workDate])
+    queryOne(db, `SELECT id FROM shift_assignments
+      WHERE tenant_id = ? AND staff_id = ? AND work_date = ?`, [tenantId, staffId, workDate])
   ).map(({ staffId, workDate }) => ({ staffId: Number(staffId), workDate }));
   const conflicts = [
     ...duplicateConflicts,
@@ -202,7 +222,9 @@ function createBatchAssignments(db, input, operatorUserId) {
   db.run('BEGIN');
   try {
     const rows = prepared.map((value) =>
-      createAssignment(db, value, operatorUserId, { overwrite: Boolean(input.overwrite) })
+      createAssignment(db, value, operatorUserId, {
+        overwrite: Boolean(input.overwrite), tenantId,
+      })
     );
     db.run('COMMIT');
     return rows;
@@ -212,14 +234,17 @@ function createBatchAssignments(db, input, operatorUserId) {
   }
 }
 
-function updateAssignment(db, id, input, operatorUserId) {
-  const current = queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ?', [id]);
+function updateAssignment(db, id, input, operatorUserId, options = {}) {
+  const tenantId = tenantIdFrom(db, input, options);
+  const current = queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+    [id, tenantId]);
   if (!current) throw assignmentError('排班不存在', 'SHIFT_NOT_FOUND', 404);
-  const value = prepareAssignment(db, input);
+  const value = prepareAssignment(db, input, { tenantId });
   const conflict = queryOne(
     db,
-    'SELECT id FROM shift_assignments WHERE staff_id = ? AND work_date = ? AND id <> ?',
-    [value.staffId, value.workDate, id]
+    `SELECT id FROM shift_assignments
+      WHERE tenant_id = ? AND staff_id = ? AND work_date = ? AND id <> ?`,
+    [tenantId, value.staffId, value.workDate, id]
   );
   if (conflict) {
     throw assignmentError('该人员当天已有排班', 'SHIFT_ALREADY_EXISTS', 409, {
@@ -229,17 +254,18 @@ function updateAssignment(db, id, input, operatorUserId) {
   db.run(
     `UPDATE shift_assignments SET staff_id = ?, work_date = ?, assignment_type = ?,
      template_id = ?, start_at = ?, end_at = ?, leave_type = ?, note = ?,
-     created_by = ?, updated_at = ? WHERE id = ?`,
+     created_by = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`,
     [value.staffId, value.workDate, value.assignmentType, value.templateId,
       value.startAt, value.endAt, value.leaveType, value.note, operatorUserId,
-      new Date().toISOString(), id]
+      new Date().toISOString(), id, tenantId]
   );
-  return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ?', [id]);
+  return queryOne(db, 'SELECT * FROM shift_assignments WHERE id = ? AND tenant_id = ?',
+    [id, tenantId]);
 }
 
 function listAssignments(db, filters = {}) {
-  const where = [];
-  const params = [];
+  const where = ['a.tenant_id = ?'];
+  const params = [tenantIdFrom(db, filters)];
   for (const [key, column] of [
     ['staffId', 'a.staff_id'], ['workDate', 'a.work_date'],
     ['dateFrom', 'a.work_date >='], ['dateTo', 'a.work_date <='],
@@ -256,8 +282,8 @@ function listAssignments(db, filters = {}) {
     db,
     `SELECT a.*, t.name AS template_name, s.name AS staff_name
      FROM shift_assignments a
-     LEFT JOIN shift_templates t ON t.id = a.template_id
-     LEFT JOIN staff_profiles s ON s.id = a.staff_id
+     LEFT JOIN shift_templates t ON t.id = a.template_id AND t.tenant_id = a.tenant_id
+     LEFT JOIN staff_profiles s ON s.id = a.staff_id AND s.tenant_id = a.tenant_id
      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
      ORDER BY a.work_date, a.staff_id`,
     params

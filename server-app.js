@@ -13,7 +13,6 @@ const staffRoutes = require('./routes/staff');
 const settingsRoutes = require('./routes/settings');
 const profileRoutes = require('./routes/profiles');
 const shiftRoutes = require('./routes/shifts');
-const attendanceRoutes = require('./routes/attendance');
 const workforceReportRoutes = require('./routes/workforce-reports');
 const directoryRoutes = require('./routes/directory');
 const platformRoutes = require('./routes/platform');
@@ -81,7 +80,6 @@ function createServerApp(options = {}) {
   app.use('/api', settingsRoutes);
   app.use('/api', profileRoutes);
   app.use('/api', shiftRoutes);
-  app.use('/api', attendanceRoutes);
   app.use('/api', workforceReportRoutes);
   app.use('/api', createAiReportRouter(options.aiReport));
   app.get('/api/persistence/status', requireAuth, requireAdmin, (req, res) => {

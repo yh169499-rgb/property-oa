@@ -89,8 +89,10 @@ function tableExists(db, table) {
   return rows(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table]).length > 0;
 }
 
-function listRuleVersions(db) {
-  const versions = rows(db, 'SELECT * FROM performance_rule_versions ORDER BY version_no ASC')
+function listRuleVersions(db, tenantId = '') {
+  const tenant = String(tenantId || '');
+  const versions = rows(db, `SELECT * FROM performance_rule_versions
+    WHERE tenant_id = ? ORDER BY version_no ASC`, [tenant])
     .map(normalizeRule);
   if (!tableExists(db, 'tickets')) {
     return versions.map((rule) => ({ ...rule, sample_size: 0, sampleSize: 0 }));
@@ -98,39 +100,46 @@ function listRuleVersions(db) {
   return versions.map((rule) => ({
     ...rule,
     sample_size: Number(one(db,
-      'SELECT COUNT(DISTINCT id) count FROM tickets WHERE performance_rule_version_id = ?',
-      [rule.id])?.count || 0),
+      `SELECT COUNT(DISTINCT id) count FROM tickets
+        WHERE performance_rule_version_id = ?${ticketColumns(db).has('tenant_id') ? ' AND tenant_id = ?' : ''}`,
+      [rule.id, ...(ticketColumns(db).has('tenant_id') ? [tenant] : [])])?.count || 0),
     sampleSize: Number(one(db,
-      'SELECT COUNT(DISTINCT id) count FROM tickets WHERE performance_rule_version_id = ?',
-      [rule.id])?.count || 0),
+      `SELECT COUNT(DISTINCT id) count FROM tickets
+        WHERE performance_rule_version_id = ?${ticketColumns(db).has('tenant_id') ? ' AND tenant_id = ?' : ''}`,
+      [rule.id, ...(ticketColumns(db).has('tenant_id') ? [tenant] : [])])?.count || 0),
   }));
 }
 
-function getActiveRule(db) {
+function getActiveRule(db, tenantId = '') {
+  const tenant = String(tenantId || '');
   const active = one(db, `
     SELECT * FROM performance_rule_versions
-    WHERE is_active = 1 ORDER BY version_no DESC LIMIT 1
-  `);
+    WHERE tenant_id = ? AND is_active = 1 ORDER BY version_no DESC LIMIT 1
+  `, [tenant]);
   return normalizeRule(active) || normalizeRule(one(db,
-    'SELECT * FROM performance_rule_versions ORDER BY version_no DESC LIMIT 1'));
+    `SELECT * FROM performance_rule_versions
+      WHERE tenant_id = ? ORDER BY version_no DESC LIMIT 1`, [tenant]));
 }
 
-function createRuleVersion(db, input, actorId) {
+function createRuleVersion(db, input, actorId, tenantId = '') {
+  const tenant = String(tenantId || '');
   const rule = validateRule(input);
-  const existing = one(db, 'SELECT COALESCE(MAX(version_no), 0) max_version FROM performance_rule_versions');
+  const existing = one(db, `SELECT COALESCE(MAX(version_no), 0) max_version
+    FROM performance_rule_versions WHERE tenant_id = ?`, [tenant]);
   const versionNo = Number(existing?.max_version || 0) + 1;
   const now = new Date().toISOString();
   db.run('BEGIN');
   try {
-    db.run('UPDATE performance_rule_versions SET is_active = 0 WHERE is_active = 1');
+    db.run(`UPDATE performance_rule_versions SET is_active = 0
+      WHERE tenant_id = ? AND is_active = 1`, [tenant]);
     db.run(`
       INSERT INTO performance_rule_versions (
-        version_no, name, completion_weight, on_time_weight, quality_weight,
+        tenant_id, version_no, name, completion_weight, on_time_weight, quality_weight,
         excellent_threshold, good_threshold, qualified_threshold,
         minimum_sample_size, effective_at, created_by_user_id, created_at, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     `, [
-      versionNo, rule.name || `规则 v${versionNo}`,
+      tenant, versionNo, rule.name || `规则 v${versionNo}`,
       rule.completion_weight, rule.on_time_weight, rule.quality_weight,
       rule.excellent_threshold, rule.good_threshold, rule.qualified_threshold,
       rule.minimum_sample_size, now, actorId == null ? null : Number(actorId), now,
@@ -140,7 +149,7 @@ function createRuleVersion(db, input, actorId) {
     try { db.run('ROLLBACK'); } catch (_) { /* 保留原始错误 */ }
     throw error;
   }
-  return getActiveRule(db);
+  return getActiveRule(db, tenant);
 }
 
 function ticketColumns(db) {
@@ -275,15 +284,20 @@ function calculateScore(metrics = {}, rule = {}, sampleSize = metrics.sampleSize
 function scoreStaff(db, staffId, filters = {}) {
   const id = Number(staffId);
   if (!Number.isInteger(id)) throw invalidRule('人员 ID 无效');
-  const profile = one(db, 'SELECT * FROM staff_profiles WHERE id = ?', [id]);
+  const requestedTenant = filters.tenantId ?? filters.tenant_id;
+  const profile = requestedTenant === undefined
+    ? one(db, 'SELECT * FROM staff_profiles WHERE id = ?', [id])
+    : one(db, 'SELECT * FROM staff_profiles WHERE id = ? AND tenant_id = ?',
+      [id, String(requestedTenant)]);
   if (!profile) {
     const error = new Error('人员档案不存在');
     error.status = 404;
     error.code = 'PROFILE_NOT_FOUND';
     throw error;
   }
-  const active = getActiveRule(db);
-  const allRules = listRuleVersions(db);
+  const tenantId = String(requestedTenant ?? profile.tenant_id ?? '');
+  const active = getActiveRule(db, tenantId);
+  const allRules = listRuleVersions(db, tenantId);
   const ruleById = new Map(allRules.map((rule) => [Number(rule.id), rule]));
   const columns = ticketColumns(db);
   const range = dateRange(filters);
@@ -303,10 +317,16 @@ function scoreStaff(db, staffId, filters = {}) {
   const staffPredicate = `(${identity.join(' OR ')})`;
   const communityId = filters.communityId || filters.community_id;
   const communityPredicate = communityId && columns.has('community_id') ? ' AND t.community_id = ?' : '';
-  const params = [...identityParams, ...(communityPredicate ? [communityId] : []), range.from, range.toExclusive];
+  const tenantPredicate = columns.has('tenant_id') ? 't.tenant_id = ? AND ' : '';
+  const params = [
+    ...(columns.has('tenant_id') ? [tenantId] : []),
+    ...identityParams, ...(communityPredicate ? [communityId] : []),
+    range.from, range.toExclusive,
+  ];
   const tickets = rows(db, `
     SELECT t.* FROM tickets t
-    WHERE ${staffPredicate}${communityPredicate} AND ${assignedExpr} >= ? AND ${assignedExpr} < ?
+    WHERE ${tenantPredicate}${staffPredicate}${communityPredicate}
+      AND ${assignedExpr} >= ? AND ${assignedExpr} < ?
   `, params);
   const groups = new Map();
   for (const ticket of tickets) {

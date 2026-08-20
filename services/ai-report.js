@@ -137,9 +137,9 @@ function cleanAnalysis(input) {
   };
 }
 
-function reportHash(payload, model, promptVersion) {
+function reportHash(payload, model, promptVersion, tenantId = '') {
   return crypto.createHash('sha256')
-    .update(JSON.stringify({ payload, model, promptVersion }))
+    .update(JSON.stringify({ tenantId: String(tenantId || ''), payload, model, promptVersion }))
     .digest('hex');
 }
 
@@ -292,6 +292,7 @@ async function analyzeReport(options = {}) {
     filters = {},
     staffProfileId,
     actorUserId,
+    tenantId = '',
     config,
     fetchImpl = defaultFetch,
     persist = async () => {},
@@ -300,13 +301,14 @@ async function analyzeReport(options = {}) {
     throw aiError(503, 'AI_REPORT_NOT_CONFIGURED', 'AI 报告尚未配置，原始报告仍可正常使用');
   }
   const payload = sanitizeReport(report, filters);
-  const hash = reportHash(payload, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION);
+  const tenant = String(tenantId || '');
+  const hash = reportHash(payload, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION, tenant);
   const cached = rows(db, `
     SELECT analysis_json, created_at
       FROM ai_report_analyses
-     WHERE report_hash = ? AND model = ? AND prompt_version = ?
+     WHERE tenant_id = ? AND report_hash = ? AND model = ? AND prompt_version = ?
      LIMIT 1`,
-  [hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION])[0];
+  [tenant, hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION])[0];
   if (cached) {
     try {
       return {
@@ -319,17 +321,18 @@ async function analyzeReport(options = {}) {
       };
     } catch (_) {
       db.run(`DELETE FROM ai_report_analyses
-        WHERE report_hash = ? AND model = ? AND prompt_version = ?`,
-      [hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION]);
+        WHERE tenant_id = ? AND report_hash = ? AND model = ? AND prompt_version = ?`,
+      [tenant, hash, config.AI_MODEL, config.AI_REPORT_PROMPT_VERSION]);
     }
   }
 
   const analysis = await callProvider(config, payload, fetchImpl);
   const createdAt = new Date().toISOString();
   db.run(`INSERT OR REPLACE INTO ai_report_analyses (
-      staff_profile_id, community_id, range_from, range_to, report_hash,
+      tenant_id, staff_profile_id, community_id, range_from, range_to, report_hash,
       model, prompt_version, analysis_json, created_by_user_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    tenant,
     Number(staffProfileId),
     String(filters.community_id || filters.communityId || ''),
     String(filters.from || ''),

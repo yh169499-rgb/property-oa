@@ -10,6 +10,10 @@ function queryAll(db, sql, params = []) {
   return rows;
 }
 
+function hasColumn(db, table, column) {
+  return queryAll(db, `PRAGMA table_info(${table})`).some((row) => row.name === column);
+}
+
 function calendarError(message, code = 'INVALID_CALENDAR_REQUEST', status = 400) {
   const error = new Error(message);
   error.code = code;
@@ -91,14 +95,18 @@ function detectCalendarConflicts(events) {
 }
 
 function buildDayCalendar(db, {
-  date, staffId, managerId, communityId, viewerUserId,
+  date, staffId, managerId, communityId, viewerUserId, tenantId = '',
 }) {
   if (!isValidDate(date)) throw calendarError('date 必须是真实的 YYYY-MM-DD 日期', 'INVALID_DATE');
+  const tenant = String(tenantId || '');
+  const ticketsHaveTenant = hasColumn(db, 'tickets', 'tenant_id');
 
   const activeProfiles = queryAll(
     db,
     `SELECT id, user_id, name, position, manager_id, employment_status
-     FROM staff_profiles WHERE COALESCE(employment_status, 'active') = 'active' ORDER BY id`
+     FROM staff_profiles WHERE tenant_id = ?
+       AND COALESCE(employment_status, 'active') = 'active' ORDER BY id`,
+    [tenant]
   );
   // 已离职人员不再出现在未来排班，但历史日期仍需能追溯其工单日程。
   const departedProfiles = queryAll(
@@ -106,16 +114,20 @@ function buildDayCalendar(db, {
     `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status
        FROM staff_profiles sp
        JOIN tickets t ON t.assignee_staff_profile_id = sp.id
-      WHERE COALESCE(sp.employment_status, 'active') <> 'active'
+        ${ticketsHaveTenant ? 'AND t.tenant_id = sp.tenant_id' : ''}
+      WHERE sp.tenant_id = ?
+        AND COALESCE(sp.employment_status, 'active') <> 'active'
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) >= julianday(?)
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) < julianday(?)
       ORDER BY sp.id`,
-    [shanghaiDayRange(date).from, shanghaiDayRange(date).toExclusive]
+    [tenant, shanghaiDayRange(date).from, shanghaiDayRange(date).toExclusive]
   );
   const profiles = [...activeProfiles, ...departedProfiles];
   const viewer = viewerUserId === undefined || viewerUserId === null
     ? null
-    : queryAll(db, 'SELECT role FROM users WHERE id = ?', [viewerUserId])[0] || null;
+    : queryAll(db, `SELECT role FROM users WHERE id = ?
+        ${hasColumn(db, 'users', 'tenant_id') ? 'AND tenant_id = ?' : ''}`,
+      [viewerUserId, ...(hasColumn(db, 'users', 'tenant_id') ? [tenant] : [])])[0] || null;
   const allowLegacyNameFallback = Boolean(viewer && isManagerRole(viewer.role));
   let selected = profiles;
   if (staffId !== undefined && staffId !== null && staffId !== '') {
@@ -131,19 +143,13 @@ function buildDayCalendar(db, {
   const shifts = selectedIds.length ? queryAll(
     db,
     `SELECT a.*, t.name AS template_name, t.color AS template_color
-       FROM shift_assignments a
-       LEFT JOIN shift_templates t ON t.id = a.template_id
-      WHERE a.work_date = ? AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
-    [date, ...selectedIds]
-  ) : [];
-  const attendance = selectedIds.length ? queryAll(
-    db,
-    `SELECT * FROM attendance_records
-     WHERE work_date = ? AND staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
-    [date, ...selectedIds]
+      FROM shift_assignments a
+       LEFT JOIN shift_templates t ON t.id = a.template_id AND t.tenant_id = a.tenant_id
+      WHERE a.tenant_id = ? AND a.work_date = ?
+        AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
+    [tenant, date, ...selectedIds]
   ) : [];
   const shiftByStaff = new Map(shifts.map((row) => [Number(row.staff_id), row]));
-  const attendanceByStaff = new Map(attendance.map((row) => [Number(row.staff_id), row]));
   const profileNameCounts = new Map();
   for (const profile of profiles) {
     profileNameCounts.set(profile.name, (profileNameCounts.get(profile.name) || 0) + 1);
@@ -155,7 +161,6 @@ function buildDayCalendar(db, {
 
   const people = selected.map((profile) => {
     const shift = shiftByStaff.get(Number(profile.id));
-    const record = attendanceByStaff.get(Number(profile.id));
     return {
       id: Number(profile.id),
       userId: profile.user_id === null ? null : Number(profile.user_id),
@@ -174,13 +179,6 @@ function buildDayCalendar(db, {
         endAt: shift.end_at,
         leaveType: shift.leave_type,
         note: shift.note,
-      } : null,
-      attendance: record ? {
-        id: Number(record.id),
-        checkInAt: record.check_in_at,
-        checkOutAt: record.check_out_at,
-        status: record.status,
-        isCorrected: Boolean(record.is_corrected),
       } : null,
     };
   });
@@ -202,11 +200,12 @@ function buildDayCalendar(db, {
     if (identityClauses.length) {
       const { from, toExclusive } = shanghaiDayRange(date);
       const where = [
+        ...(ticketsHaveTenant ? ['tenant_id = ?'] : []),
         `(${identityClauses.join(' OR ')})`,
         "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
         "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
       ];
-      const params = [...identityParams, from, toExclusive];
+      const params = [...(ticketsHaveTenant ? [tenant] : []), ...identityParams, from, toExclusive];
       if (communityId !== undefined && communityId !== null && communityId !== '') {
         where.push('community_id = ?');
         params.push(communityId);
@@ -242,23 +241,23 @@ function buildDayCalendar(db, {
       `SELECT 'user' AS key_type, CAST(assignee_user_id AS TEXT) AS key_value,
               AVG(${averageExpression}) AS avg_minutes
        FROM tickets
-       WHERE ${validDuration}
+       WHERE ${ticketsHaveTenant ? 'tenant_id = ? AND ' : ''}${validDuration}
          AND assignee_user_id IN (${userIds.map(() => '?').join(', ')})
        GROUP BY assignee_user_id`
     );
-    aggregateParams.push(...userIds);
+    aggregateParams.push(...(ticketsHaveTenant ? [tenant] : []), ...userIds);
   }
   if (uniqueNames.length) {
     aggregateQueries.push(
       `SELECT 'name' AS key_type, worker AS key_value,
               AVG(${averageExpression}) AS avg_minutes
        FROM tickets
-       WHERE ${validDuration}
+       WHERE ${ticketsHaveTenant ? 'tenant_id = ? AND ' : ''}${validDuration}
          AND assignee_user_id IS NULL
          AND worker IN (${uniqueNames.map(() => '?').join(', ')})
        GROUP BY worker`
     );
-    aggregateParams.push(...uniqueNames);
+    aggregateParams.push(...(ticketsHaveTenant ? [tenant] : []), ...uniqueNames);
   }
   if (aggregateQueries.length) {
     const historyRows = queryAll(
