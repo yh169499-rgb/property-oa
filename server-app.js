@@ -16,6 +16,8 @@ const shiftRoutes = require('./routes/shifts');
 const attendanceRoutes = require('./routes/attendance');
 const workforceReportRoutes = require('./routes/workforce-reports');
 const directoryRoutes = require('./routes/directory');
+const platformRoutes = require('./routes/platform');
+const enterpriseApplicationRoutes = require('./routes/enterprise-applications');
 const { createAiReportRouter } = require('./routes/ai-reports');
 
 function isEnterpriseGateExempt(pathname) {
@@ -48,6 +50,8 @@ function createServerApp(options = {}) {
   app.use('/api/login', loginLimiter);
   app.use('/api/register', loginLimiter);
   app.use('/api/reset-password', loginLimiter);
+  app.use('/api/platform/login', loginLimiter);
+  app.use('/api/enterprise-applications', loginLimiter);
 
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/uploads', requireAuth, requireTenantUser, (req, res, next) => {
@@ -64,6 +68,8 @@ function createServerApp(options = {}) {
   }, express.static(config.UPLOAD_DIR));
 
   app.use('/api', authRoutes);
+  app.use('/api', enterpriseApplicationRoutes);
+  app.use('/api/platform', platformRoutes);
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'property-oa' });
   });
@@ -80,6 +86,17 @@ function createServerApp(options = {}) {
   app.use('/api', createAiReportRouter(options.aiReport));
   app.get('/api/persistence/status', requireAuth, requireAdmin, (req, res) => {
     res.json({ data: getPersistenceStatus() });
+  });
+
+  app.use((error, _req, res, next) => {
+    if (res.headersSent) return next(error);
+    const status = Number(error?.status) >= 400 && Number(error?.status) < 500
+      ? Number(error.status) : 500;
+    const body = status === 500
+      ? { error: '服务器内部错误', code: 'INTERNAL_ERROR' }
+      : { error: error.message || '请求失败', code: error.code || 'REQUEST_FAILED' };
+    if (status < 500 && error.details) body.details = error.details;
+    return res.status(status).json(body);
   });
 
   return app;
