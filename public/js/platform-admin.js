@@ -127,6 +127,14 @@
     return labels[value] || value || '—';
   }
 
+  function validTenantData(tenant) {
+    if (!tenant || typeof tenant.id !== 'string' || !tenant.id.trim()) return null;
+    if (typeof tenant.name !== 'string' || !tenant.name.trim()) return null;
+    var staffLimit = tenant.staffLimit ?? tenant.staff_limit;
+    if (!Number.isInteger(staffLimit) || staffLimit < 1 || staffLimit > 999) return null;
+    return { id: tenant.id.trim(), name: tenant.name.trim(), staffLimit: staffLimit };
+  }
+
   async function loadOverview() {
     var root = document.getElementById('platform-overview-cards');
     if (!root) return;
@@ -232,17 +240,38 @@
       var row = template.content.firstElementChild.cloneNode(true);
       var nameInput = row.querySelector('[name="name"]');
       var limitInput = row.querySelector('[name="staffLimit"]');
-      var active = Number(tenant.activeStaffCount ?? tenant.active_staff_count ?? 0);
-      var limit = Number(tenant.staffLimit ?? tenant.staff_limit ?? 1);
-      nameInput.value = tenant.name || '';
-      limitInput.value = String(limit);
-      row.querySelector('[data-field="activeStaffCount"]').textContent = String(active);
-      row.querySelector('[data-field="status"]').textContent = normalizedState(tenant.status);
       var saveButton = row.querySelector('[data-action="save"]');
       var message = row.querySelector('[data-field="message"]');
+      var tenantData = validTenantData(tenant);
+      var tenantContext = tenant && typeof tenant.name === 'string' && tenant.name.trim()
+        ? tenant.name.trim()
+        : '未知企业';
+      nameInput.setAttribute('aria-label', tenantContext + ' 企业名称');
+      limitInput.setAttribute('aria-label', tenantContext + ' 总人数上限');
+
+      if (!tenantData) {
+        nameInput.value = tenant && typeof tenant.name === 'string' ? tenant.name : '';
+        var unsafeLimit = tenant && (tenant.staffLimit ?? tenant.staff_limit);
+        limitInput.value = unsafeLimit == null ? '' : String(unsafeLimit);
+        nameInput.disabled = true;
+        limitInput.disabled = true;
+        saveButton.disabled = true;
+        row.querySelector('[data-field="activeStaffCount"]').textContent = '—';
+        row.querySelector('[data-field="status"]').textContent = '数据异常';
+        message.textContent = '企业数据不完整，暂不能编辑。';
+        message.className = 'platform-row-message is-error';
+        fragment.appendChild(row);
+        return;
+      }
+
+      var active = Number(tenant.activeStaffCount ?? tenant.active_staff_count ?? 0);
+      nameInput.value = tenantData.name;
+      limitInput.value = String(tenantData.staffLimit);
+      row.querySelector('[data-field="activeStaffCount"]').textContent = String(active);
+      row.querySelector('[data-field="status"]').textContent = normalizedState(tenant.status);
       saveButton.addEventListener('click', function () {
         if (!nameInput.reportValidity() || !limitInput.reportValidity()) return;
-        saveTenantChanges(tenant, {
+        saveTenantChanges(tenantData, {
           nameInput: nameInput,
           limitInput: limitInput,
           message: message,

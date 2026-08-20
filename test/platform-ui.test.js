@@ -50,6 +50,91 @@ function loadBrowserScript(relativePath, overrides = {}) {
   return { context, listeners };
 }
 
+function createPlatformAdminDocument() {
+  const listeners = {};
+  function element() {
+    return {
+      attributes: {},
+      children: [],
+      className: '',
+      disabled: false,
+      listeners: {},
+      textContent: '',
+      value: '',
+      addEventListener(type, listener) { this.listeners[type] = listener; },
+      append(...children) { this.children.push(...children); },
+      appendChild(child) { this.children.push(child); return child; },
+      close() {},
+      reportValidity() { return true; },
+      replaceChildren(...children) {
+        this.children = children.flatMap((child) => child && child.isFragment ? child.children : [child]);
+      },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      getAttribute(name) { return this.attributes[name] ?? null; },
+      showModal() {},
+    };
+  }
+
+  function tenantRow() {
+    const fields = {
+      nameInput: element(),
+      limitInput: element(),
+      activeStaffCount: element(),
+      status: element(),
+      saveButton: element(),
+      message: element(),
+    };
+    const selectors = {
+      '[name="name"]': fields.nameInput,
+      '[name="staffLimit"]': fields.limitInput,
+      '[data-field="activeStaffCount"]': fields.activeStaffCount,
+      '[data-field="status"]': fields.status,
+      '[data-action="save"]': fields.saveButton,
+      '[data-field="message"]': fields.message,
+    };
+    return { fields, querySelector(selector) { return selectors[selector] || null; } };
+  }
+
+  const elements = {
+    'platform-admin-status': element(),
+    'platform-logout': element(),
+    'platform-refresh': element(),
+    'platform-overview-cards': element(),
+    'platform-applications-body': element(),
+    'platform-tenants-body': element(),
+    'platform-audit-body': element(),
+    'approval-form': element(),
+    'approval-dialog': element(),
+    'approval-cancel': element(),
+    'approval-submit': element(),
+    'approval-status': element(),
+    'approval-staff-limit': element(),
+    'tenant-row-template': {
+      content: { firstElementChild: { cloneNode() { return tenantRow(); } } },
+    },
+  };
+  return {
+    elements,
+    listeners,
+    document: {
+      readyState: 'loading',
+      addEventListener(type, listener) { listeners[type] = listener; },
+      createDocumentFragment() {
+        const fragment = element();
+        fragment.isFragment = true;
+        return fragment;
+      },
+      createElement() { return element(); },
+      getElementById(id) { return elements[id] || null; },
+    },
+  };
+}
+
+async function settleAsyncRendering() {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 test('平台与申请页面使用独立脚本且系统标题固定', () => {
   const platformLogin = readPublic('platform-login.html');
   const platformAdmin = readPublic('platform-admin.html');
@@ -245,7 +330,7 @@ test('人数上限低于在职人数时显示中文错误并保留用户输入',
   const { context } = loadBrowserScript('js/platform-admin.js', {
     fetch: async () => ({
       ok: false,
-      status: 400,
+      status: 409,
       json: async () => ({ code: 'STAFF_LIMIT_BELOW_ACTIVE_COUNT' }),
     }),
     sessionStorage: { getItem() { return 'platform-token'; }, removeItem() {} },
@@ -265,6 +350,62 @@ test('人数上限低于在职人数时显示中文错误并保留用户输入',
   assert.equal(controls.limitInput.value, '2');
   assert.match(controls.message.textContent, /人数上限不能低于当前在职人数/);
   assert.equal(controls.button.disabled, false);
+});
+
+test('企业列表真实渲染路径禁用缺失或非法必需字段的行', async () => {
+  const fixture = createPlatformAdminDocument();
+  const malformedTenants = [
+    { id: 'missing-limit', name: '缺少上限企业', active_staff_count: 0, status: 'active' },
+    { id: '', name: '缺少编号企业', staff_limit: 4, active_staff_count: 0, status: 'active' },
+    { id: 'blank-name', name: '   ', staff_limit: 4, active_staff_count: 0, status: 'active' },
+    { id: 'decimal-limit', name: '小数上限企业', staff_limit: 2.5, active_staff_count: 0, status: 'active' },
+    { id: 'too-large-limit', name: '越界上限企业', staff_limit: 1000, active_staff_count: 0, status: 'active' },
+  ];
+  loadBrowserScript('js/platform-admin.js', {
+    document: fixture.document,
+    fetch: async (url) => {
+      if (url === '/api/platform/tenants') return { ok: true, status: 200, json: async () => ({ data: malformedTenants }) };
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    },
+    sessionStorage: { getItem() { return 'platform-token'; }, removeItem() {} },
+  });
+
+  fixture.listeners.DOMContentLoaded();
+  await settleAsyncRendering();
+
+  const rows = fixture.elements['platform-tenants-body'].children;
+  assert.equal(rows.length, malformedTenants.length);
+  for (const row of rows) {
+    assert.equal(row.fields.saveButton.disabled, true);
+    assert.equal(row.fields.saveButton.listeners.click, undefined);
+    assert.match(row.fields.message.textContent, /企业数据不完整，暂不能编辑/);
+  }
+  assert.notEqual(rows[0].fields.limitInput.value, '1');
+});
+
+test('企业列表真实渲染路径为编辑输入设置企业上下文可访问名称', async () => {
+  const fixture = createPlatformAdminDocument();
+  loadBrowserScript('js/platform-admin.js', {
+    document: fixture.document,
+    fetch: async (url) => {
+      if (url === '/api/platform/tenants') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: 'tenant-1', name: '安居物业', staff_limit: 8, active_staff_count: 3, status: 'active' }] }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    },
+    sessionStorage: { getItem() { return 'platform-token'; }, removeItem() {} },
+  });
+
+  fixture.listeners.DOMContentLoaded();
+  await settleAsyncRendering();
+
+  const row = fixture.elements['platform-tenants-body'].children[0];
+  assert.match(row.fields.nameInput.getAttribute('aria-label'), /安居物业.*企业名称/);
+  assert.match(row.fields.limitInput.getAttribute('aria-label'), /安居物业.*总人数上限/);
 });
 
 test('平台脚本安全构建外部文本、处理人数下限错误并防重复提交', async () => {
