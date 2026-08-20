@@ -2,7 +2,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const initSqlJs = require('sql.js');
-const { ensureWorkforceSchema } = require('../../workforce-schema');
+const {
+  ensureWorkforceSchema,
+  backfillDefaultPerformanceRules,
+} = require('../../workforce-schema');
 
 async function writeFixtureDatabase() {
   const SQL = await initSqlJs();
@@ -32,6 +35,7 @@ async function writeFixtureDatabase() {
     CREATE TABLE staff_status (name TEXT PRIMARY KEY, status TEXT, updated TEXT);
   `);
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   db.run("INSERT INTO users (phone, password, name, role) VALUES ('13900000000', 'old-hash', '旧账号', 'worker')");
   db.run("INSERT INTO communities (id, name, created) VALUES ('default', '默认小区', '2025-01-01')");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'retained-data-test-'));

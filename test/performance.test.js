@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
-const { ensureWorkforceSchema } = require('../workforce-schema');
+const { ensureWorkforceSchema, backfillDefaultPerformanceRules } = require('../workforce-schema');
 const { startHttpServer } = require('./helpers/http-server');
 const { authHeader } = require('./helpers/auth');
 
@@ -22,6 +22,7 @@ async function fixture() {
     );
   `);
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
       (1, '13800000001', 'x', '主管', 'lead'),

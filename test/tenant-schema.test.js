@@ -77,6 +77,33 @@ test('tenant staff limit defaults to four and only accepts 1 through 999', async
   }
 });
 
+test('legacy tenants upgrade enforces an integer staff limit', async (t) => {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  t.after(() => db.close());
+  ensureCoreSchema(db);
+  db.run(`CREATE TABLE tenants (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  ensureTenantSchema(db);
+
+  assert.throws(
+    () => db.run(`INSERT INTO tenants
+      (id,name,status,staff_limit,created_at,updated_at)
+      VALUES ('fractional','小数上限','active',1.5,'now','now')`),
+    /CHECK constraint failed/
+  );
+  db.run(`INSERT INTO tenants
+    (id,name,status,staff_limit,created_at,updated_at)
+    VALUES ('integer','整数上限','active',4,'now','now')`);
+  assert.equal(one(db, "SELECT staff_limit FROM tenants WHERE id='integer'").staff_limit, 4);
+});
+
 test('tenant settings keys are unique inside a tenant only', async (t) => {
   const db = await createFullTestDB();
   t.after(() => db.close());
@@ -163,17 +190,72 @@ test('legacy performance versions are rebuilt with tenant uniqueness and keep al
   const db = new SQL.Database();
   t.after(() => db.close());
   ensureCoreSchema(db);
-  ensureWorkforceSchema(db);
+  db.run(`CREATE TABLE performance_rule_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_no INTEGER UNIQUE NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    completion_weight REAL NOT NULL,
+    on_time_weight REAL NOT NULL,
+    quality_weight REAL NOT NULL,
+    excellent_threshold REAL NOT NULL,
+    good_threshold REAL NOT NULL,
+    qualified_threshold REAL NOT NULL,
+    minimum_sample_size INTEGER NOT NULL,
+    effective_at TEXT NOT NULL,
+    created_by_user_id INTEGER,
+    created_at TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 0,
+    CHECK (completion_weight >= 0 AND completion_weight <= 100),
+    CHECK (on_time_weight >= 0 AND on_time_weight <= 100),
+    CHECK (quality_weight >= 0 AND quality_weight <= 100),
+    CHECK (completion_weight + on_time_weight + quality_weight = 100),
+    CHECK (excellent_threshold <= 100 AND excellent_threshold > good_threshold),
+    CHECK (good_threshold > qualified_threshold AND qualified_threshold >= 0),
+    CHECK (minimum_sample_size >= 0)
+  )`);
   db.run(`INSERT INTO performance_rule_versions (
-    version_no,name,completion_weight,on_time_weight,quality_weight,
+    id,version_no,name,completion_weight,on_time_weight,quality_weight,
     excellent_threshold,good_threshold,qualified_threshold,minimum_sample_size,
-    effective_at,created_at,is_active
-  ) VALUES (2,'旧规则',30,50,20,90,80,60,1,'then','then',0)`);
+    effective_at,created_by_user_id,created_at,is_active
+  ) VALUES (41,2,'旧规则',30,50,20,90,80,60,1,'then',99,'created-then',1)`);
+
+  assert.equal(columnNames(db, 'performance_rule_versions').includes('tenant_id'), false);
+  const beforeUniqueColumns = rows(db, 'PRAGMA index_list(performance_rule_versions)')
+    .filter((index) => index.unique === 1)
+    .map((index) => rows(db, `PRAGMA index_info(${JSON.stringify(index.name)})`).map((column) => column.name));
+  assert.deepEqual(beforeUniqueColumns, [['version_no']]);
 
   ensureTenantSchema(db);
 
-  assert.equal(one(db, 'SELECT COUNT(*) AS count FROM performance_rule_versions').count, 2);
-  assert.equal(one(db, "SELECT name FROM performance_rule_versions WHERE version_no=2").name, '旧规则');
+  assert.equal(one(db, 'SELECT COUNT(*) AS count FROM performance_rule_versions').count, 1);
+  assert.deepEqual(one(db, `SELECT
+    id,tenant_id,version_no,name,completion_weight,on_time_weight,quality_weight,
+    excellent_threshold,good_threshold,qualified_threshold,minimum_sample_size,
+    effective_at,created_by_user_id,created_at,is_active
+    FROM performance_rule_versions WHERE id=41`), {
+    id: 41,
+    tenant_id: '',
+    version_no: 2,
+    name: '旧规则',
+    completion_weight: 30,
+    on_time_weight: 50,
+    quality_weight: 20,
+    excellent_threshold: 90,
+    good_threshold: 80,
+    qualified_threshold: 60,
+    minimum_sample_size: 1,
+    effective_at: 'then',
+    created_by_user_id: 99,
+    created_at: 'created-then',
+    is_active: 1,
+  });
+  const afterUniqueColumns = rows(db, 'PRAGMA index_list(performance_rule_versions)')
+    .filter((index) => index.unique === 1)
+    .map((index) => rows(db, `PRAGMA index_info(${JSON.stringify(index.name)})`).map((column) => column.name));
+  assert.equal(afterUniqueColumns.some((columns) => columns.length === 1 && columns[0] === 'version_no'), false);
+  assert.ok(afterUniqueColumns.some((columns) => (
+    columns.length === 2 && columns[0] === 'tenant_id' && columns[1] === 'version_no'
+  )));
   db.run(`INSERT INTO performance_rule_versions (
     tenant_id,version_no,name,completion_weight,on_time_weight,quality_weight,
     excellent_threshold,good_threshold,qualified_threshold,minimum_sample_size,
@@ -272,6 +354,83 @@ test('schema initialization is idempotent and does not duplicate seeded rows', a
     one(db, `SELECT COUNT(*) AS count FROM ${table}`).count,
   ]));
   assert.deepEqual(after, before);
+});
+
+test('repeated startup backfills preserve tenant boundaries and exclude platform owners', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  db.run(`INSERT INTO tenants(id,name,status,created_at,updated_at) VALUES
+    ('tenant-a','甲企业','active','now','now'),
+    ('tenant-b','乙企业','active','now','now')`);
+  db.run(`INSERT INTO users(id,phone,password,name,role,status,tenant_id) VALUES
+    (11,'13000000011','hash','同名员工','worker','active','tenant-a'),
+    (12,'13000000012','hash','甲独有员工','worker','active','tenant-a'),
+    (21,'13000000021','hash','同名员工','worker','active','tenant-b'),
+    (22,'13000000022','hash','仅乙员工','worker','active','tenant-b'),
+    (99,'13000000099','hash','平台管理员','platform_owner','active',NULL)`);
+  db.run(`INSERT INTO communities(id,name,created,tenant_id) VALUES
+    ('community-a','甲小区','now','tenant-a'),
+    ('community-b','乙小区','now','tenant-b')`);
+  db.run(`INSERT INTO community_permissions(community_id,staff_name,tenant_id) VALUES
+    ('community-a','同名员工','tenant-a'),
+    ('community-a','仅乙员工','tenant-a'),
+    ('community-b','同名员工','tenant-b'),
+    ('community-b','仅乙员工','tenant-b'),
+    ('community-b','甲独有员工','tenant-a')`);
+  db.run(`INSERT INTO tickets(id,created,worker,tenant_id) VALUES
+    ('a-same','now','同名员工','tenant-a'),
+    ('b-same','now','同名员工','tenant-b'),
+    ('a-cross','now','仅乙员工','tenant-a'),
+    ('b-only','now','仅乙员工','tenant-b')`);
+
+  database.ensureDatabaseSchema(db);
+  for (const table of ['staff_profiles', 'community_memberships', 'performance_rule_versions']) {
+    assert.equal(one(db, `SELECT COUNT(*) AS count FROM ${table}`).count, 0, table);
+  }
+  assert.equal(one(db, `SELECT COUNT(*) AS count FROM tickets
+    WHERE performance_rule_version_id IS NOT NULL`).count, 0);
+
+  for (let startup = 0; startup < 2; startup += 1) {
+    database.backfillWorkforceData(db, `startup-${startup}`);
+    database.ensureDatabaseSchema(db);
+  }
+
+  assert.deepEqual(rows(db, `SELECT user_id,tenant_id FROM staff_profiles ORDER BY user_id`), [
+    { user_id: 11, tenant_id: 'tenant-a' },
+    { user_id: 12, tenant_id: 'tenant-a' },
+    { user_id: 21, tenant_id: 'tenant-b' },
+    { user_id: 22, tenant_id: 'tenant-b' },
+  ]);
+  assert.deepEqual(rows(db, `SELECT
+    cm.tenant_id,cm.community_id,sp.user_id
+    FROM community_memberships cm
+    JOIN staff_profiles sp ON sp.id=cm.staff_profile_id
+    ORDER BY cm.community_id,sp.user_id`), [
+    { tenant_id: 'tenant-a', community_id: 'community-a', user_id: 11 },
+    { tenant_id: 'tenant-b', community_id: 'community-b', user_id: 21 },
+    { tenant_id: 'tenant-b', community_id: 'community-b', user_id: 22 },
+  ]);
+  assert.deepEqual(rows(db, `SELECT
+    id,tenant_id,assignee_user_id,assignee_staff_profile_id
+    FROM tickets ORDER BY id`), [
+    { id: 'a-cross', tenant_id: 'tenant-a', assignee_user_id: null, assignee_staff_profile_id: null },
+    { id: 'a-same', tenant_id: 'tenant-a', assignee_user_id: 11, assignee_staff_profile_id: 1 },
+    { id: 'b-only', tenant_id: 'tenant-b', assignee_user_id: 22, assignee_staff_profile_id: 4 },
+    { id: 'b-same', tenant_id: 'tenant-b', assignee_user_id: 21, assignee_staff_profile_id: 3 },
+  ]);
+  assert.deepEqual(rows(db, `SELECT tenant_id,version_no
+    FROM performance_rule_versions ORDER BY tenant_id,version_no`), [
+    { tenant_id: 'tenant-a', version_no: 1 },
+    { tenant_id: 'tenant-b', version_no: 1 },
+  ]);
+  assert.equal(one(db, `SELECT COUNT(*) AS count
+    FROM tickets t
+    JOIN performance_rule_versions p ON p.id=t.performance_rule_version_id
+    WHERE t.tenant_id=p.tenant_id`).count, 4);
+  for (const table of ['staff_profiles', 'community_memberships', 'performance_rule_versions']) {
+    assert.equal(one(db, `SELECT COUNT(*) AS count FROM ${table}
+      WHERE COALESCE(tenant_id,'')=''`).count, 0, table);
+  }
 });
 
 test('tenant schema changes roll back together when an upgrade fails', async (t) => {

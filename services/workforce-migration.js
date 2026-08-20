@@ -38,6 +38,11 @@ function rows(db, sql, params = []) {
   return result;
 }
 
+function hasColumn(db, table, column) {
+  const result = db.exec(`PRAGMA table_info(${table})`);
+  return Boolean(result[0]?.values.some((row) => row[1] === column));
+}
+
 function previewProfileImport(db, profiles) {
   const existing = rows(db, 'SELECT * FROM staff_profiles ORDER BY id');
   const byPhone = new Map(existing.filter((item) => item.phone).map((item) => [String(item.phone).trim(), item]));
@@ -72,9 +77,17 @@ function previewProfileImport(db, profiles) {
 }
 
 function migrateUsersToProfiles(db, nowIso) {
+  const tenantAware = hasColumn(db, 'users', 'tenant_id')
+    && hasColumn(db, 'staff_profiles', 'tenant_id');
+  const tenantInsert = tenantAware ? 'tenant_id,' : '';
+  const tenantSelect = tenantAware ? "COALESCE(tenant_id, '')," : '';
+  const tenantFilter = tenantAware
+    ? "AND COALESCE(tenant_id, '') <> ''"
+    : '';
   db.run(
     `
       INSERT OR IGNORE INTO staff_profiles (
+        ${tenantInsert}
         user_id,
         name,
         phone,
@@ -84,6 +97,7 @@ function migrateUsersToProfiles(db, nowIso) {
         updated_at
       )
       SELECT
+        ${tenantSelect}
         id,
         name,
         phone,
@@ -97,18 +111,29 @@ function migrateUsersToProfiles(db, nowIso) {
         ?,
         ?
       FROM users
+      WHERE role <> 'platform_owner'
+        ${tenantFilter}
     `,
     [nowIso, nowIso]
   );
 }
 
 function backfillTicketAssignees(db) {
+  const tenantAware = hasColumn(db, 'tickets', 'tenant_id')
+    && hasColumn(db, 'staff_profiles', 'tenant_id');
+  const sameTenant = tenantAware
+    ? "AND COALESCE(sp.tenant_id, '') = COALESCE(tickets.tenant_id, '')"
+    : '';
+  const scopedTicket = tenantAware
+    ? "AND COALESCE(tickets.tenant_id, '') <> ''"
+    : '';
   db.run(`
     UPDATE tickets
     SET assignee_user_id = (
       SELECT sp.user_id
       FROM staff_profiles sp
       WHERE sp.name = tickets.worker
+        ${sameTenant}
     )
     WHERE worker <> ''
       AND assignee_user_id IS NULL
@@ -116,8 +141,25 @@ function backfillTicketAssignees(db) {
         SELECT COUNT(*)
         FROM staff_profiles sp
         WHERE sp.name = tickets.worker
+          ${sameTenant}
       )
+      ${scopedTicket}
   `);
+
+  if (hasColumn(db, 'tickets', 'assignee_staff_profile_id')) {
+    db.run(`
+      UPDATE tickets
+      SET assignee_staff_profile_id = (
+        SELECT sp.id
+        FROM staff_profiles sp
+        WHERE sp.user_id = tickets.assignee_user_id
+          ${sameTenant}
+      )
+      WHERE assignee_staff_profile_id IS NULL
+        AND assignee_user_id IS NOT NULL
+        ${scopedTicket}
+    `);
+  }
 }
 
 function listUnmatchedAssignees(db) {

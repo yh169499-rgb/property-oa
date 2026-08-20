@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const bcrypt = require('bcryptjs');
-const { ensureWorkforceSchema } = require('../workforce-schema');
+const { ensureWorkforceSchema, backfillDefaultPerformanceRules } = require('../workforce-schema');
+const { backfillTicketAssignees } = require('../services/workforce-migration');
 
 let SQL;
 
@@ -111,6 +112,8 @@ function createFixture() {
   db.run(`INSERT INTO ticket_activity_logs
     (ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)
     VALUES ('REAL-HISTORY-001', ?, ?, 'assign', '{}', '2025-01-01T01:00:00.000Z')`, [legacyUser, legacyProfile]);
+  backfillTicketAssignees(db);
+  backfillDefaultPerformanceRules(db);
   return db;
 }
 

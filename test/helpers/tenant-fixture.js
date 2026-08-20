@@ -8,6 +8,7 @@ async function createFullTestDB() {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
   ensureCoreSchema(db);
+  ensureTenantSchema(db);
   ensureWorkforceSchema(db);
   ensureTenantSchema(db);
   return db;

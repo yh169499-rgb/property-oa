@@ -10,6 +10,7 @@ const { ensureTenantSchema } = require('./services/tenant-schema');
 const {
   ensureWorkforceSchema,
   backfillCommunityMemberships,
+  backfillDefaultPerformanceRules,
 } = require('./workforce-schema');
 const {
   migrateUsersToProfiles,
@@ -40,6 +41,7 @@ function ensureDatabaseSchema(targetDb) {
   targetDb.run('SAVEPOINT ensure_database_schema');
   try {
     ensureCoreSchema(targetDb);
+    ensureTenantSchema(targetDb);
     ensureWorkforceSchema(targetDb);
     ensureTenantSchema(targetDb);
     targetDb.run('RELEASE SAVEPOINT ensure_database_schema');
@@ -47,6 +49,23 @@ function ensureDatabaseSchema(targetDb) {
     try {
       targetDb.run('ROLLBACK TO SAVEPOINT ensure_database_schema');
       targetDb.run('RELEASE SAVEPOINT ensure_database_schema');
+    } catch (_) {}
+    throw error;
+  }
+}
+
+function backfillWorkforceData(targetDb, nowIso = new Date().toISOString()) {
+  targetDb.run('SAVEPOINT backfill_workforce_data');
+  try {
+    migrateUsersToProfiles(targetDb, nowIso);
+    backfillCommunityMemberships(targetDb, nowIso);
+    backfillTicketAssignees(targetDb);
+    backfillDefaultPerformanceRules(targetDb, nowIso);
+    targetDb.run('RELEASE SAVEPOINT backfill_workforce_data');
+  } catch (error) {
+    try {
+      targetDb.run('ROLLBACK TO SAVEPOINT backfill_workforce_data');
+      targetDb.run('RELEASE SAVEPOINT backfill_workforce_data');
     } catch (_) {}
     throw error;
   }
@@ -85,9 +104,7 @@ async function initDB() {
 
   ensureDatabaseSchema(db);
   const nowIso = new Date().toISOString();
-  migrateUsersToProfiles(db, nowIso);
-  backfillCommunityMemberships(db, nowIso);
-  backfillTicketAssignees(db);
+  backfillWorkforceData(db, nowIso);
 
   await persistInitialSnapshot(saveDB, Boolean(remoteConfig?.syncRequired));
   return db;
@@ -171,4 +188,5 @@ module.exports = {
   getDB,
   setDBForTests,
   ensureDatabaseSchema,
+  backfillWorkforceData,
 };

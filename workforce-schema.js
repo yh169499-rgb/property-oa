@@ -16,29 +16,66 @@ function tableExists(db, table) {
   return Boolean(result[0] && result[0].values.length);
 }
 
+function hasColumn(db, table, column) {
+  if (!tableExists(db, table)) return false;
+  const result = db.exec(`PRAGMA table_info(${table})`);
+  return Boolean(result[0]?.values.some((row) => row[1] === column));
+}
+
 function backfillCommunityMemberships(db, nowIso = new Date().toISOString()) {
+  const tenantAware = hasColumn(db, 'community_permissions', 'tenant_id')
+    && hasColumn(db, 'community_memberships', 'tenant_id')
+    && hasColumn(db, 'staff_profiles', 'tenant_id')
+    && hasColumn(db, 'communities', 'tenant_id');
   if (tableExists(db, 'community_permissions')) {
-    db.run(`
-      INSERT OR IGNORE INTO community_memberships (
-        community_id,
-        staff_profile_id,
-        created_at
-      )
-      SELECT
-        cp.community_id,
-        MIN(sp.id),
-        ?
-      FROM community_permissions cp
-      JOIN staff_profiles sp
-        ON TRIM(sp.name) = TRIM(cp.staff_name)
-      WHERE TRIM(sp.name) <> ''
-      GROUP BY cp.community_id, cp.staff_name
-      HAVING COUNT(sp.id) = 1
-    `, [nowIso]);
+    if (tenantAware) {
+      db.run(`
+        INSERT OR IGNORE INTO community_memberships (
+          tenant_id,
+          community_id,
+          staff_profile_id,
+          created_at
+        )
+        SELECT
+          cp.tenant_id,
+          cp.community_id,
+          MIN(sp.id),
+          ?
+        FROM community_permissions cp
+        JOIN communities c
+          ON c.id = cp.community_id
+          AND c.tenant_id = cp.tenant_id
+        JOIN staff_profiles sp
+          ON TRIM(sp.name) = TRIM(cp.staff_name)
+          AND sp.tenant_id = cp.tenant_id
+        WHERE TRIM(sp.name) <> ''
+          AND COALESCE(cp.tenant_id, '') <> ''
+        GROUP BY cp.tenant_id, cp.community_id, cp.staff_name
+        HAVING COUNT(sp.id) = 1
+      `, [nowIso]);
+    } else {
+      db.run(`
+        INSERT OR IGNORE INTO community_memberships (
+          community_id,
+          staff_profile_id,
+          created_at
+        )
+        SELECT
+          cp.community_id,
+          MIN(sp.id),
+          ?
+        FROM community_permissions cp
+        JOIN staff_profiles sp
+          ON TRIM(sp.name) = TRIM(cp.staff_name)
+        WHERE TRIM(sp.name) <> ''
+        GROUP BY cp.community_id, cp.staff_name
+        HAVING COUNT(sp.id) = 1
+      `, [nowIso]);
+    }
   }
   // 单小区且没有任何历史授权时，所有在职档案默认属于该唯一小区；
   // 多小区或存在旧授权时不猜测归属，避免越权和串区。
-  if (tableExists(db, 'communities')) {
+  if (tableExists(db, 'communities') && !tenantAware) {
     const communities = db.exec('SELECT id FROM communities ORDER BY created');
     const communityRows = communities[0] ? communities[0].values : [];
     if (communityRows.length === 1) {
@@ -55,6 +92,125 @@ function backfillCommunityMemberships(db, nowIso = new Date().toISOString()) {
         `, [communityId, nowIso]);
       }
     }
+  } else if (tenantAware) {
+    const tenants = db.exec(`
+      SELECT tenant_id
+      FROM communities
+      WHERE COALESCE(tenant_id, '') <> ''
+      GROUP BY tenant_id
+      HAVING COUNT(*) = 1
+    `);
+    const tenantRows = tenants[0] ? tenants[0].values : [];
+    for (const [tenantId] of tenantRows) {
+      const communityId = db.exec(
+        'SELECT id FROM communities WHERE tenant_id = ?',
+        [tenantId]
+      )[0].values[0][0];
+      const legacyCount = db.exec(
+        'SELECT COUNT(*) FROM community_permissions WHERE tenant_id = ?',
+        [tenantId]
+      )[0].values[0][0];
+      const membershipCount = db.exec(
+        'SELECT COUNT(*) FROM community_memberships WHERE tenant_id = ?',
+        [tenantId]
+      )[0].values[0][0];
+      if (Number(legacyCount) === 0 && Number(membershipCount) === 0) {
+        db.run(`
+          INSERT OR IGNORE INTO community_memberships (
+            tenant_id, community_id, staff_profile_id, created_at
+          )
+          SELECT ?, ?, id, ? FROM staff_profiles
+          WHERE tenant_id = ?
+            AND COALESCE(employment_status, 'active') = 'active'
+        `, [tenantId, communityId, nowIso, tenantId]);
+      }
+    }
+  }
+}
+
+function backfillDefaultPerformanceRules(db, nowIso = new Date().toISOString()) {
+  if (!tableExists(db, 'performance_rule_versions')) return;
+
+  const tenantAware = tableExists(db, 'tenants')
+    && hasColumn(db, 'performance_rule_versions', 'tenant_id')
+    && (!tableExists(db, 'tickets') || hasColumn(db, 'tickets', 'tenant_id'));
+  if (tenantAware) {
+    db.run(`
+      INSERT INTO performance_rule_versions (
+        tenant_id,
+        version_no,
+        name,
+        completion_weight,
+        on_time_weight,
+        quality_weight,
+        excellent_threshold,
+        good_threshold,
+        qualified_threshold,
+        minimum_sample_size,
+        effective_at,
+        created_at,
+        is_active
+      )
+      SELECT t.id, 1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1
+      FROM tenants t
+      WHERE COALESCE(t.id, '') <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM performance_rule_versions p
+          WHERE p.tenant_id = t.id AND p.version_no = 1
+        )
+    `, [nowIso, nowIso]);
+
+    if (tableExists(db, 'tickets')) {
+      db.run(`
+        UPDATE tickets
+        SET performance_rule_version_id = (
+          SELECT p.id FROM performance_rule_versions p
+          WHERE p.tenant_id = tickets.tenant_id AND p.version_no = 1
+          ORDER BY p.id
+          LIMIT 1
+        )
+        WHERE performance_rule_version_id IS NULL
+          AND COALESCE(tenant_id, '') <> ''
+          AND EXISTS (
+            SELECT 1 FROM performance_rule_versions p
+            WHERE p.tenant_id = tickets.tenant_id AND p.version_no = 1
+          )
+      `);
+    }
+    return;
+  }
+
+  db.run(`
+    INSERT INTO performance_rule_versions (
+      tenant_id,
+      version_no,
+      name,
+      completion_weight,
+      on_time_weight,
+      quality_weight,
+      excellent_threshold,
+      good_threshold,
+      qualified_threshold,
+      minimum_sample_size,
+      effective_at,
+      created_at,
+      is_active
+    ) SELECT '', 1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM performance_rule_versions
+      WHERE tenant_id = '' AND version_no = 1
+    )
+  `, [nowIso, nowIso]);
+
+  if (tableExists(db, 'tickets')) {
+    db.run(`
+      UPDATE tickets
+      SET performance_rule_version_id = (
+        SELECT id FROM performance_rule_versions
+        WHERE version_no = 1 AND tenant_id = ''
+      )
+      WHERE performance_rule_version_id IS NULL
+    `);
   }
 }
 
@@ -240,56 +396,6 @@ function ensureWorkforceSchema(db) {
   addColumn(db, 'tickets', "assigned_at TEXT DEFAULT ''");
   addColumn(db, 'tickets', 'performance_rule_version_id INTEGER');
 
-  const nowIso = new Date().toISOString();
-  db.run(`
-    INSERT INTO performance_rule_versions (
-      tenant_id,
-      version_no,
-      name,
-      completion_weight,
-      on_time_weight,
-      quality_weight,
-      excellent_threshold,
-      good_threshold,
-      qualified_threshold,
-      minimum_sample_size,
-      effective_at,
-      created_at,
-      is_active
-    ) SELECT '', 1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1
-    WHERE NOT EXISTS (
-      SELECT 1 FROM performance_rule_versions
-      WHERE tenant_id = '' AND version_no = 1
-    )
-  `, [nowIso, nowIso]);
-
-  if (tableExists(db, 'tickets')) {
-    // Bind only through the authenticated user identity. In particular, never
-    // infer a profile from worker/name text because names are not unique and
-    // historical snapshots must remain unambiguous.
-    db.run(`
-      UPDATE tickets
-      SET assignee_staff_profile_id = (
-        SELECT sp.id
-        FROM staff_profiles sp
-        WHERE sp.user_id = tickets.assignee_user_id
-      )
-      WHERE assignee_staff_profile_id IS NULL
-        AND assignee_user_id IS NOT NULL
-    `);
-
-    db.run(`
-      UPDATE tickets
-      SET performance_rule_version_id = (
-        SELECT id FROM performance_rule_versions
-        WHERE version_no = 1 AND tenant_id = ''
-      )
-      WHERE performance_rule_version_id IS NULL
-    `);
-  }
-
-  backfillCommunityMemberships(db, nowIso);
-
   db.run('CREATE INDEX IF NOT EXISTS idx_staff_manager ON staff_profiles(manager_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_staff_profiles_tenant ON staff_profiles(tenant_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_shift_staff_date ON shift_assignments(staff_id, work_date)');
@@ -331,4 +437,9 @@ function ensureWorkforceSchema(db) {
     ON ai_report_analyses(tenant_id, report_hash, model, prompt_version)`);
 }
 
-module.exports = { ensureWorkforceSchema, addColumn, backfillCommunityMemberships };
+module.exports = {
+  ensureWorkforceSchema,
+  addColumn,
+  backfillCommunityMemberships,
+  backfillDefaultPerformanceRules,
+};

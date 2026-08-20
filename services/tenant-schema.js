@@ -261,7 +261,8 @@ function ensureTenantSchema(db) {
       disabled_at TEXT NOT NULL DEFAULT ''
     )`);
     addColumn(db, 'tenants', 'owner_user_id INTEGER');
-    addColumn(db, 'tenants', 'staff_limit INTEGER NOT NULL DEFAULT 4 CHECK (staff_limit BETWEEN 1 AND 999)');
+    addColumn(db, 'tenants', `staff_limit INTEGER NOT NULL DEFAULT 4
+      CHECK (staff_limit BETWEEN 1 AND 999 AND staff_limit = CAST(staff_limit AS INTEGER))`);
     addColumn(db, 'tenants', "disabled_at TEXT NOT NULL DEFAULT ''");
 
     db.run(`CREATE TABLE IF NOT EXISTS enterprise_applications (

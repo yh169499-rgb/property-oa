@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const database = require('../db');
-const { ensureWorkforceSchema, backfillCommunityMemberships } = require('../workforce-schema');
+const {
+  ensureWorkforceSchema,
+  backfillCommunityMemberships,
+  backfillDefaultPerformanceRules,
+} = require('../workforce-schema');
+const { backfillTicketAssignees } = require('../services/workforce-migration');
 const { startHttpServer } = require('./helpers/http-server');
 const {
   createTestDB,
@@ -113,6 +118,7 @@ test('ticket assignee profile backfill uses user identity and never guesses by n
   `);
 
   ensureWorkforceSchema(db);
+  backfillTicketAssignees(db);
 
   assert.deepEqual(
     db.exec('SELECT id, assignee_staff_profile_id FROM tickets ORDER BY id')[0].values,
@@ -124,10 +130,11 @@ test('ticket assignee profile backfill uses user identity and never guesses by n
   );
 });
 
-test('performance rules include a stable default version 1', async (t) => {
+test('performance rule backfill includes a stable default version 1', async (t) => {
   const db = await createTestDB();
   t.after(() => db.close());
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
 
   const rows = db.exec(`
     SELECT version_no, completion_weight, on_time_weight, quality_weight,
@@ -140,6 +147,7 @@ test('performance rules include a stable default version 1', async (t) => {
   assert.deepEqual(rows[0].values[0], [1, 30, 50, 20, 90, 80, 60, 1, 1]);
 
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   assert.equal(db.exec('SELECT COUNT(*) FROM performance_rule_versions')[0].values[0][0], 1);
 });
 
@@ -164,6 +172,8 @@ test('old community permissions migrate only uniquely named staff profiles', asy
   db.run("INSERT INTO staff_profiles (name) VALUES ('李四')");
   ensureWorkforceSchema(db);
   ensureWorkforceSchema(db);
+  backfillCommunityMemberships(db);
+  backfillCommunityMemberships(db);
 
   const rows = db.exec(`
     SELECT community_id, staff_profile_id
