@@ -1,4 +1,6 @@
 const TEAM_LIMITS = Object.freeze({ total: 4, worker: 3, keeper: 1 });
+const MIN_STAFF_LIMIT = 1;
+const MAX_STAFF_LIMIT = 999;
 const { MANAGER_ROLES } = require('./roles');
 
 const STAFF_ROLE_ALIASES = new Map([
@@ -19,6 +21,18 @@ function normalizedStaffRole(roleOrPosition) {
   return null;
 }
 
+function normalizeStaffLimit(value, fallback = 4) {
+  const candidate = value === undefined ? fallback : value;
+  const limit = typeof candidate === 'number' ? candidate : Number(candidate);
+  if (!Number.isInteger(limit) || limit < MIN_STAFF_LIMIT || limit > MAX_STAFF_LIMIT) {
+    const error = new Error('人员上限必须是 1—999 的整数');
+    error.status = 400;
+    error.code = 'INVALID_STAFF_LIMIT';
+    throw error;
+  }
+  return limit;
+}
+
 function queryAll(db, sql, params = []) {
   const statement = db.prepare(sql);
   statement.bind(params);
@@ -28,7 +42,62 @@ function queryAll(db, sql, params = []) {
   return rows;
 }
 
+function hasColumn(db, table, column) {
+  try {
+    return queryAll(db, `PRAGMA table_info(${table})`).some((row) => row.name === column);
+  } catch (_) {
+    return false;
+  }
+}
+
+function hasTable(db, table) {
+  try {
+    return queryAll(db, "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", [table]).length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isTenantCapacity(db) {
+  return hasTable(db, 'tenants') && hasColumn(db, 'staff_profiles', 'tenant_id');
+}
+
+function tenantUsage(db, tenantId, options = {}) {
+  const tenant = queryAll(db, 'SELECT staff_limit FROM tenants WHERE id = ?', [tenantId])[0];
+  if (!tenant) {
+    const error = new Error('企业不存在');
+    error.status = 404;
+    error.code = 'TENANT_NOT_FOUND';
+    throw error;
+  }
+  const params = [tenantId];
+  let exclusion = '';
+  if (options.excludeProfileId !== undefined && options.excludeProfileId !== null) {
+    exclusion = ' AND id <> ?';
+    params.push(options.excludeProfileId);
+  }
+  const managerRoles = [...MANAGER_ROLES].map((role) => role.toLowerCase());
+  const placeholders = managerRoles.map(() => '?').join(',');
+  const rows = queryAll(db, `
+    SELECT id
+    FROM staff_profiles
+    WHERE tenant_id = ?
+      AND COALESCE(employment_status, 'active') = 'active'
+      AND LOWER(TRIM(COALESCE(position, ''))) NOT IN (${placeholders})
+      ${exclusion}
+  `, [tenantId, ...managerRoles, ...params.slice(1)]);
+  const activeCount = rows.length;
+  const limit = normalizeStaffLimit(tenant.staff_limit);
+  return { activeCount, limit, remaining: Math.max(0, limit - activeCount) };
+}
+
 function teamUsage(db, managerProfileId, options = {}) {
+  // Tenant-aware callers use the new total-only capacity contract. Keep the
+  // numeric manager-profile overload for legacy organization/profile callers;
+  // those callers are migrated independently and do not enforce role ratios.
+  if (typeof managerProfileId === 'string' && isTenantCapacity(db)) {
+    return tenantUsage(db, managerProfileId, options);
+  }
   const params = [managerProfileId];
   let exclusion = '';
   if (options.excludeProfileId !== undefined && options.excludeProfileId !== null) {
@@ -68,6 +137,15 @@ function capacityError(message, code, usage, role) {
 }
 
 function assertTeamCapacity(db, managerProfileId, roleOrPosition, options = {}) {
+  if (typeof managerProfileId === 'string' && isTenantCapacity(db)) {
+    const usageOptions = roleOrPosition && typeof roleOrPosition === 'object'
+      ? roleOrPosition : options;
+    const usage = tenantUsage(db, managerProfileId, usageOptions);
+    if (usage.activeCount >= usage.limit) {
+      throw capacityError('企业在职人员已达到上限', 'TEAM_CAPACITY_FULL', usage, null);
+    }
+    return usage;
+  }
   const role = normalizedStaffRole(roleOrPosition);
   if (!role) {
     const error = new Error('不支持的人员岗位');
@@ -110,10 +188,38 @@ function findSoleSupervisorProfile(db) {
   throw error;
 }
 
+function findSupervisorProfile(db, userId, tenantId = null) {
+  const tenantClause = tenantId ? ' AND tenant_id = ?' : '';
+  const params = tenantId ? [userId, tenantId] : [userId];
+  const profile = queryAll(db, `
+    SELECT id, user_id, name, position, manager_id, employment_status
+    FROM staff_profiles
+    WHERE user_id = ?
+      AND employment_status = 'active'
+      ${tenantClause}
+    LIMIT 1
+  `, params).find((candidate) => (
+    MANAGER_ROLES.has(String(candidate.position || '').trim().toLowerCase())
+  ));
+  if (profile) return profile;
+
+  const error = new Error('未找到当前主管档案');
+  error.status = 404;
+  error.code = 'SUPERVISOR_PROFILE_NOT_FOUND';
+  error.details = { userId };
+  throw error;
+}
+
 module.exports = {
   TEAM_LIMITS,
+  MIN_STAFF_LIMIT,
+  MAX_STAFF_LIMIT,
+  normalizeStaffLimit,
+  isTenantCapacity,
   normalizedStaffRole,
+  tenantUsage,
   teamUsage,
   assertTeamCapacity,
   findSoleSupervisorProfile,
+  findSupervisorProfile,
 };

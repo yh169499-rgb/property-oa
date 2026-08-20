@@ -1,110 +1,216 @@
 # 工单系统 API
 
-接口默认前缀为 `/api`，返回 JSON。除特别标注的接口外，均要求请求头：
+所有接口默认使用 `/api` 前缀并返回 JSON。本系统分为平台域和企业域：全平台有且仅有一个 `platform_owner`（唯一平台运维），可管理多个企业/租户；每家企业有且仅有一名主管。主管只能管理本企业，平台运维不能进入企业工单、小区、排班或报告。
 
-```http
-Authorization: Bearer <JWT>
-```
+## 身份与租户范围
 
-JWT 在每次请求时都会重新读取 `users` 当前记录；账号状态不是 `active` 时，旧令牌立即失效。
+除公开申请和登录接口外，请求必须携带 `Authorization: Bearer <JWT>`。JWT 只用于定位会话；服务端每次请求均从数据库恢复用户当前的角色、状态、`tenant_id` 和 `session_version`，不信任 JWT 或请求体中自报的权限。
 
-人员删除采用“停用并保留历史”：`users.status` 变为 `disabled`，对应档案变为 inactive，当前小区成员关系、排班、考勤和人员状态被清理；历史工单、工单活动和已生成报告不删除。停用账号不能重新登录，停用前签发的 JWT 在下一次请求时返回 `401`。
+所有企业接口都由服务端注入 `tenant_id`：
 
-## 认证与人员
+- 客户端不得选择或改写 `tenant_id`；写入数据时使用已恢复身份的租户。
+- 列表查询不返回其他租户的任何记录。
+- 跨租户详情读取与“不存在”使用统一 `404`，避免泄露资源是否存在。
+- 跨租户写入返回 `403`，且不会将目标记录内容放入错误响应。
+- 租户状态为 `disabled`、账号被删除或 `session_version` 变化时，旧会话立即返回 `401`。
 
-| 方法 | 路径 | 权限 | 说明 |
+每个企业的 `staff_limit` 独立配置，默认 4，只接受 1–999 的整数，仅计算在职的维修师傅和物业管家。人员离职会删除登录账号、释放名额，但历史工单和流转记录保留并标记“已离职”。
+
+## 企业端接口概览
+
+| 方法 | 路径 | 角色 | 租户规则 |
 | --- | --- | --- | --- |
-| POST | `/login` | 公开 | `{phone,password,rememberMe?}` 登录 |
-| POST | `/register` | 公开 | `{phone,password,name,role,skill,inviteCode}`；role 只接受 `worker`/`keeper`，主管申请会被降级为维修师傅并进入待审核 |
-| POST | `/reset-password` | 登录用户 | 只能修改本人密码；忘记密码需由主管处理 |
-| GET | `/users` | 主管 | 用户列表及 active/disabled 状态 |
-| POST | `/users` | 主管 | 创建普通账号；服务端只允许 worker/keeper |
-| DELETE | `/users/:id` | 主管 | 停用账号、撤销登录权限，清理档案关联排班/考勤，保留历史工单和操作日志 |
-| GET | `/pending-registrations` | 主管 | 待审核注册申请 |
-| POST | `/pending-registrations/:id/approve` | 主管 | 通过申请 |
-| POST | `/pending-registrations/:id/reject` | 主管 | 拒绝申请 |
-| GET | `/me` | 登录用户 | 当前个人档案 |
-| PATCH | `/me` | 登录用户 | 更新本人允许修改的信息 |
+| POST | `/api/login` | 公开 | 只签发企业用户会话，不接受 `platform_owner` |
+| GET/PATCH | `/api/me` | 企业用户 | 只读写本人 |
+| GET/POST/DELETE | `/api/users[/:id]` | 本企业主管 | 仅本企业普通人员；客户端不能传 `staffLimit`/`staff_limit` |
+| GET/POST | `/api/pending-registrations[/:id/approve|reject]` | 本企业主管 | 仅本企业申请，容量不足返回 `409` |
+| GET/POST/PATCH/DELETE | `/api/tickets[/:id]` | 企业用户 | 首先按租户过滤，再应用本人/小区权限 |
+| GET/POST/PATCH/DELETE | `/api/communities[/:id]` | 企业用户/主管 | 仅本企业小区和邀请码 |
+| GET/POST/PATCH/DELETE | `/api/shifts`、`/api/shift-templates` | 企业用户/主管 | 仅本企业人员和模板 |
+| GET/POST | `/api/reports/*`、`/api/settings/*` | 企业用户/主管 | 统计、缓存、绩效规则和设置均按租户隔离 |
 
-主管是系统最高管理角色（`主管`、`经理`、`supervisor`、`manager`、`admin`）。旧版 `lead` 账号在数据库启动迁移时转为 `主管`。
+## 平台读接口
 
-## 工单与附件
+读取接口不接受请求体。查询参数均为可选且必须通过服务端白名单校验；响应不包含任何凭据或密钥。
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| GET | `/tickets` | 登录用户 | 支持 `community_id`、`worker` 筛选 |
-| GET | `/tickets/:id` | 登录用户 | 工单详情 |
-| POST | `/tickets` | 登录用户 | 创建工单；多小区必须提供 `community_id`/`communityId` |
-| PATCH | `/tickets/:id` | 登录用户 | 更新状态、派单、内容或小区 |
-| DELETE | `/tickets/:id` | 主管 | 删除工单 |
-| POST | `/tickets/:id/photos` | 登录用户 | 上传最多 10 个图片/PDF，单个不超过 10MB；校验工单小区范围 |
-| GET | `/tickets/:id/photos` | 登录用户 | 附件列表；校验工单小区范围 |
+### GET /api/platform/overview
 
-附件实际下载地址为 `/uploads/:ticketId/:filename`，必须登录且只能下载当前账号可见小区的工单附件。
+- 角色：仅 `platform_owner`。
+- 请求字段：无 body；无可选 query，未识别的 query 字段不得改变统计口径。
+- 成功响应：`200`，返回企业总数、待审核数、启用/停用企业数、账号/工单总量和持久化状态；只含平台聚合值，不返回企业工单明细。
+- `400`：query 格式不合法或包含不允许的多值参数。
+- `401`：平台会话缺失、过期或 `session_version` 失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：路由不存在；该聚合端点正常不会因某个企业不存在而返回。
+- `409`：正在执行与聚合快照不兼容的维护切换时可返回；普通读取正常不产生。
 
-## 小区、通讯录与状态
+### GET /api/platform/applications
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| GET | `/communities` | 登录用户 | 主管可查看/筛选全部小区；普通人员只返回本人所属小区，不接受越权 `staff_name` |
-| POST/PATCH/DELETE | `/communities[/:id]` | 主管 | 小区及人员范围管理；默认小区不可删除 |
-| POST | `/communities/:id/invite-code` | 主管 | 创建邀请码 |
-| GET | `/communities/:id/invite-code` | 主管 | 查看邀请码；避免普通人员扩大注册范围 |
-| GET | `/staff/directory` | 登录用户 | 同小区人员通讯录，返回姓名、职位、技能和手机号 |
-| GET/POST | `/staff/status` | 登录用户 | 主管查看全部；普通人员只能查看/更新本人状态 |
+- 角色：仅 `platform_owner`。
+- 请求字段：无 body；可选 query 为 `status`、`page`、`pageSize`，分别用于状态筛选和分页。
+- 成功响应：`200`，返回申请列表和分页元数据；列表只含申请 ID、时间、企业名称、主管名称/手机号、状态和审核结果，不包含密码或哈希。
+- `400`：`status` 不在允许集合内，或 `page`/`pageSize` 不是允许范围内的整数。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：路由不存在；筛选结果为空时仍返回 `200` 和空列表。
+- `409`：申请集合正在执行不可兼容的迁移或维护切换；普通分页读取正常不产生。
 
-## 日历、班次与考勤
+### GET /api/platform/tenants
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| GET | `/calendar/day` | 登录用户 | 当日排班、请假、冲突和状态 |
-| GET | `/shifts` | 登录用户 | 排班查询 |
-| POST/PATCH/DELETE | `/shifts[/:id]` | 主管 | 新增、修改、删除排班 |
-| GET | `/shift-templates` | 登录用户 | 班次模板 |
-| POST/PATCH/DELETE | `/shift-templates[/:id]` | 主管 | 模板管理 |
-| GET | `/attendance/summary` | 主管 | 历史考勤汇总 |
-| POST | `/attendance/clear-all` | 主管 | 清空全部历史考勤 |
-| DELETE | `/attendance/:id` | 主管 | 删除单条考勤 |
+- 角色：仅 `platform_owner`。
+- 请求字段：无 body；可选 query 为 `status`、`search`、`page`、`pageSize`，用于企业状态、名称/主管搜索和分页。
+- 成功响应：`200`，返回分页企业列表；每项包含企业名称、主管名称/手机号、状态、创建时间、主管最后登录、`active_staff_count`、`staff_limit`、小区数和工单数，不返回工单内容。
+- `400`：筛选值、搜索长度或分页参数不合法。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：路由不存在；搜索无匹配企业时仍返回 `200` 和空列表。
+- `409`：租户集合正在完成不可兼容的迁移或快照切换；普通列表读取正常不产生。
 
-## 报告与绩效
+### GET /api/platform/audit-logs
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| GET | `/dashboard/stats` | 登录用户 | 主管首页累计统计及考勤状态 |
-| GET | `/reports/staff/:staff_id` | 本人/主管 | 人员、日期、小区筛选的工单和绩效报告 |
-| GET | `/reports/staff/all` | 主管 | 全部人员汇总 |
-| GET | `/report` | 主管（旧版全量兼容） | 兼容旧版报告接口；普通人员应使用 `/reports/staff/:staff_id` 查看本人 |
-| GET | `/settings/performance` | 登录用户 | 当前绩效规则；主管可见版本历史 |
-| POST | `/settings/performance/versions` | 主管 | 发布新绩效规则，服务端计算得分 |
-| GET | `/reports/ai/status` | 登录用户 | AI 配置状态 |
-| POST | `/reports/staff/:staff_id/ai-analysis` | 本人/主管 | AI 润色单人报告，超时不影响原始报告 |
-| POST | `/reports/staff/all/ai-analysis` | 主管 | AI 润色团队汇总 |
+- 角色：仅 `platform_owner`。
+- 请求字段：无 body；可选 query 为 `action`、`tenantId`、`page`、`pageSize`，用于动作/目标企业筛选和分页。
+- 成功响应：`200`，返回分页审计日志；只含操作人、动作、目标 ID、时间和非敏感变更摘要。
+- `400`：动作筛选、`tenantId` 格式或分页参数不合法。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：路由不存在；目标企业无日志时仍返回 `200` 和空列表，不借此枚举企业。
+- `409`：审计索引正在执行不可兼容的迁移/重建；普通分页读取正常不产生。
 
-## 系统设置与运维
+## 平台写接口
 
-| 方法 | 路径 | 权限 | 说明 |
-| --- | --- | --- | --- |
-| GET | `/health` | 公开 | Render 健康检查 |
-| GET | `/persistence/status` | 主管 | 本地 SQLite 与 Supabase Storage 同步状态 |
-| GET/POST | `/settings/reminder` | 主管 | 待派单提醒 |
-| GET/POST | `/settings/sla` | 主管 | SLA 轮询与告警 |
-| GET | `/sla/overdue`、`/sla/alert` | 主管 | 查询/触发 SLA 告警 |
-| POST | `/notify`、`/jzm/trigger-event` | 登录用户/主管 | 外部通知；密钥只在服务端环境变量中读取 |
+下列错误响应统一使用 `{ error, code? }`；响应永远不回显密码、哈希、JWT 或密钥。
 
-## 通用错误
+### POST /api/enterprise-applications
 
-- `401`：未登录、令牌过期或账号已停用。
-- `403`：已登录但无角色/小区范围权限。
-- `404`：资源不存在。
-- `409`：资源冲突，例如删除仍被使用的班次模板。
-- `400`：参数校验失败；错误体包含 `error` 和可选 `code`。
+- 角色：公开，使用独立限流；不需要任何企业或平台会话。
+- 请求字段：`enterpriseName`（必填）、`supervisorName`（必填）、`phone`（必填）、`password`（必填）。不接受客户端指定 `tenant_id`、角色或 `staffLimit`。
+- 成功响应：`201`，`{ success, application: { id, status } }`；状态为 `pending`，不自动登录。
+- `400`：字段缺失、格式不合法或企业名称超限。
+- `401`：此公开接口正常不产生；若以后增加前置认证闸门，代表认证失败。
+- `403`：此公开接口正常不产生；安全策略明确拒绝请求时使用。
+- `404`：路由或引用的公开资源不存在；本方法不暴露企业是否存在。
+- `409`：手机号已被正式账号或待处理申请占用。
 
-## 离线数据迁移命令
+### POST /api/platform/login
 
-固定测试账号和 `MOCK-E2E` 数据通过离线命令处理，不新增公开 HTTP API：
+- 角色：公开的平台独立登录入口，仅允许 `platform_owner`；企业账号不得从此入口登录。
+- 请求字段：`phone`、`password`，均必填。
+- 成功响应：`200`，`{ success, token, user: { id, phone, name, role } }`；`user` 不带企业租户。
+- `400`：字段缺失或手机号格式不合法。
+- `401`：凭据错误或会话签发失败。
+- `403`：手机号对应企业角色或平台账号不可用。
+- `404`：登录故意不区分“账号不存在”，对外应统一为 `401`；该状态仅保留给路由不存在。
+- `409`：此无状态写入方法正常不产生；并发会话策略冲突时使用。
 
-- `npm run retained:dry-run -- --source=/absolute/path/to/data.db`：只预演，不改源文件。
-- `npm run retained:apply -- --source=/absolute/path/to/data.db`：必须同时提供运行时 `RETAINED_TEST_PASSWORD`；先备份再原子写回。
-- `npm run retained:verify -- --source=/absolute/path/to/data.db`：只读校验账号、组织、小区、排班、工单、活动和绩效样本。
+### POST /api/platform/applications/:id/approve
 
-线上操作必须先备份 Render 和 Supabase，再对候选副本迁移；验证通过后才允许替换生产文件。失败时使用执行前备份回滚，不得把本地开发 `data.db` 直接覆盖到生产。
+- 角色：仅 `platform_owner`。
+- 请求字段：可选 `staffLimit`，省略时默认 4，必须是 1–999 的整数。
+- 成功响应：`200`，返回新企业 `tenantId`、唯一主管 `userId`、`staffLimit` 和审核状态；密码哈希从申请记录转入账号后即从申请中清除。
+- `400`：`staffLimit` 不是 1–999 的整数，`code` 为 `INVALID_STAFF_LIMIT`。
+- `401`：平台会话缺失、过期或 `session_version` 失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：申请 `id` 不存在。
+- `409`：申请已被处理、手机号已占用，或无法满足每企业唯一主管约束。
+
+### POST /api/platform/applications/:id/reject
+
+- 角色：仅 `platform_owner`。
+- 请求字段：`reason`（必填，非空审核原因）。
+- 成功响应：`200`，返回申请 `id`、`rejected` 状态和审核时间；同一事务内清除申请密码哈希。
+- `400`：`reason` 缺失、为空或超长。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：申请 `id` 不存在。
+- `409`：申请已通过或已拒绝，不得重复审核。
+
+### POST /api/platform/tenants/:id/disable
+
+- 角色：仅 `platform_owner`。
+- 请求字段：无必填业务字段；客户端不得传入账号、密码或 `tenant_id` 变更。
+- 成功响应：`200`，返回企业 `id`、`disabled` 状态和更新时间；租户内用户 `session_version` 同步递增，旧会话立即失效。
+- `400`：路径 `id` 或请求体格式不合法。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：企业 `id` 不存在。
+- `409`：企业已停用或正在被另一维护事务更新。
+
+### POST /api/platform/tenants/:id/restore
+
+- 角色：仅 `platform_owner`。
+- 请求字段：无必填业务字段。
+- 成功响应：`200`，返回企业 `id`、`active` 状态和更新时间；数据原样保留，用户需使用当前凭据重新登录。
+- `400`：路径 `id` 或请求体格式不合法。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：企业 `id` 不存在。
+- `409`：企业已处于启用状态或状态更新冲突。
+
+### POST /api/platform/tenants/:id/reset-supervisor-password
+
+- 角色：仅 `platform_owner`。
+- 请求字段：`newPassword`（必填）；值只在当次 TLS 请求中使用，不进入审计摘要或响应。
+- 成功响应：`200`，只返回 `success`、企业 `id` 和主管账号 `id`；新值以 bcrypt 哈希存储，并递增主管 `session_version`。
+- `400`：`newPassword` 缺失或不符合密码策略。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：企业或其唯一主管账号不存在。
+- `409`：企业状态不允许重置，或主管归属约束冲突。
+
+### PATCH /api/platform/tenants/:id
+
+- 角色：仅 `platform_owner`。
+- 请求字段：`name`（可选，2–80 字符）、`staffLimit`（可选，1–999 的整数），可单独或同时修改；至少提供一项。
+- 成功响应：`200`，`{ success, tenant }`；`tenant` 包含最新 `name`、`staff_limit`、`active_staff_count` 和状态。审计摘要只记录变更字段的前后值。
+- `400`：未提供可修改字段、名称不合法，或 `staffLimit` 不是 1–999 的整数。
+- `401`：平台会话缺失、过期或失效。
+- `403`：已登录但不是 `platform_owner`。
+- `404`：企业 `id` 不存在。
+- `409`：新上限低于当前在职普通人员数，`code` 为 `STAFF_LIMIT_BELOW_ACTIVE_COUNT`；整个更新不写入。
+
+## 固定生产账号归属
+
+| 手机号 | 角色/名称 | 数据归属 |
+| --- | --- | --- |
+| `13222514178` | `platform_owner` / 句子工单管理员 | `tenant_id` 为空，不属于任何租户，只登录平台运维入口 |
+| `13800000001` | 测试企业唯一主管 | 保留既有模拟数据、测试人员和全部历史业务数据 |
+| `17713302589` | 发财企业唯一主管 / 发财 | 空白企业，无 mock 数据，不创建小区、人员、工单、排班、绩效或报告 |
+
+## 生产迁移与回滚
+
+必须按以下顺序执行，不得将本地开发库或旧远端快照直接作为候选：
+
+1. 停止写入，并在整个迁移、部署和验收期间继续冻结。
+2. 冻结写入后的 Render `/var/data/data.db` 是唯一权威候选；先将它复制到 `/absolute/path/multi-tenant-candidate.db`，后续不再更换候选路径。
+3. 下载并校验 Supabase 快照，Supabase 只作对照和备份。比较 SHA-256、表集合和记录数；任一不一致都必须中止，先同步或排障，不得迁移旧远端快照。
+4. 保存迁移前备份及其校验和、表集合和记录数摘要。
+5. 只对候选副本执行 `npm run tenant:dry-run -- --source=/absolute/path/multi-tenant-candidate.db`。
+6. 仍只对同一候选副本执行 `npm run tenant:apply -- --confirm=MIGRATE-MULTI-TENANT --source=/absolute/path/multi-tenant-candidate.db`。
+7. 仍只对同一候选副本执行 `npm run verify:multi-tenant -- --source=/absolute/path/multi-tenant-candidate.db`。
+8. 验收候选库的租户归属、唯一主管、人数上限、历史引用和空白企业。
+9. 上传新快照为新的不可变 Supabase 对象；校验该对象后，再原子切换 `SUPABASE_DB_OBJECT`，不直接覆盖旧快照。
+10. 部署新版本，但仍不对外恢复写入。
+11. 保持停止写入，验证三个固定账号登录、跨租户隔离、完整性、持久化；全部验收通过后才恢复写入。
+12. 保留旧快照、Render 原备份和候选库备份，直到观察期结束。
+
+回滚条件：快照/表记录校验失败、存在空 `tenant_id`、企业多主管、跨租户可见、历史工单断链、三个固定账号任一验证失败，以及部署后数据/认证错误。回滚步骤：验收失败时仍冻结写入，在该状态下回滚，因此不丢失部署后写入。回滚时保留故障快照，恢复迁移前 Render 备份，把同一备份上传为另一不可变 Supabase 回滚对象并校验，原子切回 `SUPABASE_DB_OBJECT`，再恢复旧版本。
+
+提前恢复写入会要求另外设计可验证的增量重放，不作为本流程允许路径。
+
+## 环境变量名称与用途
+
+下表只列名称和用途；所有值都在 Render 或受控运维环境中注入，不得写入文档、命令参数、Git 或日志。
+
+| 名称 | 用途 |
+| --- | --- |
+| `PLATFORM_PROVISIONING_SECRET` | 保护唯一平台运维初始化命令 |
+| `PLATFORM_OWNER_PASSWORD` | 平台运维初始登录凭据的运行时输入 |
+| `BLANK_SUPERVISOR_PASSWORD` | 发财企业空白主管的初始凭据输入 |
+| `JWT_SECRET` | 签发和校验 JWT |
+| `SUPABASE_URL` | Supabase 服务端项目端点 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Storage 服务端访问凭据 |
+| `SUPABASE_STORAGE_BUCKET` | 私有快照桶名称 |
+| `SUPABASE_DB_OBJECT` | 当前 SQLite 快照对象名 |
+| `SUPABASE_BACKUP_PREFIX` | 不可变备份对象前缀 |
+| `SUPABASE_SYNC_REQUIRED` | 控制远端快照失败时是否拒绝启动 |

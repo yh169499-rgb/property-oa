@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function fixture() {
@@ -190,21 +190,19 @@ test('主管看板兼容历史无 assignee_user_id 的待派单工单', async ()
   assert.equal(stats.byType.repair, 1);
 });
 
-test('主管首页返回当天考勤明细供删除入口使用', async () => {
+test('主管首页不再返回考勤数据', async () => {
   const db = await fixture();
   db.run("INSERT INTO attendance_records (id, staff_id, work_date, status) VALUES (88, 2, '2026-08-05', 'late')");
   const { getDashboardStats } = require('../services/reporting');
   const stats = getDashboardStats(db, {
     now: '2026-08-05T12:00:00+08:00', range: 'all', staffIds: [1, 2, 3],
   });
-  assert.equal(stats.teamAttendance.records[0].id, 88);
-  assert.equal(stats.teamAttendance.records[0].status, 'late');
-  assert.equal(stats.teamAttendance.exceptions, 1);
+  assert.equal(Object.hasOwn(stats, 'teamAttendance'), false);
 });
 
 test('报告路由要求登录并限制本人或递归团队范围', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const get = async (path, headers) => {
     const response = await fetch(`${server.url}${path}`, { headers });
@@ -218,14 +216,15 @@ test('报告路由要求登录并限制本人或递归团队范围', async (t) =
   assert.equal(all.response.status, 200);
   assert.equal(all.body.data.staff.name, '全部人员');
   assert.equal((await get('/api/reports/staff/all', authHeader({ id: 3, role: 'worker' }))).response.status, 403);
-  const attendance = await get('/api/me/attendance?month=2026-07', authHeader({ id: 3, role: 'worker' }));
-  assert.equal(attendance.response.status, 200);
-  assert.deepEqual(attendance.body.data, []);
+  const attendance = await fetch(`${server.url}/api/me/attendance?month=2026-07`, {
+    headers: authHeader({ id: 3, role: 'worker' }),
+  });
+  assert.equal(attendance.status, 404);
 });
 
 test('旧 /api/report 也必须登录，避免匿名读取全量统计', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   const legacy = await fetch(`${server.url}/api/report`);
@@ -258,7 +257,7 @@ test('历史完成列参与完成统计，负耗时和无效时间不进入耗�
   assert.equal(dashboard.averageHours, 2);
   assert.equal(dashboard.onTimeRate, 100);
 
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const legacy = await fetch(`${server.url}/api/report?from=2026-07-01&to=2026-07-31`, {
     headers: authHeader({ id: 1, role: '主管' }),
@@ -275,7 +274,7 @@ test('主管看板只统计本人递归团队并拒绝跨树社区', async (t) =
       ('deep-tree', 'wait', ?, 'team-a', 3),
       ('other-tree', 'wait', ?, 'team-b', 4)
   `, [now, now, now]);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const leadOne = authHeader({ id: 1, role: 'lead' });
   const leadFour = authHeader({ id: 4, role: 'lead' });
@@ -298,7 +297,7 @@ test('主管看板只统计本人递归团队并拒绝跨树社区', async (t) =
 test('报告路由对未知数据库异常返回通用 500 且不回显 SQL', async (t) => {
   const db = await fixture();
   db.run('DROP TABLE tickets');
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const headers = authHeader({ id: 3, role: 'worker' });
 

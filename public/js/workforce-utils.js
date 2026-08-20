@@ -37,13 +37,6 @@
       && first.getMonth() === second.getMonth()
       && first.getDate() === second.getDate();
   }
-  function shanghaiTime(value) {
-    var date = value instanceof Date ? value : new Date(value);
-    if (!Number.isFinite(date.getTime())) return '--:--';
-    return new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false
-    }).format(date).replace(/^24:/, '00:');
-  }
 
   return {
     isNarrowViewport: function (width) {
@@ -57,7 +50,6 @@
     },
     localDateKey: localDateKey,
     sameDay: sameDay,
-    shanghaiTime: shanghaiTime,
     fmtHM: function (date) {
       return pad2(date.getHours()) + ':' + pad2(date.getMinutes());
     },

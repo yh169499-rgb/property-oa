@@ -8,7 +8,7 @@ const { isSupervisorUser } = require('../services/roles');
 
 function generateToken(user, rememberMe) {
   return jwt.sign(
-    { id: user.id, phone: user.phone, name: user.name, role: user.role },
+    { id: user.id, session_version: Number(user.session_version || 0) },
     config.JWT_SECRET,
     { expiresIn: rememberMe ? config.JWT_EXPIRES_LONG : config.JWT_EXPIRES }
   );
@@ -35,21 +35,33 @@ function verifyToken(req, res, next) {
         req.user = claims;
         return next();
       }
-      current = queryOne('SELECT * FROM users WHERE id = ?', [claims.id]);
+      current = queryOne(`SELECT
+        u.id,u.phone,u.name,u.role,u.status,u.tenant_id,u.session_version,
+        t.status AS tenant_status
+        FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?`, [claims.id]);
     } catch (error) {
       // 数据库不可用不是“未登录”，避免把真实故障伪装成 401。
       return res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
     }
-    if (!current || String(current.status || 'active').toLowerCase() !== 'active') {
-      req.user = null;
-      return next();
+    const isPlatform = current?.role === 'platform_owner';
+    const valid = current
+      && String(current.status || '').toLowerCase() === 'active'
+      && Number(current.session_version || 0) === Number(claims.session_version)
+      && (isPlatform
+        ? !current.tenant_id
+        : Boolean(current.tenant_id) && current.tenant_status === 'active');
+    if (!valid) {
+      return res.status(401).json({ error: '未登录或 token 已失效', code: 'AUTH_REQUIRED' });
     }
     req.user = {
-      ...claims,
       id: current.id,
       phone: current.phone,
       name: current.name,
       role: current.role,
+      status: current.status,
+      tenant_id: current.tenant_id,
+      session_version: Number(current.session_version || 0),
+      tenant_status: current.tenant_status,
     };
     next();
   } catch (e) {
@@ -66,10 +78,26 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  if (!req.user || !isSupervisorUser(req.user)) {
+  if (!req.user || !isSupervisorUser(req.user) || !req.user.tenant_id) {
     return res.status(403).json({ error: '需要主管权限' });
   }
   next();
 }
 
-module.exports = { generateToken, verifyToken, requireAuth, requireAdmin };
+function requirePlatformOwner(req, res, next) {
+  if (!req.user || req.user.role !== 'platform_owner' || req.user.tenant_id) {
+    return res.status(403).json({ error: '需要平台运维权限', code: 'PLATFORM_OWNER_REQUIRED' });
+  }
+  next();
+}
+
+function requireTenantUser(req, res, next) {
+  if (!req.user?.tenant_id || req.user.role === 'platform_owner') {
+    return res.status(403).json({ error: '需要企业账号', code: 'TENANT_USER_REQUIRED' });
+  }
+  next();
+}
+
+module.exports = {
+  generateToken, verifyToken, requireAuth, requireAdmin, requirePlatformOwner, requireTenantUser,
+};

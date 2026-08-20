@@ -10,6 +10,10 @@ function queryAll(db, sql, params = []) {
   return rows;
 }
 
+function hasColumn(db, table, column) {
+  return queryAll(db, `PRAGMA table_info(${table})`).some((row) => row.name === column);
+}
+
 function calendarError(message, code = 'INVALID_CALENDAR_REQUEST', status = 400) {
   const error = new Error(message);
   error.code = code;
@@ -32,12 +36,6 @@ function shanghaiDayRange(date) {
     from: new Date(fromMs).toISOString(),
     toExclusive: new Date(fromMs + 86400000).toISOString(),
   };
-}
-
-function previousDate(date) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() - 1);
-  return value.toISOString().slice(0, 10);
 }
 
 function estimateTicketWindow(ticket, staffHistory = [], now = new Date()) {
@@ -83,7 +81,6 @@ function detectCalendarConflicts(events) {
         if (Date.parse(sorted[right].startAt) >= Date.parse(sorted[left].endAt)) break;
         if (Date.parse(sorted[left].startAt) < Date.parse(sorted[right].endAt)) {
           conflicts.push({
-            type: 'ticket_overlap',
             staffId: Number(staffId),
             ticketIds: [sorted[left].ticketId, sorted[right].ticketId],
             startAt: sorted[right].startAt,
@@ -98,35 +95,39 @@ function detectCalendarConflicts(events) {
 }
 
 function buildDayCalendar(db, {
-  date, staffId, managerId, communityId, viewerUserId,
+  date, staffId, managerId, communityId, viewerUserId, tenantId = '',
 }) {
   if (!isValidDate(date)) throw calendarError('date 必须是真实的 YYYY-MM-DD 日期', 'INVALID_DATE');
+  const tenant = String(tenantId || '');
+  const ticketsHaveTenant = hasColumn(db, 'tickets', 'tenant_id');
 
   const activeProfiles = queryAll(
     db,
-    `SELECT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status,
-            u.role AS account_role
-     FROM staff_profiles sp LEFT JOIN users u ON u.id = sp.user_id
-     WHERE COALESCE(sp.employment_status, 'active') = 'active' ORDER BY sp.id`
+    `SELECT id, user_id, name, position, manager_id, employment_status
+     FROM staff_profiles WHERE tenant_id = ?
+       AND COALESCE(employment_status, 'active') = 'active' ORDER BY id`,
+    [tenant]
   );
   // 已离职人员不再出现在未来排班，但历史日期仍需能追溯其工单日程。
   const departedProfiles = queryAll(
     db,
-    `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status,
-            u.role AS account_role
+    `SELECT DISTINCT sp.id, sp.user_id, sp.name, sp.position, sp.manager_id, sp.employment_status
        FROM staff_profiles sp
        JOIN tickets t ON t.assignee_staff_profile_id = sp.id
-       LEFT JOIN users u ON u.id = sp.user_id
-      WHERE COALESCE(sp.employment_status, 'active') <> 'active'
+        ${ticketsHaveTenant ? 'AND t.tenant_id = sp.tenant_id' : ''}
+      WHERE sp.tenant_id = ?
+        AND COALESCE(sp.employment_status, 'active') <> 'active'
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) >= julianday(?)
         AND julianday(COALESCE(NULLIF(t.assigned_at, ''), t.created)) < julianday(?)
       ORDER BY sp.id`,
-    [shanghaiDayRange(date).from, shanghaiDayRange(date).toExclusive]
+    [tenant, shanghaiDayRange(date).from, shanghaiDayRange(date).toExclusive]
   );
   const profiles = [...activeProfiles, ...departedProfiles];
   const viewer = viewerUserId === undefined || viewerUserId === null
     ? null
-    : queryAll(db, 'SELECT role FROM users WHERE id = ?', [viewerUserId])[0] || null;
+    : queryAll(db, `SELECT role FROM users WHERE id = ?
+        ${hasColumn(db, 'users', 'tenant_id') ? 'AND tenant_id = ?' : ''}`,
+      [viewerUserId, ...(hasColumn(db, 'users', 'tenant_id') ? [tenant] : [])])[0] || null;
   const allowLegacyNameFallback = Boolean(viewer && isManagerRole(viewer.role));
   let selected = profiles;
   if (staffId !== undefined && staffId !== null && staffId !== '') {
@@ -139,44 +140,16 @@ function buildDayCalendar(db, {
   }
 
   const selectedIds = selected.map((profile) => Number(profile.id));
-  const dayRange = shanghaiDayRange(date);
   const shifts = selectedIds.length ? queryAll(
     db,
     `SELECT a.*, t.name AS template_name, t.color AS template_color
-       FROM shift_assignments a
-       LEFT JOIN shift_templates t ON t.id = a.template_id
-      WHERE a.work_date IN (?, ?) AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
-    [date, previousDate(date), ...selectedIds]
+      FROM shift_assignments a
+       LEFT JOIN shift_templates t ON t.id = a.template_id AND t.tenant_id = a.tenant_id
+      WHERE a.tenant_id = ? AND a.work_date = ?
+        AND a.staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
+    [tenant, date, ...selectedIds]
   ) : [];
-  const attendance = selectedIds.length ? queryAll(
-    db,
-    `SELECT * FROM attendance_records
-     WHERE work_date = ? AND staff_id IN (${selectedIds.map(() => '?').join(', ')})`,
-    [date, ...selectedIds]
-  ) : [];
-  const shiftWindowsByStaff = new Map();
-  for (const staff of selectedIds) {
-    const current = shifts.filter(shift => Number(shift.staff_id) === staff && shift.work_date === date);
-    const unavailable = current.find(shift => shift.assignment_type === 'leave' || shift.assignment_type === 'rest');
-    if (unavailable) {
-      shiftWindowsByStaff.set(staff, [unavailable]);
-      continue;
-    }
-    const windows = shifts.filter(shift => Number(shift.staff_id) === staff
-      && shift.work_date === previousDate(date)
-      && shift.assignment_type === 'work'
-      && shift.end_at && Date.parse(shift.end_at) > Date.parse(dayRange.from))
-      .map(shift => ({
-        ...shift,
-        original_start_at: shift.start_at,
-        start_at: dayRange.from,
-        carried_over: 1,
-      }));
-    windows.push(...current);
-    windows.sort((left, right) => Date.parse(left.start_at || '') - Date.parse(right.start_at || ''));
-    if (windows.length) shiftWindowsByStaff.set(staff, windows);
-  }
-  const attendanceByStaff = new Map(attendance.map((row) => [Number(row.staff_id), row]));
+  const shiftByStaff = new Map(shifts.map((row) => [Number(row.staff_id), row]));
   const profileNameCounts = new Map();
   for (const profile of profiles) {
     profileNameCounts.set(profile.name, (profileNameCounts.get(profile.name) || 0) + 1);
@@ -187,22 +160,7 @@ function buildDayCalendar(db, {
   );
 
   const people = selected.map((profile) => {
-    const profileShifts = shiftWindowsByStaff.get(Number(profile.id)) || [];
-    const shift = profileShifts[0];
-    const record = attendanceByStaff.get(Number(profile.id));
-    const mapShift = (item) => ({
-      id: Number(item.id),
-      assignmentType: item.assignment_type,
-      templateId: item.template_id === null ? null : Number(item.template_id),
-      templateName: item.template_name || '',
-      templateColor: item.template_color || '',
-      startAt: item.start_at,
-      endAt: item.end_at,
-      leaveType: item.leave_type,
-      note: item.note,
-      carriedOver: Boolean(item.carried_over),
-      originalStartAt: item.original_start_at || null,
-    });
+    const shift = shiftByStaff.get(Number(profile.id));
     return {
       id: Number(profile.id),
       userId: profile.user_id === null ? null : Number(profile.user_id),
@@ -211,15 +169,16 @@ function buildDayCalendar(db, {
       position: profile.position,
       managerId: profile.manager_id === null ? null : Number(profile.manager_id),
       employmentStatus: profile.employment_status,
-      accountRole: profile.account_role || '',
-      shift: shift ? mapShift(shift) : null,
-      shifts: profileShifts.map(mapShift),
-      attendance: record ? {
-        id: Number(record.id),
-        checkInAt: record.check_in_at,
-        checkOutAt: record.check_out_at,
-        status: record.status,
-        isCorrected: Boolean(record.is_corrected),
+      shift: shift ? {
+        id: Number(shift.id),
+        assignmentType: shift.assignment_type,
+        templateId: shift.template_id === null ? null : Number(shift.template_id),
+        templateName: shift.template_name || '',
+        templateColor: shift.template_color || '',
+        startAt: shift.start_at,
+        endAt: shift.end_at,
+        leaveType: shift.leave_type,
+        note: shift.note,
       } : null,
     };
   });
@@ -241,12 +200,12 @@ function buildDayCalendar(db, {
     if (identityClauses.length) {
       const { from, toExclusive } = shanghaiDayRange(date);
       const where = [
+        ...(ticketsHaveTenant ? ['tenant_id = ?'] : []),
         `(${identityClauses.join(' OR ')})`,
+        "julianday(COALESCE(NULLIF(assigned_at, ''), created)) >= julianday(?)",
         "julianday(COALESCE(NULLIF(assigned_at, ''), created)) < julianday(?)",
-        `(julianday(COALESCE(NULLIF(assigned_at, ''), created))
-          + (CASE WHEN estimated_hours > 0 THEN estimated_hours ELSE 1 END) / 24.0) > julianday(?)`,
       ];
-      const params = [...identityParams, toExclusive, from];
+      const params = [...(ticketsHaveTenant ? [tenant] : []), ...identityParams, from, toExclusive];
       if (communityId !== undefined && communityId !== null && communityId !== '') {
         where.push('community_id = ?');
         params.push(communityId);
@@ -282,23 +241,23 @@ function buildDayCalendar(db, {
       `SELECT 'user' AS key_type, CAST(assignee_user_id AS TEXT) AS key_value,
               AVG(${averageExpression}) AS avg_minutes
        FROM tickets
-       WHERE ${validDuration}
+       WHERE ${ticketsHaveTenant ? 'tenant_id = ? AND ' : ''}${validDuration}
          AND assignee_user_id IN (${userIds.map(() => '?').join(', ')})
        GROUP BY assignee_user_id`
     );
-    aggregateParams.push(...userIds);
+    aggregateParams.push(...(ticketsHaveTenant ? [tenant] : []), ...userIds);
   }
   if (uniqueNames.length) {
     aggregateQueries.push(
       `SELECT 'name' AS key_type, worker AS key_value,
               AVG(${averageExpression}) AS avg_minutes
        FROM tickets
-       WHERE ${validDuration}
+       WHERE ${ticketsHaveTenant ? 'tenant_id = ? AND ' : ''}${validDuration}
          AND assignee_user_id IS NULL
          AND worker IN (${uniqueNames.map(() => '?').join(', ')})
        GROUP BY worker`
     );
-    aggregateParams.push(...uniqueNames);
+    aggregateParams.push(...(ticketsHaveTenant ? [tenant] : []), ...uniqueNames);
   }
   if (aggregateQueries.length) {
     const historyRows = queryAll(
@@ -320,7 +279,6 @@ function buildDayCalendar(db, {
       ? uniqueProfileByName.get(ticket.worker)
       : profileByUser.get(Number(ticket.assignee_user_id));
     const window = estimateTicketWindow(ticket, histories.get(Number(profile.id)));
-    const { from, toExclusive } = shanghaiDayRange(date);
     return {
       ticketId: ticket.id,
       staffId: Number(profile.id),
@@ -330,8 +288,6 @@ function buildDayCalendar(db, {
       status: ticket.status,
       communityId: ticket.community_id,
       ...window,
-      startAt: Date.parse(window.startAt) < Date.parse(from) ? from : window.startAt,
-      endAt: Date.parse(window.endAt) > Date.parse(toExclusive) ? toExclusive : window.endAt,
     };
   });
 

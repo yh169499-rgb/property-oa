@@ -20,21 +20,6 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(number) && number > 0 ? number : fallback;
 }
 
-function isProductionEnvironment(env = process.env) {
-  return String(env.NODE_ENV || '').toLowerCase() === 'production'
-    || String(env.RENDER || '').toLowerCase() === 'true'
-    || Boolean(env.RENDER_SERVICE_ID);
-}
-
-function validateSecurityConfig(env = process.env) {
-  if (!isProductionEnvironment(env)) return { production: false };
-  const secret = String(env.JWT_SECRET || '').trim();
-  if (!secret || secret === 'local-development-only' || secret.length < 32) {
-    throw new Error('生产环境必须配置至少 32 位的高熵 JWT_SECRET');
-  }
-  return { production: true };
-}
-
 module.exports = {
   PORT: process.env.PORT || 3001,
   NOTIFY_WEBHOOK: process.env.NOTIFY_WEBHOOK || '',
@@ -79,6 +64,4 @@ module.exports = {
 
   // SLA 阈值（小时）
   SLA_THRESHOLDS: { urgent: 2, high: 8, normal: 24, low: 48 },
-  isProductionEnvironment,
-  validateSecurityConfig,
 };

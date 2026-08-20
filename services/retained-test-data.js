@@ -44,6 +44,7 @@ function addColumn(db, table, definition) {
 
 function ensureRetainedMigrationSchema(db) {
   addColumn(db, 'users', "status TEXT NOT NULL DEFAULT 'active'");
+  addColumn(db, 'users', 'session_version INTEGER NOT NULL DEFAULT 0');
   for (const definition of [
     "community_id TEXT DEFAULT 'default'",
     "repeat_key TEXT DEFAULT ''",
@@ -82,9 +83,11 @@ function upsertRetainedUsers(db, password) {
       ? user.password
       : bcrypt.hashSync(password, 10);
     if (user) {
+      const revokeSession = passwordHash !== user.password || user.status !== 'active';
       db.run(`UPDATE users
-        SET password = ?, name = ?, role = ?, status = 'active'
-        WHERE id = ?`, [passwordHash, account.name, account.role, user.id]);
+        SET password = ?, name = ?, role = ?, status = 'active',
+          session_version = session_version + ?
+        WHERE id = ?`, [passwordHash, account.name, account.role, revokeSession ? 1 : 0, user.id]);
     } else {
       db.run(`INSERT INTO users (phone, password, name, role, status)
         VALUES (?, ?, ?, ?, 'active')`, [account.phone, passwordHash, account.name, account.role]);
@@ -105,7 +108,10 @@ function disableOtherUsers(db, retainedPhones, nowIso, today) {
     const userIds = inactiveUsers.map(user => Number(user.id));
     const placeholders = userIds.map(() => '?').join(', ');
     const profiles = rows(db, `SELECT id, name FROM staff_profiles WHERE user_id IN (${placeholders})`, userIds);
-    db.run(`UPDATE users SET status = 'disabled' WHERE id IN (${placeholders})`, userIds);
+    db.run(`UPDATE users SET
+      session_version = session_version + CASE WHEN status = 'disabled' THEN 0 ELSE 1 END,
+      status = 'disabled'
+      WHERE id IN (${placeholders})`, userIds);
     if (profiles.length) {
       const profileIds = profiles.map(profile => Number(profile.id));
       const profilePlaceholders = profileIds.map(() => '?').join(', ');

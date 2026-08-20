@@ -22,5 +22,6 @@ test('Render 声明千问报告配置但不把 API Key 写入仓库', () => {
   assert.doesNotMatch(renderYaml, /AI_API_KEY[\s\S]{0,80}value:/);
   assert.match(readme, /AI 优化并润色/);
   assert.match(readme, /免费额度用完即停/);
-  assert.match(readme, /AI_REPORT_ENABLED=true/);
+  assert.match(readme, /`AI_REPORT_ENABLED`[\s\S]{0,80}控制 AI 报告润色是否启用/);
+  assert.doesNotMatch(readme, /\b[A-Z][A-Z0-9_]*(?:SECRET|KEY|PASSWORD|TOKEN)[A-Z0-9_]*\s*=\s*\S+/);
 });

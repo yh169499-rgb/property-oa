@@ -78,6 +78,36 @@ test('创建人员在同一事务中建立账号、直属档案和小区成员�
   assert.equal(one(db, 'SELECT COUNT(*) AS total FROM community_memberships WHERE staff_profile_id = ?', [result.profileId]).total, 1);
 });
 
+test('多名主管分别管理自己的四人名额', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  db.run(`INSERT INTO users (id, phone, password, name, role, status)
+    VALUES (2, '13222514178', 'hash-2', '发财', '主管', 'active')`);
+  db.run(`INSERT INTO staff_profiles
+    (id, user_id, name, phone, position, employment_status, created_at, updated_at)
+    VALUES (20, 2, '发财', '13222514178', '主管', 'active', '2026-01-01', '2026-01-01')`);
+
+  const first = createStaffAccount(db, createInput(1), { id: 1, role: '主管' });
+  const second = createStaffAccount(db, createInput(2), { id: 2, role: '主管' });
+  const third = createStaffAccount(db, createInput(3), { id: 2, role: '主管' });
+  const fourth = createStaffAccount(db, createInput(4), { id: 2, role: '主管' });
+  const fifth = createStaffAccount(db, createInput(5, 'keeper'), { id: 2, role: '主管' });
+
+  assert.equal(one(db, 'SELECT manager_id FROM staff_profiles WHERE id = ?', [first.profileId]).manager_id, 10);
+  assert.deepEqual(
+    db.exec('SELECT manager_id, COUNT(*) FROM staff_profiles WHERE employment_status = \'active\' AND manager_id IS NOT NULL GROUP BY manager_id ORDER BY manager_id')[0].values,
+    [[10, 1], [20, 4]]
+  );
+  assert.throws(
+    () => createStaffAccount(db, createInput(6), { id: 2, role: '主管' }),
+    (error) => error.code === 'ROLE_CAPACITY_FULL' || error.code === 'TEAM_CAPACITY_FULL'
+  );
+  assert.equal(one(db, 'SELECT manager_id FROM staff_profiles WHERE id = ?', [second.profileId]).manager_id, 20);
+  assert.equal(one(db, 'SELECT manager_id FROM staff_profiles WHERE id = ?', [third.profileId]).manager_id, 20);
+  assert.equal(one(db, 'SELECT manager_id FROM staff_profiles WHERE id = ?', [fourth.profileId]).manager_id, 20);
+  assert.equal(one(db, 'SELECT manager_id FROM staff_profiles WHERE id = ?', [fifth.profileId]).manager_id, 20);
+});
+
 test('第 5 名或岗位已满时审批回滚且申请保持 pending', async (t) => {
   const db = await fixture();
   t.after(() => db.close());

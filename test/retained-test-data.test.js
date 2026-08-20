@@ -2,7 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const bcrypt = require('bcryptjs');
-const { ensureWorkforceSchema } = require('../workforce-schema');
+const { ensureWorkforceSchema, backfillDefaultPerformanceRules } = require('../workforce-schema');
+const { backfillTicketAssignees } = require('../services/workforce-migration');
 
 let SQL;
 
@@ -32,7 +33,8 @@ function createFixture() {
       password TEXT NOT NULL,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'worker',
-      status TEXT NOT NULL DEFAULT 'active'
+      status TEXT NOT NULL DEFAULT 'active',
+      session_version INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE tickets (
       id TEXT PRIMARY KEY,
@@ -111,6 +113,8 @@ function createFixture() {
   db.run(`INSERT INTO ticket_activity_logs
     (ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)
     VALUES ('REAL-HISTORY-001', ?, ?, 'assign', '{}', '2025-01-01T01:00:00.000Z')`, [legacyUser, legacyProfile]);
+  backfillTicketAssignees(db);
+  backfillDefaultPerformanceRules(db);
   return db;
 }
 
@@ -172,6 +176,25 @@ test('只激活固定账号并停用其他账号但保留历史工单和活动',
   for (const user of rows(db, "SELECT password FROM users WHERE status = 'active'")) {
     assert.equal(bcrypt.compareSync('runtime-secret', user.password), true);
   }
+});
+
+test('保留账号换密或重启、其他账号停用都永久撤销旧会话', () => {
+  const { migrateRetainedTestData } = require('../services/retained-test-data');
+  const db = createFixture();
+  db.run("UPDATE users SET status='disabled', session_version=7 WHERE phone='13800000002'");
+  db.run("UPDATE users SET session_version=11 WHERE phone='13900000000'");
+
+  migrateRetainedTestData(db, options());
+  assert.deepEqual(one(db,
+    "SELECT status,session_version FROM users WHERE phone='13800000002'"
+  ), { status: 'active', session_version: 8 });
+  assert.deepEqual(one(db,
+    "SELECT status,session_version FROM users WHERE phone='13900000000'"
+  ), { status: 'disabled', session_version: 12 });
+
+  migrateRetainedTestData(db, options());
+  assert.equal(one(db, "SELECT session_version FROM users WHERE phone='13800000002'").session_version, 8);
+  assert.equal(one(db, "SELECT session_version FROM users WHERE phone='13900000000'").session_version, 12);
 });
 
 test('固定账号各有一个 active 档案并统一归主管管理', () => {

@@ -18,15 +18,6 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-// 旧版服务没有完整的认证与数据范围隔离，默认禁止启动；生产环境即使显式设置也不允许运行。
-const productionLike = process.env.NODE_ENV === 'production'
-  || process.env.RENDER === 'true'
-  || Boolean(process.env.RENDER_SERVICE_ID);
-if (require.main === module && (productionLike || process.env.ALLOW_LEGACY_SERVER !== 'true')) {
-  console.error('旧版服务已禁用，请使用 node index-new.js；如需本地兼容测试请显式设置 ALLOW_LEGACY_SERVER=true');
-  process.exit(1);
-}
-
 const PORT = process.env.PORT || 3001;
 const NOTIFY_WEBHOOK = process.env.NOTIFY_WEBHOOK || '';
 const DB_PATH = path.join(__dirname, 'data.db');

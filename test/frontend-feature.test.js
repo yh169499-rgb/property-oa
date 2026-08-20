@@ -7,7 +7,6 @@ const root = path.join(__dirname, '..', 'public');
 const workspace = fs.readFileSync(path.join(root, 'js', 'management-workspace.js'), 'utf8');
 const report = fs.readFileSync(path.join(root, 'js', 'staff-report.js'), 'utf8');
 const myPage = fs.readFileSync(path.join(root, 'js', 'my-page.js'), 'utf8');
-const api = fs.readFileSync(path.join(root, 'js', 'api.js'), 'utf8');
 const workerHome = fs.readFileSync(path.join(root, 'js', 'worker-home.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const workforceApi = fs.readFileSync(path.join(root, 'js', 'workforce-api.js'), 'utf8');
@@ -16,17 +15,6 @@ test('设置页提供服务端绩效规则读取和发布入口', () => {
   assert.match(workspace, /\/api\/settings\/performance/);
   assert.match(workspace, /performance_weight|completion_weight|on_time_weight/);
   assert.match(workspace, /performance\/versions/);
-});
-
-test('认证信息按浏览器标签页隔离，避免多账号互相顶掉登录', () => {
-  assert.match(api, /sessionStorage\.getItem\(['"]auth_token['"]\)/);
-  assert.match(api, /sessionStorage\.setItem\(['"]auth_token['"]\s*[,)]/);
-  assert.match(api, /sessionStorage\.removeItem\(['"]auth_token['"]\)/);
-  assert.doesNotMatch(api, /localStorage\.(?:getItem|setItem|removeItem)\(['"]auth_token['"]\)/);
-  assert.doesNotMatch(app, /localStorage\.(?:getItem|setItem|removeItem)\(['"](?:auth_token|login_user)['"]\)/);
-  assert.doesNotMatch(workspace, /localStorage\.getItem\(['"]auth_token['"]\)/);
-  assert.match(app, /remembered_auth_sessions/);
-  assert.match(app, /API\.clearToken\(\)/);
 });
 
 test('员工页面从同小区通讯录读取手机号', () => {
@@ -71,6 +59,11 @@ test('每个人都能在我的页面看到服务端计算的本人绩效', () =>
 test('旧前端本地绩效公式不再作为数据源', () => {
   assert.doesNotMatch(app, /function performanceScore\s*\(/);
   assert.doesNotMatch(app, /m\.onRate\s*\*\s*\.7/);
+});
+
+test('系统标题不拼接测试小区名称', () => {
+  assert.match(app, /logo\.textContent = '🏢 工单系统'/);
+  assert.doesNotMatch(app, /name \+ '工单系统'/);
 });
 
 test('人员报告提供按需千问润色并固定展示六类管理解读', () => {

@@ -15,7 +15,7 @@
   var activeTab = 'organization';
 
   function root() { return document.getElementById('management-workspace'); }
-  function token() { return sessionStorage.getItem('auth_token'); }
+  function token() { return localStorage.getItem('auth_token'); }
   function headers(json) {
     var value = {};
     if (json) value['Content-Type'] = 'application/json';

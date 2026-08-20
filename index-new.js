@@ -7,8 +7,15 @@ const { createServerApp } = require('./server-app');
 
 // 启动
 async function start() {
-  config.validateSecurityConfig();
   await initDB();
+  const { runStartupStandaloneManager } = require('./services/startup-standalone-manager');
+  const standaloneManager = await runStartupStandaloneManager({
+    db: getDB(),
+    persist: saveDB,
+  });
+  if (standaloneManager.applied) {
+    console.log('✅ 独立主管账号迁移完成:', JSON.stringify(standaloneManager.summary));
+  }
   const { runStartupRetainedMigration } = require('./services/startup-retained-migration');
   const retainedMigration = await runStartupRetainedMigration({
     db: getDB(),

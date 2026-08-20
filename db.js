@@ -5,14 +5,18 @@ const fs = require('fs');
 const path = require('path');
 const initSqlJs = require('sql.js');
 const config = require('./config');
+const { ensureCoreSchema } = require('./services/core-schema');
+const { ensureTenantSchema } = require('./services/tenant-schema');
 const {
   ensureWorkforceSchema,
   backfillCommunityMemberships,
+  backfillDefaultPerformanceRules,
 } = require('./workforce-schema');
 const {
   migrateUsersToProfiles,
   backfillTicketAssignees,
 } = require('./services/workforce-migration');
+const { hasPendingTenantMigration } = require('./services/tenant-migration');
 const {
   getSupabaseStorageConfig,
   ensureBucket,
@@ -33,6 +37,47 @@ let db;
 let persistToDisk = true;
 let remoteConfig = getSupabaseStorageConfig(config);
 let uploadQueue = createUploadQueue(async bytes => uploadDatabase(remoteConfig, bytes));
+
+function ensureDatabaseSchema(targetDb) {
+  targetDb.run('SAVEPOINT ensure_database_schema');
+  try {
+    ensureCoreSchema(targetDb);
+    ensureTenantSchema(targetDb);
+    ensureWorkforceSchema(targetDb);
+    ensureTenantSchema(targetDb);
+    targetDb.run('RELEASE SAVEPOINT ensure_database_schema');
+  } catch (error) {
+    try {
+      targetDb.run('ROLLBACK TO SAVEPOINT ensure_database_schema');
+      targetDb.run('RELEASE SAVEPOINT ensure_database_schema');
+    } catch (_) {}
+    throw error;
+  }
+}
+
+function backfillWorkforceData(targetDb, nowIso = new Date().toISOString()) {
+  targetDb.run('SAVEPOINT backfill_workforce_data');
+  try {
+    migrateUsersToProfiles(targetDb, nowIso);
+    backfillCommunityMemberships(targetDb, nowIso);
+    backfillTicketAssignees(targetDb);
+    backfillDefaultPerformanceRules(targetDb, nowIso);
+    targetDb.run('RELEASE SAVEPOINT backfill_workforce_data');
+  } catch (error) {
+    try {
+      targetDb.run('ROLLBACK TO SAVEPOINT backfill_workforce_data');
+      targetDb.run('RELEASE SAVEPOINT backfill_workforce_data');
+    } catch (_) {}
+    throw error;
+  }
+}
+
+function assertProductionTenantMigrationReady(targetDb, env = process.env) {
+  if (env.NODE_ENV !== 'production' || !hasPendingTenantMigration(targetDb)) return;
+  const error = new Error('TENANT_MIGRATION_REQUIRED');
+  error.code = 'TENANT_MIGRATION_REQUIRED';
+  throw error;
+}
 
 async function restoreRemoteSnapshot(storageConfig, localPath, download = downloadDatabase) {
   if (!storageConfig) return null;
@@ -65,129 +110,10 @@ async function initDB() {
     db = new SQL.Database();
   }
 
-  // 工单表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS tickets (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL DEFAULT 'repair',
-      cat TEXT NOT NULL DEFAULT '其他',
-      desc TEXT DEFAULT '',
-      loc TEXT DEFAULT '',
-      priority TEXT DEFAULT 'normal',
-      status TEXT DEFAULT 'wait',
-      worker TEXT DEFAULT '',
-      message TEXT DEFAULT '',
-      created TEXT NOT NULL,
-      finished TEXT DEFAULT '',
-      reject_reason TEXT DEFAULT '',
-      estimated_hours REAL DEFAULT 0,
-      session_id TEXT DEFAULT '',
-      community_id TEXT DEFAULT 'default',
-      repeat_key TEXT DEFAULT '',
-      repeat_of TEXT DEFAULT '',
-      repeat_count INTEGER DEFAULT 1,
-      is_recurring INTEGER DEFAULT 0,
-      recurrence_note TEXT DEFAULT '',
-      feedback_count INTEGER DEFAULT 1,
-      metadata TEXT DEFAULT '{}',
-      performance_rule_version_id INTEGER
-    )
-  `);
-
-  // 小区表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS communities (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      address TEXT DEFAULT '',
-      created TEXT NOT NULL
-    )
-  `);
-
-  // 小区-人员权限表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS community_permissions (
-      community_id TEXT NOT NULL,
-      staff_name TEXT NOT NULL,
-      PRIMARY KEY (community_id, staff_name)
-    )
-  `);
-
-  // 邀请码表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS invite_codes (
-      code TEXT PRIMARY KEY,
-      community_id TEXT NOT NULL,
-      created TEXT NOT NULL
-    )
-  `);
-
-  // 待审核注册表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS pending_registrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT NOT NULL,
-      password TEXT NOT NULL,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'worker',
-      skill TEXT DEFAULT '',
-      community_id TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      created TEXT NOT NULL
-    )
-  `);
-
-  // 用户表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'worker',
-      status TEXT NOT NULL DEFAULT 'active'
-    )
-  `);
-
-  // 人员状态表
-  db.run(`
-    CREATE TABLE IF NOT EXISTS staff_status (
-      name TEXT PRIMARY KEY,
-      status TEXT NOT NULL DEFAULT 'on',
-      updated TEXT
-    )
-  `);
-
-  // 兼容旧数据库的列迁移
-  const migrations = [
-    `ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
-    `ALTER TABLE tickets ADD COLUMN session_id TEXT DEFAULT ''`,
-    `ALTER TABLE tickets ADD COLUMN community_id TEXT DEFAULT 'default'`,
-    `ALTER TABLE tickets ADD COLUMN repeat_key TEXT DEFAULT ''`,
-    `ALTER TABLE tickets ADD COLUMN repeat_of TEXT DEFAULT ''`,
-    `ALTER TABLE tickets ADD COLUMN repeat_count INTEGER DEFAULT 1`,
-    `ALTER TABLE tickets ADD COLUMN is_recurring INTEGER DEFAULT 0`,
-    `ALTER TABLE tickets ADD COLUMN recurrence_note TEXT DEFAULT ''`,
-    `ALTER TABLE tickets ADD COLUMN feedback_count INTEGER DEFAULT 1`,
-    `ALTER TABLE tickets ADD COLUMN metadata TEXT DEFAULT '{}'`,
-  ];
-  migrations.forEach(sql => { try { db.run(sql); } catch(e) { /* 已存在 */ } });
-
-  // 旧版本把 lead 当作主管别名；迁移为明确的最高权限角色，避免旧账号被误判为普通人员。
-  try { db.run("UPDATE users SET role = '主管' WHERE LOWER(TRIM(role)) = 'lead'"); } catch (e) { /* 旧测试库或异常旧表忽略 */ }
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_recurrence ON tickets (community_id, repeat_key, created)`);
-  ensureWorkforceSchema(db);
+  ensureDatabaseSchema(db);
+  assertProductionTenantMigrationReady(db);
   const nowIso = new Date().toISOString();
-  migrateUsersToProfiles(db, nowIso);
-  backfillCommunityMemberships(db, nowIso);
-  backfillTicketAssignees(db);
-
-  // 确保默认小区存在
-  const defaultCommunity = queryOne("SELECT id FROM communities WHERE id = 'default'");
-  if (!defaultCommunity) {
-    db.run("INSERT INTO communities (id, name, address, created) VALUES ('default', '默认小区', '', ?)", [nowIso]);
-  }
+  backfillWorkforceData(db, nowIso);
 
   await persistInitialSnapshot(saveDB, Boolean(remoteConfig?.syncRequired));
   return db;
@@ -270,4 +196,7 @@ module.exports = {
   run,
   getDB,
   setDBForTests,
+  ensureDatabaseSchema,
+  backfillWorkforceData,
+  assertProductionTenantMigrationReady,
 };

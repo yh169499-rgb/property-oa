@@ -11,18 +11,16 @@
 ## 系统架构
 
 ```
-居民微信群
-    ↓ 消息
-句子秒懂 AI 智能体（意图识别 + 信息抽取）
-    ↓ POST /api/tickets
-┌─────────────────────────────────────────────┐
-│  Node.js + Express + SQLite                  │
-│  JWT鉴权 · bcrypt · 模块化路由               │
-│  工单管理 · 派单 · 完结通知 · 定时提醒        │
-└─────────────────────────────────────────────┘
-    ↑ 管理网页                ↓ 触发事件
-    主管/师傅/管家         句子秒懂 → 群内回复
+唯一平台运维 platform_owner（无 tenant）
+    ↓ 审核与维护，不进入企业工单
+多个企业/租户（严格 tenant_id 隔离）
+    ↓ 每家企业有且仅有一名主管
+本企业主管
+    ↓ 管理可配置人数的在职团队
+维修师傅 / 物业管家 / 小区 / 工单 / 排班 / 报告
 ```
+
+服务仍是 Node.js + Express + SQLite 单体部署。所有企业业务表均带 `tenant_id`，并由服务端从数据库身份注入租户范围。企业列表不返回他租户数据，跨租户详情统一返回 `404`。
 
 ---
 
@@ -81,9 +79,12 @@ node migrate-passwords.js
 ### 角色体系
 | 角色 | 能力 | 可见范围 |
 |------|------|---------|
-| 主管 | 派单、确认、驳回、催办、管理 | 全部 |
-| 维修师傅 | 完成、上传照片、搁置、退回 | 仅自己 |
-| 物业管家 | 处理投诉/帮助、搁置、退回 | 仅自己 |
+| 平台运维 | 审核企业、停用/恢复企业、调整人数上限 | 平台元数据，不可访问企业工单 |
+| 企业主管 | 派单、确认、驳回、催办、管理 | 仅本企业 |
+| 维修师傅 | 完成、上传照片、搁置、退回 | 仅本企业且与本人相关 |
+| 物业管家 | 处理投诉/帮助、搁置、退回 | 仅本企业且与本人相关 |
+
+每企业的 `staff_limit` 默认 4，范围 1–999，限制在职维修师傅与物业管家总数，不规定两类人员比例。人员离职后删除登录账号、释放名额，历史工单保留并标记“已离职”。
 
 ### 运营看板（仅主管）
 - KPI 卡片 + 趋势图 + 处理量 + 绩效表
@@ -152,6 +153,16 @@ server/
 |------|------|
 | PORT | 端口（默认 3001） |
 | JWT_SECRET | JWT 签名密钥 |
+| PLATFORM_PROVISIONING_SECRET | 保护平台运维初始化命令 |
+| PLATFORM_OWNER_PASSWORD | 平台运维初始凭据的运行时输入 |
+| BLANK_SUPERVISOR_PASSWORD | 发财企业空白主管初始凭据的运行时输入 |
+| RETAINED_TEST_PASSWORD | 保留全流程测试账号时由运维临时注入的运行时密码；只填写在受保护环境中，不写入 Git、文档或日志 |
+| SUPABASE_URL | Supabase 服务端项目端点 |
+| SUPABASE_SERVICE_ROLE_KEY | Supabase Storage 服务端访问凭据 |
+| SUPABASE_STORAGE_BUCKET | 私有快照桶名称 |
+| SUPABASE_DB_OBJECT | 生产 SQLite 快照对象名 |
+| SUPABASE_BACKUP_PREFIX | 不可变备份对象的前缀 |
+| SUPABASE_SYNC_REQUIRED | 远程快照不可用时的安全启动闸门 |
 | JZMM_ACCESS_KEY_ID | 句子秒懂 AccessKeyId |
 | JZMM_ACCESS_KEY_SECRET | 句子秒懂 AccessKeySecret |
 | JZMM_BOT_ID | 秒懂机器人 ID |
@@ -165,16 +176,16 @@ server/
 
 AI 不参与工单统计、绩效计算或权限判断。服务端只向模型发送岗位、日期范围、工单数量、分类分布、处理时长、SLA 和绩效分等聚合数据，不发送姓名、手机号、人员/工单/小区 ID、地址、原始描述、图片或附件。AI 调用失败、超时或免费额度耗尽时，原始报告仍可正常查看和导出。
 
-首期使用阿里云百炼北京地域的 OpenAI 兼容接口和 `qwen3.6-flash`。先在百炼控制台创建 API Key，并开启“免费额度用完即停”，然后在 Render 服务的 **Environment** 中配置：
+首期使用阿里云百炼北京地域的 OpenAI 兼容接口和 `qwen3.6-flash`。先在百炼控制台创建 API Key，并开启“免费额度用完即停”，然后在 Render 服务的 **Environment** 中按名称配置：
 
-```text
-AI_REPORT_ENABLED=true
-AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-AI_API_KEY=<仅保存在 Render 服务端环境变量中>
-AI_MODEL=qwen3.6-flash
-AI_TIMEOUT_MS=30000
-AI_REPORT_PROMPT_VERSION=report-analysis-v1
-```
+| 变量 | 用途 |
+| --- | --- |
+| `AI_REPORT_ENABLED` | 控制 AI 报告润色是否启用 |
+| `AI_BASE_URL` | 模型服务的 OpenAI 兼容端点 |
+| `AI_API_KEY` | 服务端访问凭据 |
+| `AI_MODEL` | 润色使用的模型名称 |
+| `AI_TIMEOUT_MS` | 单次调用超时上限 |
+| `AI_REPORT_PROMPT_VERSION` | 提示词和缓存版本 |
 
 `AI_API_KEY` 不得写入 GitHub、`render.yaml` 的 `value`、数据库或浏览器代码。相同人员、日期、小区、模型和提示词版本的报告会命中 SQLite/Supabase 持久化缓存，不重复消耗 Token；每个登录用户每分钟最多调用 5 次。
 
@@ -192,51 +203,40 @@ Render Web Service 的默认文件系统是临时的，重新部署或实例重�
 
 保存后重新部署一次。磁盘挂载前已经丢失的临时数据库无法自动恢复；挂载完成后，账号、工单、排班、考勤、模板和工单附件会跨部署保留。
 
-### Supabase 免费独立存储（推荐）
+### Supabase 服务端快照存储（推荐）
 
-如果不升级 Render 实例，可使用 Supabase Free 保存 SQLite 数据库快照。创建 Supabase 项目和私有 Storage bucket `property-oa-data` 后，在 Render 环境变量中设置：
-
-```text
-SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<仅服务端保存，不要放到前端>
-SUPABASE_STORAGE_BUCKET=property-oa-data
-SUPABASE_DB_OBJECT=production/data.db
-SUPABASE_BACKUP_PREFIX=backups
-SUPABASE_SYNC_REQUIRED=false
-```
-
-首次迁移前先下载当前数据库副本并显式确认覆盖：
-
-```bash
-SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... \
-node scripts/migrate-sqlite-to-supabase.js --source=/absolute/path/to/data.db --confirm
-```
+可使用 Supabase 私有 Storage 保存 SQLite 快照。所需服务端变量已在上表按“名称 + 用途”列出；其值只在 Render 的受保护环境中注入，不写入文档、前端、Git 或命令行。
 
 迁移完成并确认远程对象存在后，将 `SUPABASE_SYNC_REQUIRED` 改为 `true`，这样生产服务找不到远程快照时会拒绝启动，避免再次悄悄创建空数据库。可通过主管账号访问 `/api/persistence/status` 查看最后同步时间和错误。
 
 迁移后可运行 `npm run verify:supabase`，比较本地副本与远程快照的 SHA-256、表集合和各表记录数。
 
-### 固定测试账号与全流程数据准备
+### 固定生产账号与多租户迁移
 
-固定测试账号迁移工具默认只预演，不会修改数据库。它会把指定的 7 个测试账号规范为启用状态，将其他账号停用并撤销当前人员关系，同时保留历史工单和操作日志；随后写入带 `MOCK-E2E` 标记的组织、小区、排班、请假、工单、活动和绩效样本。工具不会生成新的考勤记录。
+| 手机号 | 身份 | 数据规划 |
+| --- | --- | --- |
+| `13222514178` | 句子工单管理员 / `platform_owner` | 无 tenant，仅用于平台运维 |
+| `13800000001` | 测试企业主管 | 保留原测试人员及全部 mock 数据 |
+| `17713302589` | 发财企业主管“发财” | 空白企业，不写入 mock 数据 |
 
-测试密码必须在运行时通过 `RETAINED_TEST_PASSWORD` 提供，不要写入仓库、Render 配置文件、命令历史或运维日志。下面的 `<运行时输入>` 仅为占位符：
+生产操作必须使用下列单一候选流程：
 
-```bash
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:dry-run -- --source=/absolute/path/to/data.db
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:apply -- --source=/absolute/path/to/data.db
-RETAINED_TEST_PASSWORD='<运行时输入>' npm run retained:verify -- --source=/absolute/path/to/data.db
-```
+1. 停止写入，并在整个迁移、部署和验收期间继续冻结。
+2. 冻结写入后的 Render `/var/data/data.db` 是唯一权威候选；先将它复制到 `/absolute/path/multi-tenant-candidate.db`，后续不再更换候选路径。
+3. 下载并校验 Supabase 快照，Supabase 只作对照和备份。比较 SHA-256、表集合和记录数；任一不一致都必须中止，先同步或排障，不得迁移旧远端快照。
+4. 保存迁移前备份及其校验和、表集合和记录数摘要。
+5. 只对候选副本执行 `npm run tenant:dry-run -- --source=/absolute/path/multi-tenant-candidate.db`。
+6. 仍只对同一候选副本执行 `npm run tenant:apply -- --confirm=MIGRATE-MULTI-TENANT --source=/absolute/path/multi-tenant-candidate.db`。
+7. 仍只对同一候选副本执行 `npm run verify:multi-tenant -- --source=/absolute/path/multi-tenant-candidate.db`。
+8. 验收候选库的租户归属、唯一主管、人数上限、历史引用和空白企业。
+9. 上传新快照为新的不可变 Supabase 对象；校验该对象后，再原子切换 `SUPABASE_DB_OBJECT`，不直接覆盖旧快照。
+10. 部署新版本，但仍不对外恢复写入。
+11. 保持停止写入，验证三个固定账号登录、跨租户隔离、完整性、持久化；全部验收通过后才恢复写入。
+12. 保留旧快照、Render 原备份和候选库备份，直到观察期结束。
 
-生产执行前必须先冻结人工写入，并分别备份 Render `/var/data/data.db` 与 Supabase `production/data.db`。只能对下载后的候选副本执行 dry-run、apply 和 verify；验证结果为 `ok: true` 后才能原子替换 Render 数据库并重新同步 Supabase。执行期间保留两份原始备份作为回滚点，直到 7 个账号登录、权限、日历、工单和报告全部验收完成。
+回滚条件包括快照/表记录校验失败、存在空 `tenant_id`、企业多主管、跨租户可见、历史工单断链、三个固定账号任一验证失败，以及部署后数据/认证错误。回滚步骤：验收失败时仍冻结写入，在该状态下回滚，因此不丢失部署后写入。回滚时保留故障快照，恢复迁移前 Render 备份，把同一备份上传为另一不可变 Supabase 回滚对象并校验，原子切回 `SUPABASE_DB_OBJECT`，再恢复旧版本。
 
-需要生成完整流程演示账号时，在 Render Shell 或一次性本地命令中临时设置密码（不要写入 GitHub 或长期环境变量）：
-
-```bash
-DEMO_PASSWORD='仅用于演示的临时密码' SEED_WORKFORCE_DEMO=true node scripts/seed-workforce-demo.js
-```
-
-脚本会幂等创建 `13800000011`（主管）、`13800000012`（师傅）和 `13800000013`（管家），并写入人员层级、班次模板、近 7 天排班考勤和工单演示数据。
+提前恢复写入会要求另外设计可验证的增量重放，不作为本流程允许路径。详见 [API 文档](docs/API.md) 和 [安全审查手册](docs/SECURITY-AUDIT.md)。
 
 ---
 
@@ -253,6 +253,6 @@ DEMO_PASSWORD='仅用于演示的临时密码' SEED_WORKFORCE_DEMO=true node scr
 
 - ✅ 密码 bcrypt 哈希（10轮）
 - ✅ JWT token 鉴权
-- ✅ 敏感 API 需 admin 权限
+- ✅ 平台域与企业域分离，企业业务服务端注入 `tenant_id`
 - ✅ 登录限流（5次/分钟/IP）
 - ✅ 滑动验证码（防机器人）

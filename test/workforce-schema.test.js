@@ -1,7 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const database = require('../db');
-const { ensureWorkforceSchema, backfillCommunityMemberships } = require('../workforce-schema');
+const {
+  ensureWorkforceSchema,
+  backfillCommunityMemberships,
+  backfillDefaultPerformanceRules,
+} = require('../workforce-schema');
+const { backfillTicketAssignees } = require('../services/workforce-migration');
 const { startHttpServer } = require('./helpers/http-server');
 const {
   createTestDB,
@@ -113,6 +118,7 @@ test('ticket assignee profile backfill uses user identity and never guesses by n
   `);
 
   ensureWorkforceSchema(db);
+  backfillTicketAssignees(db);
 
   assert.deepEqual(
     db.exec('SELECT id, assignee_staff_profile_id FROM tickets ORDER BY id')[0].values,
@@ -124,10 +130,11 @@ test('ticket assignee profile backfill uses user identity and never guesses by n
   );
 });
 
-test('performance rules include a stable default version 1', async (t) => {
+test('performance rule backfill includes a stable default version 1', async (t) => {
   const db = await createTestDB();
   t.after(() => db.close());
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
 
   const rows = db.exec(`
     SELECT version_no, completion_weight, on_time_weight, quality_weight,
@@ -140,6 +147,7 @@ test('performance rules include a stable default version 1', async (t) => {
   assert.deepEqual(rows[0].values[0], [1, 30, 50, 20, 90, 80, 60, 1, 1]);
 
   ensureWorkforceSchema(db);
+  backfillDefaultPerformanceRules(db);
   assert.equal(db.exec('SELECT COUNT(*) FROM performance_rule_versions')[0].values[0][0], 1);
 });
 
@@ -164,6 +172,8 @@ test('old community permissions migrate only uniquely named staff profiles', asy
   db.run("INSERT INTO staff_profiles (name) VALUES ('李四')");
   ensureWorkforceSchema(db);
   ensureWorkforceSchema(db);
+  backfillCommunityMemberships(db);
+  backfillCommunityMemberships(db);
 
   const rows = db.exec(`
     SELECT community_id, staff_profile_id
@@ -193,28 +203,28 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
 
   const expectedColumns = {
     staff_profiles: [
-      'id', 'user_id', 'name', 'birth_month', 'join_date', 'phone',
+      'id', 'tenant_id', 'user_id', 'name', 'birth_month', 'join_date', 'phone',
       'position', 'skill', 'manager_id', 'employment_status', 'departed_at',
       'departed_by_user_id', 'created_at', 'updated_at',
     ],
     shift_templates: [
-      'id', 'name', 'start_time', 'end_time', 'color', 'grace_minutes',
+      'id', 'tenant_id', 'name', 'start_time', 'end_time', 'color', 'grace_minutes',
       'created_by',
     ],
     shift_assignments: [
-      'id', 'staff_id', 'work_date', 'assignment_type', 'template_id',
+      'id', 'tenant_id', 'staff_id', 'work_date', 'assignment_type', 'template_id',
       'start_at', 'end_at', 'leave_type', 'note', 'created_by', 'updated_at',
     ],
     attendance_records: [
-      'id', 'staff_id', 'shift_assignment_id', 'work_date', 'check_in_at',
+      'id', 'tenant_id', 'staff_id', 'shift_assignment_id', 'work_date', 'check_in_at',
       'check_out_at', 'status', 'is_corrected', 'updated_at',
     ],
     attendance_change_logs: [
-      'id', 'attendance_id', 'operator_user_id', 'before_json', 'after_json',
+      'id', 'tenant_id', 'attendance_id', 'operator_user_id', 'before_json', 'after_json',
       'reason', 'created_at',
     ],
     ticket_activity_logs: [
-      'id', 'ticket_id', 'actor_user_id', 'actor_staff_id', 'action',
+      'id', 'tenant_id', 'ticket_id', 'actor_user_id', 'actor_staff_id', 'action',
       'metadata', 'created_at',
     ],
   };
@@ -237,7 +247,7 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
   const uniqueMembership = membershipIndexes.find((row) => row[2] === 1);
   assert.ok(uniqueMembership, 'community memberships should have a unique index');
   const membershipIndexColumns = db.exec(`PRAGMA index_info(${JSON.stringify(uniqueMembership[1])})`);
-  assert.deepEqual(membershipIndexColumns[0].values.map((row) => row[2]), ['community_id', 'staff_profile_id']);
+  assert.deepEqual(membershipIndexColumns[0].values.map((row) => row[2]), ['tenant_id', 'community_id', 'staff_profile_id']);
 });
 
 test('daily shift assignments and attendance records are unique per staff member', async (t) => {

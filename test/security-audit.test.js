@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const bcrypt = require('bcryptjs');
 const { createTestDB } = require('./helpers/test-db');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function request(server, path, options = {}) {
@@ -69,7 +69,7 @@ async function fixture(t) {
     INSERT INTO attendance_records (staff_id, work_date) VALUES (3, '2026-08-11');
     INSERT INTO ticket_activity_logs (ticket_id, actor_user_id) VALUES ('ticket-1', 3);
   `);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   return { db, server };
 }
