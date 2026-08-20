@@ -31,10 +31,14 @@ function prefixed(column, alias = '') {
 
 function ticketReadScope(req, alias = '', options = {}) {
   const user = req && req.user;
+  const legacyEmptyTenant = options.allowLegacyEmptyTenant === true
+    && options.hasTypeColumn === false;
   const tenantScope = options.hasTenantColumn === false
     ? { sql: '', params: [] }
     : {
-        sql: ` AND ${prefixed('tenant_id', alias)} = ?`,
+        sql: legacyEmptyTenant
+          ? ` AND (${prefixed('tenant_id', alias)} = ? OR COALESCE(${prefixed('tenant_id', alias)}, '') = '')`
+          : ` AND ${prefixed('tenant_id', alias)} = ?`,
         params: [user ? user.tenant_id : null],
       };
   if (isSupervisorUser(user)) return tenantScope;

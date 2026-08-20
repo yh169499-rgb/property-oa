@@ -283,6 +283,10 @@ router.get('/', requireAuth, (req, res) => {
   const scope = ticketReadScope(req, '', {
     hasTypeColumn: tableHasColumn('tickets', 'type'),
     hasTenantColumn: tableHasColumn('tickets', 'tenant_id'),
+    // A pre-migration legacy table has no `type` column. Keep its historical
+    // rows readable during the one-time migration; all current schemas carry
+    // `type` and therefore require an exact tenant match.
+    allowLegacyEmptyTenant: true,
   });
   const where = filters.length ? filters.join(' AND ') : '1 = 1';
   const rows = queryAll(
