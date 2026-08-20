@@ -30,18 +30,28 @@ function prefixed(column, alias = '') {
 }
 
 function ticketReadScope(req, alias = '', options = {}) {
-  if (isSupervisorUser(req && req.user)) return { sql: '', params: [] };
+  const user = req && req.user;
+  const tenantScope = options.hasTenantColumn === false
+    ? { sql: '', params: [] }
+    : {
+        sql: ` AND ${prefixed('tenant_id', alias)} = ?`,
+        params: [user ? user.tenant_id : null],
+      };
+  if (isSupervisorUser(user)) return tenantScope;
   const typeScope = options.hasTypeColumn === false
     ? ''
     : ` AND ${prefixed('type', alias)} IN ('repair', 'complaint', 'help')`;
   return {
-    sql: ` AND ${prefixed('assignee_user_id', alias)} = ?${typeScope}`,
-    params: [req && req.user ? req.user.id : null],
+    sql: `${tenantScope.sql} AND ${prefixed('assignee_user_id', alias)} = ?${typeScope}`,
+    params: [...tenantScope.params, user ? user.id : null],
   };
 }
 
 function canReadTicket(req, ticket) {
   if (!ticket || !req || !req.user) return false;
+  if (Object.prototype.hasOwnProperty.call(ticket, 'tenant_id')) {
+    if (!req.user.tenant_id || String(ticket.tenant_id || '') !== String(req.user.tenant_id)) return false;
+  }
   if (isSupervisorUser(req.user)) return true;
   if (!STAFF_TICKET_TYPES.has(String(ticket.type || ''))) return false;
   if (ticket.assignee_user_id == null || req.user.id == null) return false;

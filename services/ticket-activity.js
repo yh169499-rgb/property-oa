@@ -39,12 +39,23 @@ function tableColumns(db, table) {
   return new Set(result[0] ? result[0].values.map((row) => row[1]) : []);
 }
 
-function resolveAssignee(db, workerName, supervisorUserId) {
+function resolveAssignee(db, workerName, supervisorUserId, tenantId) {
   const displayName = String(workerName || '').trim();
   if (!displayName || supervisorUserId == null) throw assigneeError();
+  const usersTenantAware = tableColumns(db, 'users').has('tenant_id');
+  const profilesTenantAware = tableColumns(db, 'staff_profiles').has('tenant_id');
+  const tenantAware = usersTenantAware && profilesTenantAware;
+  if (tenantAware && !tenantId) throw assigneeError();
   const userStatus = tableColumns(db, 'users').has('status')
     ? " AND COALESCE(u.status, 'active') = 'active'"
     : '';
+  const tenantScope = tenantAware
+    ? ` AND COALESCE(sp.tenant_id, '') IN ('', ?)
+        AND u.tenant_id = ?
+        AND COALESCE(manager.tenant_id, '') IN ('', ?)`
+    : '';
+  const params = [displayName, supervisorUserId];
+  if (tenantAware) params.push(tenantId, tenantId, tenantId);
   const rows = queryRows(
     db,
     `SELECT sp.id AS staff_profile_id, sp.user_id, sp.name
@@ -55,8 +66,8 @@ function resolveAssignee(db, workerName, supervisorUserId) {
         AND COALESCE(sp.employment_status, 'active') = 'active'
         AND manager.user_id = ?
         AND LOWER(TRIM(u.role)) IN ('worker', 'keeper')
-        AND sp.user_id IS NOT NULL${userStatus}`,
-    [displayName, supervisorUserId]
+        AND sp.user_id IS NOT NULL${userStatus}${tenantScope}`,
+    params
   );
   if (rows.length !== 1) throw assigneeError();
   return {
@@ -67,6 +78,7 @@ function resolveAssignee(db, workerName, supervisorUserId) {
 }
 
 function recordTicketActivity(db, {
+  tenantId,
   ticketId,
   actorUserId,
   actorStaffId,
@@ -77,19 +89,22 @@ function recordTicketActivity(db, {
   const metadataJson = metadata == null
     ? '{}'
     : (typeof metadata === 'string' ? metadata : JSON.stringify(metadata));
-  db.run(
-    `INSERT INTO ticket_activity_logs
-      (ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      ticketId,
-      actorUserId == null ? null : actorUserId,
-      actorStaffId == null ? null : actorStaffId,
-      action,
-      metadataJson,
-      createdAt || new Date().toISOString(),
-    ]
-  );
+  const tenantAware = tableColumns(db, 'ticket_activity_logs').has('tenant_id');
+  if (tenantAware && !tenantId) throw new Error('ticket activity tenant is required');
+  const columns = tenantAware
+    ? '(tenant_id, ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)'
+    : '(ticket_id, actor_user_id, actor_staff_id, action, metadata, created_at)';
+  const placeholders = tenantAware ? '(?, ?, ?, ?, ?, ?, ?)' : '(?, ?, ?, ?, ?, ?)';
+  const values = [
+    ticketId,
+    actorUserId == null ? null : actorUserId,
+    actorStaffId == null ? null : actorStaffId,
+    action,
+    metadataJson,
+    createdAt || new Date().toISOString(),
+  ];
+  if (tenantAware) values.unshift(tenantId);
+  db.run(`INSERT INTO ticket_activity_logs ${columns} VALUES ${placeholders}`, values);
 }
 
 module.exports = {
