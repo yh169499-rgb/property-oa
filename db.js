@@ -16,6 +16,7 @@ const {
   migrateUsersToProfiles,
   backfillTicketAssignees,
 } = require('./services/workforce-migration');
+const { hasPendingTenantMigration } = require('./services/tenant-migration');
 const {
   getSupabaseStorageConfig,
   ensureBucket,
@@ -71,6 +72,13 @@ function backfillWorkforceData(targetDb, nowIso = new Date().toISOString()) {
   }
 }
 
+function assertProductionTenantMigrationReady(targetDb, env = process.env) {
+  if (env.NODE_ENV !== 'production' || !hasPendingTenantMigration(targetDb)) return;
+  const error = new Error('TENANT_MIGRATION_REQUIRED');
+  error.code = 'TENANT_MIGRATION_REQUIRED';
+  throw error;
+}
+
 async function restoreRemoteSnapshot(storageConfig, localPath, download = downloadDatabase) {
   if (!storageConfig) return null;
   const remoteBytes = await download(storageConfig);
@@ -103,6 +111,7 @@ async function initDB() {
   }
 
   ensureDatabaseSchema(db);
+  assertProductionTenantMigrationReady(db);
   const nowIso = new Date().toISOString();
   backfillWorkforceData(db, nowIso);
 
@@ -189,4 +198,5 @@ module.exports = {
   setDBForTests,
   ensureDatabaseSchema,
   backfillWorkforceData,
+  assertProductionTenantMigrationReady,
 };

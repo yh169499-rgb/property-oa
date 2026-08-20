@@ -16,7 +16,9 @@
     "verify:e2e": "node scripts/verify-e2e.js",
     "retained:dry-run": "node scripts/prepare-retained-test-data.js",
     "retained:apply": "node scripts/prepare-retained-test-data.js --apply --confirm=RETAINED-TEST-DATA",
-    "retained:verify": "node scripts/verify-retained-test-data.js"
+    "retained:verify": "node scripts/verify-retained-test-data.js",
+    "tenant:dry-run": "node scripts/migrate-multi-tenant.js",
+    "tenant:apply": "node scripts/migrate-multi-tenant.js --apply"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
