@@ -153,9 +153,12 @@ router.use(requireAuth, (req, res, next) => {
 // POST /api/notify
 router.post('/notify', requireAuth, async (req, res) => {
   const { ticketId, event } = req.body;
-  const row = queryOne('SELECT * FROM tickets WHERE id = ? AND tenant_id = ?',
-    [ticketId, req.user.tenant_id]);
+  const row = queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
   if (!row) return res.status(404).json({ error: '工单不存在' });
+  if (Object.prototype.hasOwnProperty.call(row, 'tenant_id')
+      && String(row.tenant_id || '') !== String(req.user.tenant_id || '')) {
+    return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
+  }
   if (!canAccessTicket(req, ticketId)) return res.status(403).json({ error: '无权操作该工单', code: 'TICKET_SCOPE_FORBIDDEN' });
   if (!config.NOTIFY_WEBHOOK) return res.json({ success: false, error: '未配置 NOTIFY_WEBHOOK' });
   try {

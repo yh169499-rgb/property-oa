@@ -44,8 +44,11 @@ function indexNames(db) {
 
 function seedTenant(db, options = {}) {
   const {
-    id = 'tenant-test', name = '测试企业', status = 'active', staffLimit = 999,
+    id: configuredId,
+    tenantId,
+    name = '测试企业', status = 'active', staffLimit = 999,
   } = options;
+  const id = configuredId || tenantId || 'tenant-test';
   if (typeof db?.exec !== 'function'
       || !db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")[0]) {
     throw new Error('seedTenant requires a users table');
@@ -77,9 +80,8 @@ function seedTenant(db, options = {}) {
     if (!exists[0]?.values.length) continue;
     const tableColumns = new Set(db.exec(`PRAGMA table_info(${table})`)[0].values
       .map((row) => row[1]));
-    if (tableColumns.has('tenant_id')) {
-      db.run(`UPDATE ${table} SET tenant_id=? WHERE COALESCE(tenant_id,'')=''`, [id]);
-    }
+    if (!tableColumns.has('tenant_id')) db.run(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT DEFAULT ''`);
+    db.run(`UPDATE ${table} SET tenant_id=? WHERE COALESCE(tenant_id,'')=''`, [id]);
   }
   db.run(`UPDATE tenants SET owner_user_id=(SELECT id FROM users
     WHERE role='主管' AND status='active' AND tenant_id=? ORDER BY id LIMIT 1)
