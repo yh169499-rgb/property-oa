@@ -50,6 +50,18 @@ function hasColumn(db, table, column) {
   }
 }
 
+function hasTable(db, table) {
+  try {
+    return queryAll(db, "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", [table]).length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isTenantCapacity(db) {
+  return hasTable(db, 'tenants') && hasColumn(db, 'staff_profiles', 'tenant_id');
+}
+
 function tenantUsage(db, tenantId, options = {}) {
   const tenant = queryAll(db, 'SELECT staff_limit FROM tenants WHERE id = ?', [tenantId])[0];
   if (!tenant) {
@@ -83,7 +95,7 @@ function teamUsage(db, managerProfileId, options = {}) {
   // Tenant-aware callers use the new total-only capacity contract. Keep the
   // numeric manager-profile overload for legacy organization/profile callers;
   // those callers are migrated independently and do not enforce role ratios.
-  if (typeof managerProfileId === 'string' && hasColumn(db, 'staff_profiles', 'tenant_id')) {
+  if (typeof managerProfileId === 'string' && isTenantCapacity(db)) {
     return tenantUsage(db, managerProfileId, options);
   }
   const params = [managerProfileId];
@@ -125,8 +137,10 @@ function capacityError(message, code, usage, role) {
 }
 
 function assertTeamCapacity(db, managerProfileId, roleOrPosition, options = {}) {
-  if (typeof managerProfileId === 'string' && hasColumn(db, 'staff_profiles', 'tenant_id')) {
-    const usage = tenantUsage(db, managerProfileId, options);
+  if (typeof managerProfileId === 'string' && isTenantCapacity(db)) {
+    const usageOptions = roleOrPosition && typeof roleOrPosition === 'object'
+      ? roleOrPosition : options;
+    const usage = tenantUsage(db, managerProfileId, usageOptions);
     if (usage.activeCount >= usage.limit) {
       throw capacityError('企业在职人员已达到上限', 'TEAM_CAPACITY_FULL', usage, null);
     }
@@ -201,6 +215,7 @@ module.exports = {
   MIN_STAFF_LIMIT,
   MAX_STAFF_LIMIT,
   normalizeStaffLimit,
+  isTenantCapacity,
   normalizedStaffRole,
   tenantUsage,
   teamUsage,

@@ -15,6 +15,7 @@ const {
 const { MANAGER_ROLES, positionForRole } = require('../services/roles');
 const {
   assertTeamCapacity,
+  isTenantCapacity,
   normalizedStaffRole,
 } = require('../services/team-capacity');
 const {
@@ -156,9 +157,11 @@ function assertActiveProfileAssignment(db, tenantId, current, body, options = {}
       managerId: candidate.manager_id,
     });
   }
-  assertTeamCapacity(db, candidate.manager_id, role, {
-    excludeProfileId: options.excludeProfileId,
-  });
+  if (isTenantCapacity(db)) {
+    assertTeamCapacity(db, tenantId, { excludeProfileId: options.excludeProfileId });
+  } else {
+    assertTeamCapacity(db, candidate.manager_id, role, { excludeProfileId: options.excludeProfileId });
+  }
 }
 
 function updateProfile(tenantId, id, body, allowed) {

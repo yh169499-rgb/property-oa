@@ -1,5 +1,5 @@
 const { MANAGER_ROLES } = require('./roles');
-const { assertTeamCapacity, normalizedStaffRole } = require('./team-capacity');
+const { assertTeamCapacity, normalizedStaffRole, isTenantCapacity } = require('./team-capacity');
 const { assertTenantWriteTarget } = require('./tenant-context');
 
 function normalizeId(value) {
@@ -168,7 +168,11 @@ function updateManager(db, tenantId, staffId, managerId, options = {}) {
       error.details = { managerId: manager };
       throw error;
     }
-    assertTeamCapacity(db, manager, staffRole, { excludeProfileId: staff });
+    if (isTenantCapacity(db)) {
+      assertTeamCapacity(db, tenantId, { excludeProfileId: staff });
+    } else {
+      assertTeamCapacity(db, manager, staffRole, { excludeProfileId: staff });
+    }
   }
   db.run(
     `UPDATE staff_profiles SET manager_id = ?, updated_at = ?

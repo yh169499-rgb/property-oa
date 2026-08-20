@@ -245,8 +245,13 @@ function departStaff(db, userId, actorUser) {
       timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     }).format(new Date());
 
-    const ticketTenant = tenantId && hasColumn(db, 'tickets', 'tenant_id') ? ' AND tenant_id = ?' : '';
-    const activityTenant = tenantId && hasColumn(db, 'ticket_activity_logs', 'tenant_id') ? ' AND tenant_id = ?' : '';
+    // Rows created before the tenant migration may carry an empty tenant id;
+    // the stable assignee/actor user id still proves ownership for this
+    // targeted historical backfill. Migrated rows always use the exact tenant.
+    const ticketTenant = tenantId && hasColumn(db, 'tickets', 'tenant_id')
+      ? " AND (tenant_id = ? OR COALESCE(tenant_id, '') = '')" : '';
+    const activityTenant = tenantId && hasColumn(db, 'ticket_activity_logs', 'tenant_id')
+      ? " AND (tenant_id = ? OR COALESCE(tenant_id, '') = '')" : '';
     db.run(`UPDATE tickets
       SET assignee_staff_profile_id = COALESCE(assignee_staff_profile_id, ?), assignee_user_id = NULL
       WHERE assignee_user_id = ?${ticketTenant}`, [profile.id, numericUserId, ...(ticketTenant ? [tenantId] : [])]);
