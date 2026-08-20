@@ -62,6 +62,7 @@ function ensureWorkforceSchema(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS staff_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       user_id INTEGER UNIQUE,
       name TEXT DEFAULT '',
       birth_month TEXT DEFAULT '',
@@ -83,10 +84,12 @@ function ensureWorkforceSchema(db) {
   // additive so stable historical identity is available without recreating it.
   addColumn(db, 'staff_profiles', "departed_at TEXT DEFAULT ''");
   addColumn(db, 'staff_profiles', 'departed_by_user_id INTEGER');
+  addColumn(db, 'staff_profiles', "tenant_id TEXT NOT NULL DEFAULT ''");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS shift_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       name TEXT DEFAULT '',
       start_time TEXT DEFAULT '',
       end_time TEXT DEFAULT '',
@@ -99,6 +102,7 @@ function ensureWorkforceSchema(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS shift_assignments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       staff_id INTEGER,
       work_date TEXT,
       assignment_type TEXT DEFAULT 'work',
@@ -109,13 +113,14 @@ function ensureWorkforceSchema(db) {
       note TEXT DEFAULT '',
       created_by INTEGER,
       updated_at TEXT DEFAULT '',
-      UNIQUE (staff_id, work_date)
+      UNIQUE (tenant_id, staff_id, work_date)
     )
   `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS attendance_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       staff_id INTEGER,
       shift_assignment_id INTEGER,
       work_date TEXT,
@@ -124,13 +129,14 @@ function ensureWorkforceSchema(db) {
       status TEXT DEFAULT 'not_started',
       is_corrected INTEGER DEFAULT 0,
       updated_at TEXT DEFAULT '',
-      UNIQUE (staff_id, work_date)
+      UNIQUE (tenant_id, staff_id, work_date)
     )
   `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS attendance_change_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       attendance_id INTEGER,
       operator_user_id INTEGER,
       before_json TEXT DEFAULT '{}',
@@ -143,6 +149,7 @@ function ensureWorkforceSchema(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS ticket_activity_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       ticket_id TEXT,
       actor_user_id INTEGER,
       actor_staff_id INTEGER,
@@ -155,17 +162,20 @@ function ensureWorkforceSchema(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS workforce_import_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      import_key TEXT UNIQUE NOT NULL,
+      tenant_id TEXT NOT NULL DEFAULT '',
+      import_key TEXT NOT NULL,
       imported_by INTEGER NOT NULL,
       imported_at TEXT NOT NULL,
-      summary_json TEXT DEFAULT '{}'
+      summary_json TEXT DEFAULT '{}',
+      UNIQUE (tenant_id, import_key)
     )
   `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS performance_rule_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      version_no INTEGER UNIQUE NOT NULL,
+      tenant_id TEXT NOT NULL DEFAULT '',
+      version_no INTEGER NOT NULL,
       name TEXT NOT NULL DEFAULT '',
       completion_weight REAL NOT NULL,
       on_time_weight REAL NOT NULL,
@@ -178,6 +188,7 @@ function ensureWorkforceSchema(db) {
       created_by_user_id INTEGER,
       created_at TEXT NOT NULL,
       is_active INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (tenant_id, version_no),
       CHECK (completion_weight >= 0 AND completion_weight <= 100),
       CHECK (on_time_weight >= 0 AND on_time_weight <= 100),
       CHECK (quality_weight >= 0 AND quality_weight <= 100),
@@ -190,17 +201,19 @@ function ensureWorkforceSchema(db) {
 
   db.run(`
     CREATE TABLE IF NOT EXISTS community_memberships (
+      tenant_id TEXT NOT NULL DEFAULT '',
       community_id TEXT NOT NULL,
       staff_profile_id INTEGER NOT NULL,
       created_at TEXT DEFAULT '',
       created_by_user_id INTEGER,
-      UNIQUE (community_id, staff_profile_id)
+      UNIQUE (tenant_id, community_id, staff_profile_id)
     )
   `);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS ai_report_analyses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL DEFAULT '',
       staff_profile_id INTEGER NOT NULL,
       community_id TEXT NOT NULL DEFAULT '',
       range_from TEXT NOT NULL,
@@ -214,6 +227,14 @@ function ensureWorkforceSchema(db) {
     )
   `);
 
+  for (const table of [
+    'shift_templates', 'shift_assignments', 'attendance_records',
+    'attendance_change_logs', 'ticket_activity_logs', 'workforce_import_batches',
+    'performance_rule_versions', 'community_memberships', 'ai_report_analyses',
+  ]) {
+    addColumn(db, table, "tenant_id TEXT NOT NULL DEFAULT ''");
+  }
+
   addColumn(db, 'tickets', 'assignee_user_id INTEGER');
   addColumn(db, 'tickets', 'assignee_staff_profile_id INTEGER');
   addColumn(db, 'tickets', "assigned_at TEXT DEFAULT ''");
@@ -221,7 +242,8 @@ function ensureWorkforceSchema(db) {
 
   const nowIso = new Date().toISOString();
   db.run(`
-    INSERT OR IGNORE INTO performance_rule_versions (
+    INSERT INTO performance_rule_versions (
+      tenant_id,
       version_no,
       name,
       completion_weight,
@@ -234,7 +256,11 @@ function ensureWorkforceSchema(db) {
       effective_at,
       created_at,
       is_active
-    ) VALUES (1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1)
+    ) SELECT '', 1, '默认规则', 30, 50, 20, 90, 80, 60, 1, ?, ?, 1
+    WHERE NOT EXISTS (
+      SELECT 1 FROM performance_rule_versions
+      WHERE tenant_id = '' AND version_no = 1
+    )
   `, [nowIso, nowIso]);
 
   if (tableExists(db, 'tickets')) {
@@ -255,7 +281,8 @@ function ensureWorkforceSchema(db) {
     db.run(`
       UPDATE tickets
       SET performance_rule_version_id = (
-        SELECT id FROM performance_rule_versions WHERE version_no = 1
+        SELECT id FROM performance_rule_versions
+        WHERE version_no = 1 AND tenant_id = ''
       )
       WHERE performance_rule_version_id IS NULL
     `);
@@ -264,6 +291,7 @@ function ensureWorkforceSchema(db) {
   backfillCommunityMemberships(db, nowIso);
 
   db.run('CREATE INDEX IF NOT EXISTS idx_staff_manager ON staff_profiles(manager_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_staff_profiles_tenant ON staff_profiles(tenant_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_shift_staff_date ON shift_assignments(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_attendance_staff_date ON attendance_records(staff_id, work_date)');
   db.run('CREATE INDEX IF NOT EXISTS idx_ticket_activity_actor_time ON ticket_activity_logs(actor_staff_id, created_at)');
@@ -292,8 +320,15 @@ function ensureWorkforceSchema(db) {
     db.run(`CREATE INDEX IF NOT EXISTS idx_tickets_assignee_profile
       ON tickets(assignee_staff_profile_id)`);
   }
+  const cacheIndex = db.exec('PRAGMA index_info(uq_ai_report_cache)');
+  const cacheIndexColumns = cacheIndex[0]
+    ? cacheIndex[0].values.map((row) => row[2])
+    : [];
+  if (cacheIndexColumns.length > 0 && cacheIndexColumns[0] !== 'tenant_id') {
+    db.run('DROP INDEX uq_ai_report_cache');
+  }
   db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_report_cache
-    ON ai_report_analyses(report_hash, model, prompt_version)`);
+    ON ai_report_analyses(tenant_id, report_hash, model, prompt_version)`);
 }
 
 module.exports = { ensureWorkforceSchema, addColumn, backfillCommunityMemberships };

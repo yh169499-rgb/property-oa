@@ -193,28 +193,28 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
 
   const expectedColumns = {
     staff_profiles: [
-      'id', 'user_id', 'name', 'birth_month', 'join_date', 'phone',
+      'id', 'tenant_id', 'user_id', 'name', 'birth_month', 'join_date', 'phone',
       'position', 'skill', 'manager_id', 'employment_status', 'departed_at',
       'departed_by_user_id', 'created_at', 'updated_at',
     ],
     shift_templates: [
-      'id', 'name', 'start_time', 'end_time', 'color', 'grace_minutes',
+      'id', 'tenant_id', 'name', 'start_time', 'end_time', 'color', 'grace_minutes',
       'created_by',
     ],
     shift_assignments: [
-      'id', 'staff_id', 'work_date', 'assignment_type', 'template_id',
+      'id', 'tenant_id', 'staff_id', 'work_date', 'assignment_type', 'template_id',
       'start_at', 'end_at', 'leave_type', 'note', 'created_by', 'updated_at',
     ],
     attendance_records: [
-      'id', 'staff_id', 'shift_assignment_id', 'work_date', 'check_in_at',
+      'id', 'tenant_id', 'staff_id', 'shift_assignment_id', 'work_date', 'check_in_at',
       'check_out_at', 'status', 'is_corrected', 'updated_at',
     ],
     attendance_change_logs: [
-      'id', 'attendance_id', 'operator_user_id', 'before_json', 'after_json',
+      'id', 'tenant_id', 'attendance_id', 'operator_user_id', 'before_json', 'after_json',
       'reason', 'created_at',
     ],
     ticket_activity_logs: [
-      'id', 'ticket_id', 'actor_user_id', 'actor_staff_id', 'action',
+      'id', 'tenant_id', 'ticket_id', 'actor_user_id', 'actor_staff_id', 'action',
       'metadata', 'created_at',
     ],
   };
@@ -237,7 +237,7 @@ test('workforce tables expose the approved fields and indexes', async (t) => {
   const uniqueMembership = membershipIndexes.find((row) => row[2] === 1);
   assert.ok(uniqueMembership, 'community memberships should have a unique index');
   const membershipIndexColumns = db.exec(`PRAGMA index_info(${JSON.stringify(uniqueMembership[1])})`);
-  assert.deepEqual(membershipIndexColumns[0].values.map((row) => row[2]), ['community_id', 'staff_profile_id']);
+  assert.deepEqual(membershipIndexColumns[0].values.map((row) => row[2]), ['tenant_id', 'community_id', 'staff_profile_id']);
 });
 
 test('daily shift assignments and attendance records are unique per staff member', async (t) => {
