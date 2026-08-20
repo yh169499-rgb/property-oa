@@ -176,10 +176,49 @@ async function resetTenantSupervisorPassword(db, tenantId, actor, input = {}) {
   });
 }
 
+function getPlatformOverview(db, actor) {
+  assertPlatformOwner(actor);
+  return {
+    pending_applications: Number(one(db,
+      "SELECT COUNT(*) AS count FROM enterprise_applications WHERE status='pending'"
+    )?.count || 0),
+    tenant_count: Number(one(db, 'SELECT COUNT(*) AS count FROM tenants')?.count || 0),
+    active_tenant_count: Number(one(db,
+      "SELECT COUNT(*) AS count FROM tenants WHERE status='active'"
+    )?.count || 0),
+    audit_count: Number(one(db, 'SELECT COUNT(*) AS count FROM platform_audit_logs')?.count || 0),
+  };
+}
+
+function listPlatformAuditLogs(db, actor, options = {}) {
+  assertPlatformOwner(actor);
+  const limit = Number.isInteger(Number(options.limit))
+    ? Math.min(200, Math.max(1, Number(options.limit))) : 100;
+  return all(db, `SELECT
+      p.id,p.action,p.target_type,p.target_id,p.before_json,p.after_json,p.created_at,
+      u.name AS actor_name,t.name AS target_name
+    FROM platform_audit_logs p
+    LEFT JOIN users u ON u.id=p.actor_user_id AND u.role='platform_owner'
+    LEFT JOIN tenants t ON p.target_type='tenant' AND t.id=p.target_id
+    ORDER BY p.id DESC LIMIT ?`, [limit]).map(row => ({
+    id: Number(row.id),
+    action: row.action,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    before: JSON.parse(row.before_json || '{}'),
+    after: JSON.parse(row.after_json || '{}'),
+    created_at: row.created_at,
+    actor_name: row.actor_name || '平台运维',
+    target_name: row.target_name || '',
+  }));
+}
+
 module.exports = {
   listTenants,
   updateTenant,
   setTenantStatus,
   resetTenantSupervisorPassword,
   activeStaffCount,
+  getPlatformOverview,
+  listPlatformAuditLogs,
 };

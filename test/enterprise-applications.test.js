@@ -7,6 +7,7 @@ const {
   submitEnterpriseApplication,
   approveEnterpriseApplication,
   rejectEnterpriseApplication,
+  listEnterpriseApplications,
 } = require('../services/enterprise-applications');
 
 const OWNER = Object.freeze({ id: 900, role: 'platform_owner', tenant_id: '' });
@@ -110,4 +111,22 @@ test('只有无企业归属的平台运维可审核，人员上限严格限制�
     );
   }
   assert.equal(one(db, 'SELECT COUNT(*) AS count FROM tenants').count, 0);
+});
+
+test('平台申请列表不返回密码哈希且企业主管不可读取', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  await submitEnterpriseApplication(db, {
+    enterpriseName: '戊物业', supervisorName: '戊主管',
+    phone: '13900000005', password: 'SecurePass!555',
+  });
+  const applications = listEnterpriseApplications(db, OWNER);
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].phone, '13900000005');
+  assert.equal(Object.prototype.hasOwnProperty.call(applications[0], 'password_hash'), false);
+  assert.equal(JSON.stringify(applications).includes('SecurePass'), false);
+  assert.throws(
+    () => listEnterpriseApplications(db, { id: 1, role: '主管', tenant_id: 'tenant-a' }),
+    error => error.code === 'PLATFORM_OWNER_REQUIRED'
+  );
 });

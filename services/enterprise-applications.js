@@ -165,9 +165,18 @@ function rejectEnterpriseApplication(db, id, actor, options = {}) {
   });
 }
 
+function listEnterpriseApplications(db, actor) {
+  assertPlatformOwner(actor);
+  return all(db, `SELECT
+    id,enterprise_name,supervisor_name,phone,status,rejection_reason,
+    reviewed_by_user_id,reviewed_at,created_at,updated_at
+    FROM enterprise_applications ORDER BY created_at DESC,id DESC`);
+}
+
 module.exports = {
   submitEnterpriseApplication,
   approveEnterpriseApplication,
   rejectEnterpriseApplication,
+  listEnterpriseApplications,
   assertPlatformOwner,
 };

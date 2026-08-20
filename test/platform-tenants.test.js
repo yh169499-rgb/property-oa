@@ -8,6 +8,8 @@ const {
   updateTenant,
   setTenantStatus,
   resetTenantSupervisorPassword,
+  getPlatformOverview,
+  listPlatformAuditLogs,
 } = require('../services/platform-tenants');
 
 const OWNER = Object.freeze({ id: 900, role: 'platform_owner', tenant_id: '' });
@@ -137,4 +139,20 @@ test('企业维护服务拒绝企业主管和绑定企业的平台角色', async
   ]) {
     assert.throws(() => listTenants(db, actor), error => error.code === 'PLATFORM_OWNER_REQUIRED');
   }
+});
+
+test('平台总览和审计列表只返回安全运维字段', async (t) => {
+  const db = await fixture();
+  t.after(() => db.close());
+  updateTenant(db, 'tenant-a', OWNER, { staffLimit: 5, nowIso: '2026-08-20T05:00:00.000Z' });
+  db.run(`INSERT INTO enterprise_applications
+    (enterprise_name,supervisor_name,phone,password_hash,status,created_at)
+    VALUES('待审企业','待审主管','13999999999','sensitive-hash','pending','test')`);
+  assert.deepEqual(getPlatformOverview(db, OWNER), {
+    pending_applications: 1, tenant_count: 2, active_tenant_count: 2, audit_count: 1,
+  });
+  const logs = listPlatformAuditLogs(db, OWNER);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].actor_name, '平台运维');
+  assert.equal(JSON.stringify(logs).includes('sensitive-hash'), false);
 });
