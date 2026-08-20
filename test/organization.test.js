@@ -34,7 +34,7 @@ test('updateManager 拒绝本人或下级作为上级并提供循环路径', asy
   `);
 
   assert.throws(
-    () => updateManager(db, 1, 3),
+    () => updateManager(db, '', 1, 3),
     (error) => {
       assert.equal(error.status, 409);
       assert.equal(error.code, 'ORGANIZATION_CYCLE');
@@ -54,11 +54,11 @@ test('updateManager 拒绝不存在的人员和直属上级', async () => {
   db.run("INSERT INTO staff_profiles (id, name) VALUES (1, '主管')");
 
   assert.throws(
-    () => updateManager(db, 99, null),
+    () => updateManager(db, '', 99, null),
     (error) => error.status === 404 && error.code === 'PROFILE_NOT_FOUND'
   );
   assert.throws(
-    () => updateManager(db, 1, 99),
+    () => updateManager(db, '', 1, 99),
     (error) => error.status === 404 && error.code === 'MANAGER_NOT_FOUND'
   );
   assert.equal(
@@ -81,9 +81,9 @@ test('updateManager 对直属在职团队实施 4/3/1 容量限制并排除本�
       (6, '候选师傅', '维修师傅', NULL, 'inactive')
   `);
 
-  assert.equal(updateManager(db, 2, 1).manager_id, 1);
+  assert.equal(updateManager(db, '', 2, 1).manager_id, 1);
   assert.throws(
-    () => updateManager(db, 6, 1, {
+    () => updateManager(db, '', 6, 1, {
       profile: { position: '维修师傅', employment_status: 'active' },
     }),
     (error) => error.status === 409 && error.code === 'ROLE_CAPACITY_FULL'
@@ -106,11 +106,11 @@ test('updateManager 拒绝在职普通员工无主管或绑定非主管', async 
   `);
 
   assert.throws(
-    () => updateManager(db, 2, null),
+    () => updateManager(db, '', 2, null),
     (error) => error.status === 409 && error.code === 'ACTIVE_STAFF_MANAGER_REQUIRED'
   );
   assert.throws(
-    () => updateManager(db, 2, 3),
+    () => updateManager(db, '', 2, 3),
     (error) => error.status === 409 && error.code === 'INVALID_ACTIVE_MANAGER'
   );
   assert.equal(

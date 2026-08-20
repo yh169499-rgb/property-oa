@@ -44,8 +44,11 @@ function indexNames(db) {
 
 function seedTenant(db, options = {}) {
   const {
-    id = 'tenant-test', name = '测试企业', status = 'active', staffLimit = 999,
+    id: configuredId,
+    tenantId,
+    name = '测试企业', status = 'active', staffLimit = 999,
   } = options;
+  const id = configuredId || tenantId || 'tenant-test';
   if (typeof db?.exec !== 'function'
       || !db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")[0]) {
     throw new Error('seedTenant requires a users table');
@@ -63,6 +66,20 @@ function seedTenant(db, options = {}) {
   [id, name, status, null, staffLimit, 'test', 'test']);
   db.run(`UPDATE users SET tenant_id=?
     WHERE role<>'platform_owner' AND COALESCE(tenant_id,'')=''`, [id]);
+  for (const table of [
+    'staff_profiles', 'communities', 'community_permissions',
+    'community_memberships', 'invite_codes', 'pending_registrations',
+    'tickets', 'staff_status', 'shift_templates', 'shift_assignments',
+    'attendance_records', 'attendance_change_logs', 'tenant_settings',
+    'ticket_activity_logs', 'workforce_import_batches',
+    'performance_rule_versions', 'ai_report_analyses', 'staff_lifecycle_audit',
+  ]) {
+    if (!tableNames(db).includes(table)) continue;
+    if (!columnNames(db, table).includes('tenant_id')) {
+      db.run(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT DEFAULT ''`);
+    }
+    db.run(`UPDATE ${table} SET tenant_id=? WHERE COALESCE(tenant_id,'')=''`, [id]);
+  }
   db.run(`UPDATE tenants SET owner_user_id=(SELECT id FROM users
     WHERE role='主管' AND status='active' AND tenant_id=? ORDER BY id LIMIT 1)
     WHERE id=?`, [id, id]);

@@ -302,15 +302,16 @@ test('修改岗位、恢复在职和独立 manager 接口均不能绕过团队�
   const headers = authHeader({ id: 1, role: 'lead' });
   db.run("UPDATE staff_profiles SET employment_status = 'inactive' WHERE id <> 1");
   db.run(`
-    INSERT INTO staff_profiles (id, name, position, manager_id, employment_status) VALUES
-      (10, '师傅一', '维修师傅', 1, 'active'),
-      (11, '师傅二', '维修师傅', 1, 'active'),
-      (12, '师傅三', '维修师傅', 1, 'active'),
-      (13, '管家一', '物业管家', 1, 'active'),
-      (14, '离职师傅', '维修师傅', 1, 'inactive'),
-      (15, '待调入师傅', '维修师傅', NULL, 'active'),
-      (16, '非主管上级', '维修师傅', NULL, 'active'),
-      (17, '错误归属离职师傅', '维修师傅', 16, 'inactive')
+    INSERT INTO staff_profiles
+      (id, tenant_id, name, position, manager_id, employment_status) VALUES
+      (10, 'tenant-test', '师傅一', '维修师傅', 1, 'active'),
+      (11, 'tenant-test', '师傅二', '维修师傅', 1, 'active'),
+      (12, 'tenant-test', '师傅三', '维修师傅', 1, 'active'),
+      (13, 'tenant-test', '管家一', '物业管家', 1, 'active'),
+      (14, 'tenant-test', '离职师傅', '维修师傅', 1, 'inactive'),
+      (15, 'tenant-test', '待调入师傅', '维修师傅', NULL, 'active'),
+      (16, 'tenant-test', '非主管上级', '维修师傅', NULL, 'active'),
+      (17, 'tenant-test', '错误归属离职师傅', '维修师傅', 16, 'inactive')
   `);
 
   const pureField = await request(server, '/api/staff/profiles/10', {

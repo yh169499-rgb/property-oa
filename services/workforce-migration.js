@@ -43,8 +43,13 @@ function hasColumn(db, table, column) {
   return Boolean(result[0]?.values.some((row) => row[1] === column));
 }
 
-function previewProfileImport(db, profiles) {
-  const existing = rows(db, 'SELECT * FROM staff_profiles ORDER BY id');
+function previewProfileImport(db, profiles, tenantId) {
+  const tenantScoped = tenantId !== undefined && tenantId !== null;
+  const existing = rows(
+    db,
+    `SELECT * FROM staff_profiles${tenantScoped ? ' WHERE tenant_id = ?' : ''} ORDER BY id`,
+    tenantScoped ? [tenantId] : []
+  );
   const byPhone = new Map(existing.filter((item) => item.phone).map((item) => [String(item.phone).trim(), item]));
   const byName = new Map();
   existing.forEach((item) => {

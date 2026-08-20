@@ -17,6 +17,11 @@ const {
   assertTeamCapacity,
   normalizedStaffRole,
 } = require('../services/team-capacity');
+const {
+  tenantIdFrom,
+  assertNoClientTenant,
+  assertTenantWriteTarget,
+} = require('../services/tenant-context');
 
 const router = express.Router();
 const SELF_FIELDS = new Set(['phone', 'birth_month']);
@@ -48,24 +53,31 @@ function handleError(res, error) {
   });
 }
 
-function profileById(id) {
-  return queryOne('SELECT * FROM staff_profiles WHERE id = ?', [id]);
+function profileById(id, tenantId) {
+  return queryOne(
+    'SELECT * FROM staff_profiles WHERE id = ? AND tenant_id = ?',
+    [id, tenantId]
+  );
 }
 
-function ownProfile(userId) {
-  return queryOne('SELECT * FROM staff_profiles WHERE user_id = ?', [userId]);
+function ownProfile(userId, tenantId) {
+  return queryOne(
+    'SELECT * FROM staff_profiles WHERE user_id = ? AND tenant_id = ?',
+    [userId, tenantId]
+  );
 }
 
 function ensureOwnProfile(user) {
-  const existing = ownProfile(user.id);
+  const tenantId = String(user.tenant_id || '');
+  const existing = ownProfile(user.id, tenantId);
   if (existing) return existing;
   const now = new Date().toISOString();
   run(`INSERT OR IGNORE INTO staff_profiles
-    (user_id, name, phone, position, employment_status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-  [user.id, user.name || '', user.phone || '', positionForRole(user.role), now, now]);
+    (tenant_id, user_id, name, phone, position, employment_status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+  [tenantId, user.id, user.name || '', user.phone || '', positionForRole(user.role), now, now]);
   saveDB();
-  return ownProfile(user.id);
+  return ownProfile(user.id, tenantId);
 }
 
 function validateFields(body, allowed) {
@@ -111,7 +123,7 @@ function rowFrom(db, sql, params = []) {
   return row;
 }
 
-function assertActiveProfileAssignment(db, current, body, options = {}) {
+function assertActiveProfileAssignment(db, tenantId, current, body, options = {}) {
   const candidate = candidateProfile(current || {}, body);
   const role = normalizedStaffRole(candidate.position);
   if (candidate.employment_status !== 'active') return;
@@ -125,10 +137,15 @@ function assertActiveProfileAssignment(db, current, body, options = {}) {
   if (candidate.manager_id === null || candidate.manager_id === undefined || candidate.manager_id === '') {
     throw apiError('在职普通员工必须绑定直属主管', 409, 'ACTIVE_STAFF_MANAGER_REQUIRED');
   }
+  assertTenantWriteTarget(db, {
+    table: 'staff_profiles', id: candidate.manager_id, tenantId,
+    notFoundCode: 'MANAGER_NOT_FOUND', notFoundMessage: '直属上级档案不存在',
+  });
   const manager = rowFrom(
     db,
-    'SELECT id, position, employment_status FROM staff_profiles WHERE id = ?',
-    [candidate.manager_id]
+    `SELECT id, position, employment_status FROM staff_profiles
+     WHERE id = ? AND tenant_id = ?`,
+    [candidate.manager_id, tenantId]
   );
   const managerIsActive = manager && manager.employment_status === 'active';
   const managerIsSupervisor = manager && MANAGER_ROLES.has(
@@ -144,32 +161,35 @@ function assertActiveProfileAssignment(db, current, body, options = {}) {
   });
 }
 
-function updateProfile(id, body, allowed) {
+function updateProfile(tenantId, id, body, allowed) {
+  assertNoClientTenant(body);
   const fields = validateFields(body, allowed);
   const result = withTransaction((db) => {
-    const current = profileById(id);
+    const current = profileById(id, tenantId);
     if (fields.some((field) => ['manager_id', 'position', 'employment_status'].includes(field))) {
-      assertActiveProfileAssignment(db, current, body, { excludeProfileId: id });
+      assertActiveProfileAssignment(db, tenantId, current, body, { excludeProfileId: id });
     }
     const regularFields = fields.filter((field) => field !== 'manager_id');
     if (fields.includes('manager_id')) {
-      updateManager(db, id, body.manager_id, { profile: candidateProfile(current, body) });
+      updateManager(db, tenantId, id, body.manager_id, { profile: candidateProfile(current, body) });
     }
     if (regularFields.length) {
       const assignments = regularFields.map((field) => `${field} = ?`).join(', ');
       const values = regularFields.map((field) => body[field]);
       db.run(
-        `UPDATE staff_profiles SET ${assignments}, updated_at = ? WHERE id = ?`,
-        [...values, new Date().toISOString(), id]
+        `UPDATE staff_profiles SET ${assignments}, updated_at = ?
+         WHERE id = ? AND tenant_id = ?`,
+        [...values, new Date().toISOString(), id, tenantId]
       );
     }
-    return profileById(id);
+    return profileById(id, tenantId);
   });
   saveDB();
   return result;
 }
 
-function updateOwnProfile(profile, userId, body) {
+function updateOwnProfile(profile, userId, tenantId, body) {
+  assertNoClientTenant(body);
   const fields = validateFields(body, SELF_FIELDS);
   if (fields.includes('phone')) {
     if (typeof body.phone !== 'string' || !body.phone.trim()) {
@@ -190,12 +210,16 @@ function updateOwnProfile(profile, userId, body) {
   try {
     db.run('BEGIN TRANSACTION');
     if (fields.includes('phone')) {
-      db.run('UPDATE users SET phone = ? WHERE id = ?', [body.phone, userId]);
+      db.run(
+        'UPDATE users SET phone = ? WHERE id = ? AND tenant_id = ?',
+        [body.phone, userId, tenantId]
+      );
     }
     const assignments = fields.map((field) => `${field} = ?`).join(', ');
     db.run(
-      `UPDATE staff_profiles SET ${assignments}, updated_at = ? WHERE id = ?`,
-      [...fields.map((field) => body[field]), new Date().toISOString(), profile.id]
+      `UPDATE staff_profiles SET ${assignments}, updated_at = ?
+       WHERE id = ? AND tenant_id = ?`,
+      [...fields.map((field) => body[field]), new Date().toISOString(), profile.id, tenantId]
     );
     db.run('COMMIT');
   } catch (error) {
@@ -212,7 +236,7 @@ function updateOwnProfile(profile, userId, body) {
     throw error;
   }
   saveDB();
-  return profileById(profile.id);
+  return profileById(profile.id, tenantId);
 }
 
 function importProfiles(body) {
@@ -229,8 +253,15 @@ function importProfiles(body) {
 
 router.post('/staff/profiles/import-preview', requireAuth, requireAdmin, (req, res) => {
   try {
+    assertNoClientTenant(req.body);
+    const tenantId = tenantIdFrom(req);
     const profiles = importProfiles(req.body);
-    res.json({ data: { ...previewProfileImport(getDB(), profiles), import_key: importKey({ profiles }) } });
+    res.json({
+      data: {
+        ...previewProfileImport(getDB(), profiles, tenantId),
+        import_key: importKey({ tenantId, profiles }),
+      },
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -238,17 +269,23 @@ router.post('/staff/profiles/import-preview', requireAuth, requireAdmin, (req, r
 
 router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (req, res) => {
   try {
+    assertNoClientTenant(req.body);
+    const tenantId = tenantIdFrom(req);
     const profiles = importProfiles(req.body);
     if (!Array.isArray(req.body.selections)) {
       throw apiError('selections 必须是数组', 400, 'INVALID_IMPORT_SELECTIONS');
     }
-    const normalized = normalizedImportPayload({ profiles, selections: req.body.selections });
+    const normalized = normalizedImportPayload({ tenantId, profiles, selections: req.body.selections });
     const key = importKey(normalized);
-    const existingBatch = queryOne('SELECT * FROM workforce_import_batches WHERE import_key = ?', [key]);
+    const existingBatch = queryOne(
+      `SELECT * FROM workforce_import_batches
+       WHERE tenant_id = ? AND import_key = ?`,
+      [tenantId, key]
+    );
     if (existingBatch) {
       return res.json({ data: { already_imported: true, import_key: key, summary: JSON.parse(existingBatch.summary_json || '{}') } });
     }
-    const preview = previewProfileImport(getDB(), profiles);
+    const preview = previewProfileImport(getDB(), profiles, tenantId);
     const matched = new Map(preview.matches.map((item) => [item.index, item]));
     const summary = withTransaction((db) => {
       let updated = 0;
@@ -283,18 +320,20 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (
           return result;
         }, {});
         if (Object.keys(body).some((field) => ['position', 'employment_status'].includes(field))) {
-          assertActiveProfileAssignment(db, match.profile, body, {
+          assertActiveProfileAssignment(db, tenantId, match.profile, body, {
             excludeProfileId: match.profile.id,
           });
         }
-        db.run(`UPDATE staff_profiles SET ${assignments.join(', ')}, updated_at = ? WHERE id = ?`,
-          [...values, new Date().toISOString(), match.profile.id]);
+        db.run(`UPDATE staff_profiles SET ${assignments.join(', ')}, updated_at = ?
+          WHERE id = ? AND tenant_id = ?`,
+        [...values, new Date().toISOString(), match.profile.id, tenantId]);
         updated += 1;
       });
       const result = { updated, selected: req.body.selections.length, fields: fieldsUpdated };
       db.run(`INSERT INTO workforce_import_batches
-        (import_key, imported_by, imported_at, summary_json) VALUES (?, ?, ?, ?)`,
-      [key, req.user.id, new Date().toISOString(), JSON.stringify(result)]);
+        (tenant_id, import_key, imported_by, imported_at, summary_json)
+        VALUES (?, ?, ?, ?, ?)`,
+      [tenantId, key, req.user.id, new Date().toISOString(), JSON.stringify(result)]);
       return result;
     });
     await saveDB();
@@ -306,6 +345,7 @@ router.post('/staff/profiles/import-confirm', requireAuth, requireAdmin, async (
 
 router.get('/me', requireAuth, (req, res) => {
   try {
+    tenantIdFrom(req);
     const profile = ensureOwnProfile(req.user);
     if (!profile) throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     res.json({ data: profile });
@@ -316,9 +356,10 @@ router.get('/me', requireAuth, (req, res) => {
 
 router.patch('/me', requireAuth, (req, res) => {
   try {
+    const tenantId = tenantIdFrom(req);
     const profile = ensureOwnProfile(req.user);
     if (!profile) throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
-    res.json({ data: updateOwnProfile(profile, req.user.id, req.body) });
+    res.json({ data: updateOwnProfile(profile, req.user.id, tenantId, req.body) });
   } catch (error) {
     handleError(res, error);
   }
@@ -326,7 +367,13 @@ router.patch('/me', requireAuth, (req, res) => {
 
 router.get('/staff/profiles', requireAuth, requireAdmin, (req, res) => {
   try {
-    res.json({ data: queryAll('SELECT * FROM staff_profiles ORDER BY id') });
+    const tenantId = tenantIdFrom(req);
+    res.json({
+      data: queryAll(
+        'SELECT * FROM staff_profiles WHERE tenant_id = ? ORDER BY id',
+        [tenantId]
+      ),
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -334,7 +381,8 @@ router.get('/staff/profiles', requireAuth, requireAdmin, (req, res) => {
 
 router.get('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
   try {
-    const profile = profileById(req.params.id);
+    const tenantId = tenantIdFrom(req);
+    const profile = profileById(req.params.id, tenantId);
     if (!profile) throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     res.json({ data: profile });
   } catch (error) {
@@ -344,12 +392,14 @@ router.get('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
 
 router.post('/staff/profiles', requireAuth, requireAdmin, async (req, res) => {
   try {
+    assertNoClientTenant(req.body);
+    const tenantId = tenantIdFrom(req);
     const fields = validateFields(req.body, CREATE_FIELDS);
     if (fields.includes('employment_status') && req.body.employment_status !== 'active') {
       throw apiError('新建档案只允许 active 状态', 400, 'INVALID_EMPLOYMENT_STATUS');
     }
     const now = new Date().toISOString();
-    const columns = [...fields, 'created_at', 'updated_at'];
+    const columns = ['tenant_id', ...fields, 'created_at', 'updated_at'];
     const placeholders = columns.map(() => '?').join(', ');
     const created = withTransaction((db) => {
       const candidate = {
@@ -359,17 +409,20 @@ router.post('/staff/profiles', requireAuth, requireAdmin, async (req, res) => {
       };
       db.run(
         `INSERT INTO staff_profiles (${columns.join(', ')}) VALUES (${placeholders})`,
-        [...fields.map((field) => field === 'manager_id' ? null : req.body[field]), now, now]
+        [tenantId, ...fields.map((field) => field === 'manager_id' ? null : req.body[field]), now, now]
       );
-      const inserted = queryOne('SELECT * FROM staff_profiles WHERE id = last_insert_rowid()');
+      const inserted = queryOne(
+        'SELECT * FROM staff_profiles WHERE id = last_insert_rowid() AND tenant_id = ?',
+        [tenantId]
+      );
       if (fields.includes('manager_id')) {
-        updateManager(db, inserted.id, req.body.manager_id, { profile: candidate });
+        updateManager(db, tenantId, inserted.id, req.body.manager_id, { profile: candidate });
       } else {
-        assertActiveProfileAssignment(db, inserted, candidate, {
+        assertActiveProfileAssignment(db, tenantId, inserted, candidate, {
           excludeProfileId: inserted.id,
         });
       }
-      return profileById(inserted.id);
+      return profileById(inserted.id, tenantId);
     });
     await saveDB();
     res.status(201).json({ data: created });
@@ -380,10 +433,13 @@ router.post('/staff/profiles', requireAuth, requireAdmin, async (req, res) => {
 
 router.patch('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
   try {
-    if (!profileById(req.params.id)) {
-      throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
-    }
-    res.json({ data: updateProfile(req.params.id, req.body, ADMIN_FIELDS) });
+    assertNoClientTenant(req.body);
+    const tenantId = tenantIdFrom(req);
+    assertTenantWriteTarget(getDB(), {
+      table: 'staff_profiles', id: req.params.id, tenantId,
+      notFoundCode: 'PROFILE_NOT_FOUND', notFoundMessage: '人员档案不存在',
+    });
+    res.json({ data: updateProfile(tenantId, req.params.id, req.body, ADMIN_FIELDS) });
   } catch (error) {
     handleError(res, error);
   }
@@ -391,7 +447,11 @@ router.patch('/staff/profiles/:id', requireAuth, requireAdmin, (req, res) => {
 
 router.get('/organization/tree', requireAuth, requireAdmin, (req, res) => {
   try {
-    const profiles = queryAll('SELECT * FROM staff_profiles ORDER BY id');
+    const tenantId = tenantIdFrom(req);
+    const profiles = queryAll(
+      'SELECT * FROM staff_profiles WHERE tenant_id = ? ORDER BY id',
+      [tenantId]
+    );
     res.json({ data: buildOrganizationTree(profiles) });
   } catch (error) {
     handleError(res, error);
@@ -400,13 +460,14 @@ router.get('/organization/tree', requireAuth, requireAdmin, (req, res) => {
 
 router.patch('/staff/profiles/:id/manager', requireAuth, requireAdmin, async (req, res) => {
   try {
+    assertNoClientTenant(req.body);
+    const tenantId = tenantIdFrom(req);
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'manager_id')) {
       throw apiError('缺少 manager_id', 400, 'INVALID_MANAGER');
     }
-    if (!profileById(req.params.id)) {
-      throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
-    }
-    const profile = updateManager(getDB(), req.params.id, req.body.manager_id);
+    const profile = updateManager(
+      getDB(), tenantId, req.params.id, req.body.manager_id
+    );
     await saveDB();
     res.json({ data: profile });
   } catch (error) {
@@ -416,7 +477,11 @@ router.patch('/staff/profiles/:id/manager', requireAuth, requireAdmin, async (re
 
 router.get('/staff/profiles/:id/team', requireAuth, requireAdmin, (req, res) => {
   try {
-    const profiles = queryAll('SELECT * FROM staff_profiles ORDER BY id');
+    const tenantId = tenantIdFrom(req);
+    const profiles = queryAll(
+      'SELECT * FROM staff_profiles WHERE tenant_id = ? ORDER BY id',
+      [tenantId]
+    );
     if (!profiles.some((profile) => Number(profile.id) === Number(req.params.id))) {
       throw apiError('人员档案不存在', 404, 'PROFILE_NOT_FOUND');
     }

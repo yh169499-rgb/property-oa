@@ -88,9 +88,9 @@ test('批量导入在职状态字段时整批拒绝并回滚', async (t) => {
   `);
   db.run(`
     INSERT INTO staff_profiles
-      (user_id, name, phone, position, manager_id, employment_status) VALUES
-      (5, '在职管家', '13800112205', '物业管家', 1, 'active'),
-      (6, '离职师傅', '13800112206', '维修师傅', 1, 'inactive')
+      (tenant_id, user_id, name, phone, position, manager_id, employment_status) VALUES
+      ('tenant-test', 5, '在职管家', '13800112205', '物业管家', 1, 'active'),
+      ('tenant-test', 6, '离职师傅', '13800112206', '维修师傅', 1, 'inactive')
   `);
 
   const result = await post(server, '/api/staff/profiles/import-confirm', {
