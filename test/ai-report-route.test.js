@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 const analysis = {
@@ -43,19 +43,20 @@ async function fixture() {
   `);
   ensureWorkforceSchema(db);
   db.run(`
-    INSERT INTO users (id, name, phone, password, role) VALUES
-      (1, '组长账号', '13800000101', 'x', 'lead'),
-      (2, '组长账号二', '13800000102', 'x', 'lead'),
-      (3, '师傅账号', '13800000103', 'x', 'worker'),
-      (4, '树外账号', '13800000104', 'x', 'worker'),
-      (5, '主管账号', '13800000105', 'x', '主管');
+    INSERT INTO users (id,name,phone,password,role) VALUES
+      (1,'组长','13800000001','x','lead'),
+      (2,'组长','13800000002','x','worker'),
+      (3,'师傅','13800000003','x','worker'),
+      (4,'树外人员','13800000004','x','worker'),
+      (5,'主管','13800000005','x','主管');
     INSERT INTO staff_profiles (id, user_id, name, position, manager_id) VALUES
       (1, 1, '主管', '主管', NULL),
       (2, 2, '组长', '组长', 1),
       (3, 3, '师傅', '维修师傅', 2),
-      (4, 4, '树外人员', '维修师傅', NULL);
+      (4, 4, '树外人员', '维修师傅', NULL),
+      (5, 5, '主管', '主管', NULL);
     INSERT INTO community_memberships (community_id, staff_profile_id) VALUES
-      ('c1', 1), ('c1', 2), ('c1', 3), ('c2', 4);
+      ('c1', 1), ('c1', 2), ('c1', 3), ('c2', 4), ('c1', 5);
     INSERT INTO tickets
       (id, status, created, assigned_at, finished, estimated_hours, community_id, assignee_user_id)
     VALUES ('ticket-1', 'done', '2026-08-02T00:00:00Z', '2026-08-02T00:00:00Z',
@@ -86,7 +87,7 @@ async function jsonRequest(server, path, options = {}) {
 
 test('AI 状态与分析接口要求登录并返回六段式润色结果', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db, appOptions());
+  const server = await tenantServer(db, appOptions());
   t.after(() => { db.close(); return server.close(); });
 
   const anonymous = await jsonRequest(server, '/api/reports/ai/status');
@@ -116,7 +117,7 @@ test('AI 状态与分析接口要求登录并返回六段式润色结果', async
 
 test('AI 分析限制本人递归团队和小区范围并校验日期', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db, appOptions());
+  const server = await tenantServer(db, appOptions());
   t.after(() => { db.close(); return server.close(); });
   const post = (staffId, user, body) => jsonRequest(server, `/api/reports/staff/${staffId}/ai-analysis`, {
     method: 'POST',
@@ -146,7 +147,7 @@ test('AI 未配置时返回稳定 503，状态接口不暴露密钥和地址', a
   const db = await fixture();
   const config = enabledConfig();
   config.AI_API_KEY = '';
-  const server = await startHttpServer(db, appOptions(config));
+  const server = await tenantServer(db, appOptions(config));
   t.after(() => { db.close(); return server.close(); });
   const headers = { ...authHeader({ id: 3, role: 'worker' }), 'Content-Type': 'application/json' };
   const status = await jsonRequest(server, '/api/reports/ai/status', { headers });
@@ -164,7 +165,7 @@ test('AI 未配置时返回稳定 503，状态接口不暴露密钥和地址', a
 
 test('单用户一分钟最多触发五次 AI 分析', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db, appOptions());
+  const server = await tenantServer(db, appOptions());
   t.after(() => { db.close(); return server.close(); });
   const request = () => jsonRequest(server, '/api/reports/staff/3/ai-analysis', {
     method: 'POST',

@@ -16,10 +16,12 @@ function disableAccount(userId) {
   const profile = tableExists('staff_profiles')
     ? queryOne('SELECT id, name FROM staff_profiles WHERE user_id = ?', [userId])
     : null;
+  const hasSessionVersion = columnExists('users', 'session_version');
   const db = getDB();
   db.run('BEGIN TRANSACTION');
   try {
-    run('UPDATE users SET status = ? WHERE id = ?', ['disabled', userId]);
+    run(`UPDATE users SET status = ?${hasSessionVersion ? ', session_version = session_version + 1' : ''}
+      WHERE id = ?`, ['disabled', userId]);
 
     if (profile) {
       if (columnExists('staff_profiles', 'updated_at')) {

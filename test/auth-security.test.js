@@ -1,14 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTestDB } = require('./helpers/test-db');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
+const { ensureWorkforceSchema } = require('../workforce-schema');
 
 async function fixture(t) {
   const db = await createTestDB();
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
-      (1, '13800000001', 'x', '主管', 'lead'),
+      (1, '13800000001', 'x', '主管', '主管'),
       (2, '13800000002', 'x', '师傅', 'worker')
   `);
   db.run(`
@@ -29,7 +30,8 @@ async function fixture(t) {
       (id, phone, password, name, role, community_id, status, created)
     VALUES (1, '13800000003', 'x', '待审核师傅', 'worker', 'default', 'pending', '2026-08-01T00:00:00.000Z')
   `);
-  const server = await startHttpServer(db);
+  ensureWorkforceSchema(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   return { server };
 }

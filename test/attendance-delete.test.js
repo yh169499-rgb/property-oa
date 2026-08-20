@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createTestDB } = require('./helpers/test-db');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const database = require('../db');
 
@@ -10,7 +10,7 @@ async function fixture() {
   const db = await createTestDB();
   ensureWorkforceSchema(db);
   db.run(`INSERT INTO users (id, phone, password, name, role) VALUES
-    (1, '1', 'x', '主管', 'lead'), (2, '2', 'x', '师傅', 'worker')`);
+    (1, '1', 'x', '主管', '主管'), (2, '2', 'x', '师傅', 'worker')`);
   db.run(`INSERT INTO staff_profiles (id, user_id, name) VALUES (10, 2, '师傅')`);
   db.run(`INSERT INTO attendance_records (id, staff_id, work_date, status) VALUES (30, 10, '2026-08-04', 'normal')`);
   return db;
@@ -18,7 +18,7 @@ async function fixture() {
 
 test('主管 can delete attendance and ordinary users cannot', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const deleted = await fetch(`${server.url}/api/attendance/30`, {
     method: 'DELETE', headers: authHeader({ id: 1, role: 'lead' }),
@@ -35,7 +35,7 @@ test('主管 can delete attendance and ordinary users cannot', async (t) => {
 
 test('deleting an unknown attendance record returns a stable code', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/attendance/999`, {
     method: 'DELETE', headers: authHeader({ id: 1, role: 'lead' }),
@@ -46,7 +46,7 @@ test('deleting an unknown attendance record returns a stable code', async (t) =>
 
 test('删除接口等待持久化完成后再返回，避免刷新恢复旧记录', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const originalSave = database.saveDB;
   t.after(() => { database.saveDB = originalSave; });
@@ -72,7 +72,7 @@ test('删除接口等待持久化完成后再返回，避免刷新恢复旧记�
 test('主管可一次性清空全部考勤记录及变更日志，并等待持久化', async (t) => {
   const db = await fixture();
   db.run("INSERT INTO attendance_change_logs (attendance_id, operator_user_id) VALUES (30, 1)");
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(`${server.url}/api/attendance/clear-all`, {
     method: 'POST', headers: authHeader({ id: 1, role: 'lead' }),

@@ -9,11 +9,7 @@ function isGlobalManagerRole(role) {
 }
 
 function isSupervisorUser(user) {
-  if (!user) return false;
-  if (isGlobalManagerRole(user.role)) return true;
-  // 仅兼容尚未重启完成迁移的旧主管账号；启动迁移会把 lead 改为主管。
-  return String(user.role || '').trim().toLowerCase() === 'lead'
-    && String(user.name || '').trim() === '主管';
+  return Boolean(user) && user.role === '主管';
 }
 
 function positionForRole(role) {

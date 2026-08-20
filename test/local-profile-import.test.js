@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTestDB } = require('./helpers/test-db');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 const { migrateUsersToProfiles } = require('../services/workforce-migration');
@@ -10,14 +10,14 @@ async function fixture(t) {
   const db = await createTestDB();
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
-      (1, '13800000001', 'x', '主管', 'lead'),
+      (1, '13800000001', 'x', '主管', '主管'),
       (2, '13800112201', 'x', '张师傅', 'worker'),
       (3, '13800112203', 'x', '同名', 'worker'),
       (4, '13800112204', 'x', '同名', 'worker')
   `);
   ensureWorkforceSchema(db);
   migrateUsersToProfiles(db, '2026-07-30T00:00:00.000Z');
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   return { db, server };
 }

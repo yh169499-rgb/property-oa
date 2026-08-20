@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTestDB } = require('./helpers/test-db');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 const { migrateUsersToProfiles } = require('../services/workforce-migration');
@@ -10,19 +10,19 @@ async function fixture(t) {
   const db = await createTestDB();
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
-      (1, '13800000001', 'x', '主管', 'lead'),
+      (1, '13800000001', 'x', '主管', '主管'),
       (2, '13800000002', 'x', '组长', 'lead'),
       (3, '13800000003', 'x', '师傅', 'worker'),
       (4, '13800000004', 'x', '未分配人员', 'worker')
   `);
   ensureWorkforceSchema(db);
   migrateUsersToProfiles(db, '2026-07-30T00:00:00.000Z');
-  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (99, '13800000099', 'x', '缺失档案主管', 'admin')");
+  db.run("INSERT INTO users (id, phone, password, name, role) VALUES (99, '13800000099', 'x', '缺失档案主管', '主管')");
   db.run(`
     UPDATE staff_profiles SET manager_id = CASE user_id
       WHEN 2 THEN 1 WHEN 3 THEN 2 ELSE NULL END
   `);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   return { db, server };
 }

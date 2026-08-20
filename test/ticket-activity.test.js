@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const initSqlJs = require('sql.js');
 const { createTestDB } = require('./helpers/test-db');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const { ensureWorkforceSchema } = require('../workforce-schema');
 
@@ -103,7 +103,7 @@ async function apiFixture(t) {
   db.run("ALTER TABLE tickets ADD COLUMN metadata TEXT DEFAULT '{}'");
   db.run(`
     INSERT INTO users (id, phone, password, name, role) VALUES
-      (1, '13800000001', 'x', '主管', 'lead'),
+      (1, '13800000001', 'x', '主管', '主管'),
       (2, '13800000002', 'x', '唯一师傅', 'worker')
   `);
   ensureWorkforceSchema(db);
@@ -125,7 +125,7 @@ async function apiFixture(t) {
     SET assignee_user_id = 2, assigned_at = '2026-07-30T01:00:00.000Z'
     WHERE id = 'WX2'
   `);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   return { db, server };
 }

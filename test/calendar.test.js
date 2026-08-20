@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createTestDB } = require('./helpers/test-db');
 const { ensureWorkforceSchema } = require('../workforce-schema');
-const { startHttpServer } = require('./helpers/http-server');
+const { tenantServer } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 
 async function fixture() {
@@ -154,7 +154,7 @@ test('hides inactive profiles by default and for explicit or self selection', as
     date: '2026-07-30', staffId: 14, viewerUserId: 1,
   }).people, []);
 
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(
     `${server.url}/api/calendar/day?date=2026-07-30`,
@@ -211,7 +211,7 @@ test('does not apply legacy name history or current tickets to duplicate names',
 
 test('ordinary user is forced to own staff profile despite requested filters', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const response = await fetch(
     `${server.url}/api/calendar/day?date=2026-07-30&staff_id=13&manager_id=10`,
@@ -237,7 +237,7 @@ test('ordinary user calendar never falls back to worker name for unassigned tick
       ('UNASSIGNED-UNIQUE', '员工甲', NULL, '2026-07-30T12:00:00+08:00', '未分配',
        'wait', '2026-07-30T11:30:00+08:00', 1, 'c1')
   `);
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
 
   const uniqueName = await fetch(
@@ -263,7 +263,7 @@ test('ordinary user calendar never falls back to worker name for unassigned tick
 
 test('lead may recursively filter own team but cannot inspect another tree', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   const headers = authHeader({ id: 2, role: 'lead' });
   const team = await fetch(
@@ -282,7 +282,7 @@ test('lead may recursively filter own team but cannot inspect another tree', asy
 
 test('calendar endpoint requires authentication and strictly validates date', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   assert.equal((await fetch(`${server.url}/api/calendar/day?date=2026-07-30`)).status, 401);
   const response = await fetch(
@@ -295,7 +295,7 @@ test('calendar endpoint requires authentication and strictly validates date', as
 
 test('calendar endpoint hides unexpected database errors', async (t) => {
   const db = await fixture();
-  const server = await startHttpServer(db);
+  const server = await tenantServer(db);
   t.after(() => server.close());
   db.prepare = () => {
     const error = new Error('SQL secret: no such column');

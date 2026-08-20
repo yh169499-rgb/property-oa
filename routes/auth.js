@@ -4,8 +4,9 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const router = express.Router();
-const { queryOne, queryAll, run, saveDB, getDB } = require('../db');
-const { generateToken, requireAuth, requireAdmin } = require('../middleware/auth');
+const database = require('../db');
+const { queryOne, queryAll, run, getDB } = database;
+const { generateToken, requireAuth, requireAdmin, requireTenantUser } = require('../middleware/auth');
 const {
   createStaffAccount,
   approvePendingRegistration,
@@ -18,30 +19,52 @@ function usersHaveStatusColumn() {
 
 // POST /api/login
 router.post('/login', async (req, res) => {
-  const { phone, password, rememberMe } = req.body;
-  if (!phone || !password) return res.status(400).json({ error: '请输入手机号和密码' });
-  const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
-  if (!user) return res.status(401).json({ error: '手机号未注册' });
-  if (String(user.status || 'active') !== 'active') return res.status(403).json({ error: '账号已停用，请联系主管' });
-  const valid = await bcrypt.compare(password, user.password);
-  if (!valid) return res.status(401).json({ error: '密码错误' });
-  const token = generateToken(user, rememberMe);
-  res.json({ success: true, token, user: { id: user.id, phone: user.phone, name: user.name, role: user.role } });
+  try {
+    const { phone, password, rememberMe } = req.body;
+    if (!phone || !password) return res.status(400).json({ error: '请输入手机号和密码' });
+    const user = queryOne(`SELECT u.*,t.status AS tenant_status FROM users u
+      LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.phone=?`, [phone]);
+    if (!user) return res.status(401).json({ error: '手机号未注册' });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ error: '密码错误' });
+    if (user.role === 'platform_owner') {
+      return res.status(403).json({ error: '平台账号请使用平台登录入口', code: 'PLATFORM_LOGIN_REQUIRED' });
+    }
+    if (String(user.status || '') !== 'active' || !user.tenant_id || user.tenant_status !== 'active') {
+      return res.status(403).json({ error: '账号或企业已停用' });
+    }
+    const nowIso = new Date().toISOString();
+    run('UPDATE users SET last_login_at=? WHERE id=?', [nowIso, user.id]);
+    try {
+      await database.saveDB();
+    } catch (error) {
+      run('UPDATE users SET last_login_at=? WHERE id=?', [user.last_login_at ?? null, user.id]);
+      throw error;
+    }
+    const token = generateToken(user, rememberMe);
+    res.json({ success: true, token, user: {
+      id: user.id, phone: user.phone, name: user.name, role: user.role, tenant_id: user.tenant_id,
+    } });
+  } catch (_) {
+    res.status(500).json({ error: '服务器内部错误', code: 'INTERNAL_ERROR' });
+  }
 });
 
 // POST /api/reset-password
-router.post('/reset-password', requireAuth, async (req, res) => {
+router.post('/reset-password', requireAuth, requireTenantUser, async (req, res) => {
   const { phone, newPassword } = req.body;
   if (!phone || !newPassword) return res.status(400).json({ error: '手机号和新密码必填' });
   if (newPassword.length < 4) return res.status(400).json({ error: '密码至少4位' });
   const user = queryOne('SELECT * FROM users WHERE phone = ?', [phone]);
-  if (!user) return res.status(404).json({ error: '该手机号未注册' });
+  if (!user || user.role === 'platform_owner' || user.tenant_id !== req.user.tenant_id) {
+    return res.status(404).json({ error: '用户不存在', code: 'USER_NOT_FOUND' });
+  }
   const canReset = String(req.user.id) === String(user.id)
-    || ['admin', 'manager', 'supervisor', '主管', '经理'].includes(String(req.user.role || '').trim().toLowerCase());
+    || req.user.role === '主管';
   if (!canReset) return res.status(403).json({ error: '只能修改自己的密码，或由主管操作' });
   const hash = await bcrypt.hash(newPassword, 10);
-  run('UPDATE users SET password = ? WHERE phone = ?', [hash, phone]);
-  await saveDB();
+  run('UPDATE users SET password = ?, session_version = session_version + 1 WHERE phone = ?', [hash, phone]);
+  await database.saveDB();
   res.json({ success: true, message: '密码已重置' });
 });
 
@@ -61,7 +84,7 @@ router.post('/register', async (req, res) => {
     'INSERT INTO pending_registrations (phone, password, name, role, skill, community_id, status, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [phone, hash, name, ['keeper'].includes(String(role || '').toLowerCase()) ? 'keeper' : 'worker', skill || '', invite.community_id, 'pending', new Date().toISOString()]
   );
-  await saveDB();
+  await database.saveDB();
   res.json({ success: true, message: '注册申请已提交，请等待主管审核' });
 });
 
@@ -76,7 +99,7 @@ router.get('/pending-registrations', requireAuth, requireAdmin, (req, res) => {
 router.post('/pending-registrations/:id/approve', requireAuth, requireAdmin, async (req, res) => {
   try {
     const approved = approvePendingRegistration(getDB(), req.params.id, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, message: '已通过', user: approved });
   } catch (error) {
     if (String(error.message || '').includes('UNIQUE')) {
@@ -91,7 +114,7 @@ router.post('/pending-registrations/:id/reject', requireAuth, requireAdmin, asyn
   const reg = queryOne('SELECT * FROM pending_registrations WHERE id = ?', [req.params.id]);
   if (!reg) return res.status(404).json({ error: '记录不存在' });
   run("UPDATE pending_registrations SET status = 'rejected' WHERE id = ?", [req.params.id]);
-  await saveDB();
+  await database.saveDB();
   res.json({ success: true, message: '已拒绝' });
 });
 
@@ -109,7 +132,7 @@ router.post('/users', requireAuth, requireAdmin, async (req, res) => {
       skill,
       communityId: community_id || communityId || 'default',
     }, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, user: created });
   } catch (e) {
     if (e.message.includes('UNIQUE')) return res.status(400).json({ error: '该手机号已注册', code: 'PHONE_ALREADY_REGISTERED' });
@@ -139,7 +162,7 @@ router.delete('/users/:id', requireAuth, requireAdmin, async (req, res) => {
   if (!target) return res.status(404).json({ error: '用户不存在' });
   try {
     const departed = departStaff(getDB(), userId, req.user);
-    await saveDB();
+    await database.saveDB();
     res.json({ success: true, departed: true, profileId: departed.profileId, message: '人员已离职，账号已删除，历史记录已保留' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || '人员离职失败，请稍后重试', code: error.code });

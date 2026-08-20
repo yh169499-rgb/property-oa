@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
-const { verifyToken, requireAuth, requireAdmin } = require('./middleware/auth');
+const { verifyToken, requireAuth, requireAdmin, requireTenantUser } = require('./middleware/auth');
 const { getPersistenceStatus } = require('./services/persistence-status');
 
 const authRoutes = require('./routes/auth');
@@ -17,6 +17,17 @@ const attendanceRoutes = require('./routes/attendance');
 const workforceReportRoutes = require('./routes/workforce-reports');
 const directoryRoutes = require('./routes/directory');
 const { createAiReportRouter } = require('./routes/ai-reports');
+
+function isEnterpriseGateExempt(pathname) {
+  return ['/platform', '/enterprise-applications'].some(prefix => (
+    pathname === prefix || pathname.startsWith(`${prefix}/`)
+  ));
+}
+
+function requireEnterpriseAccount(req, res, next) {
+  if (isEnterpriseGateExempt(req.path)) return next();
+  return requireAuth(req, res, () => requireTenantUser(req, res, next));
+}
 
 function createServerApp(options = {}) {
   const app = express();
@@ -39,7 +50,7 @@ function createServerApp(options = {}) {
   app.use('/api/reset-password', loginLimiter);
 
   app.use(express.static(path.join(__dirname, 'public')));
-  app.use('/uploads', requireAuth, (req, res, next) => {
+  app.use('/uploads', requireAuth, requireTenantUser, (req, res, next) => {
     let ticketId = '';
     try {
       ticketId = decodeURIComponent(String(req.path || '').split('/').filter(Boolean)[0] || '');
@@ -53,6 +64,10 @@ function createServerApp(options = {}) {
   }, express.static(config.UPLOAD_DIR));
 
   app.use('/api', authRoutes);
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, service: 'property-oa' });
+  });
+  app.use('/api', requireEnterpriseAccount);
   app.use('/api/tickets', ticketRoutes);
   app.use('/api/communities', communityRoutes);
   app.use('/api/staff', staffRoutes);
@@ -63,9 +78,6 @@ function createServerApp(options = {}) {
   app.use('/api', attendanceRoutes);
   app.use('/api', workforceReportRoutes);
   app.use('/api', createAiReportRouter(options.aiReport));
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'property-oa' });
-  });
   app.get('/api/persistence/status', requireAuth, requireAdmin, (req, res) => {
     res.json({ data: getPersistenceStatus() });
   });
@@ -73,4 +85,4 @@ function createServerApp(options = {}) {
   return app;
 }
 
-module.exports = { createServerApp };
+module.exports = { createServerApp, isEnterpriseGateExempt, requireEnterpriseAccount };
