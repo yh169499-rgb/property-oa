@@ -53,6 +53,8 @@ services:
         sync: false
       - key: PLATFORM_BOOTSTRAP_CONFIRM
         sync: false
+      - key: PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START
+        sync: false
       - key: SEED_WORKFORCE_DEMO
         value: "false"
       # 平台运维初始化和空白企业凭据只由 Render 安全注入。
