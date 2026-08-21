@@ -51,6 +51,7 @@ function businessRowsForTenant(db, tenantId) {
 function ensureBlankSupervisorTenant(db, input) {
   const password = validatePassword(input.password, 'BLANK_SUPERVISOR_PASSWORD');
   const nowIso = input.nowIso || new Date().toISOString();
+  const resetPassword = input.resetPassword === true;
 
   db.run('BEGIN IMMEDIATE TRANSACTION');
   try {
@@ -80,6 +81,15 @@ function ensureBlankSupervisorTenant(db, input) {
       db.run(`UPDATE users SET name=?,role='主管',status='active',tenant_id=?,session_version=session_version+1
         WHERE id=?`, [BLANK_NAME, BLANK_TENANT_ID, user.id]);
       user = one(db, 'SELECT * FROM users WHERE id=?', [user.id]);
+      updated = true;
+    }
+
+    let passwordReset = false;
+    if (user && resetPassword) {
+      const passwordHash = bcrypt.hashSync(password, 12);
+      db.run(`UPDATE users SET password=?,session_version=session_version+1,last_login_at=NULL
+        WHERE id=?`, [passwordHash, user.id]);
+      passwordReset = true;
       updated = true;
     }
 
@@ -129,7 +139,9 @@ function ensureBlankSupervisorTenant(db, input) {
       db.run(`INSERT INTO platform_audit_logs
         (actor_user_id,action,target_type,target_id,before_json,after_json,created_at)
         VALUES(?, 'blank_supervisor.provision', 'tenant', ?, '{}', ?, ?)`,
-      [user.id, BLANK_TENANT_ID, JSON.stringify({ phoneLast4: BLANK_PHONE.slice(-4), created, updated }), nowIso]);
+      [user.id, BLANK_TENANT_ID, JSON.stringify({
+        phoneLast4: BLANK_PHONE.slice(-4), created, updated, passwordReset,
+      }), nowIso]);
     }
 
     db.run('COMMIT');
@@ -141,6 +153,7 @@ function ensureBlankSupervisorTenant(db, input) {
       tenantId: BLANK_TENANT_ID,
       phoneLast4: BLANK_PHONE.slice(-4),
       hasMockBusinessData: false,
+      passwordReset,
     };
   } catch (error) {
     try { db.run('ROLLBACK'); } catch (_) {}
@@ -160,6 +173,7 @@ async function runStartupPlatformBootstrap(options = {}) {
 
   const platformOwnerPassword = validatePassword(env.PLATFORM_OWNER_PASSWORD, 'PLATFORM_OWNER_PASSWORD');
   const blankSupervisorPassword = validatePassword(env.BLANK_SUPERVISOR_PASSWORD, 'BLANK_SUPERVISOR_PASSWORD');
+  const resetPasswords = String(env.PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START || '').toLowerCase() === 'true';
   const expectedSecret = String(env.PLATFORM_PROVISIONING_SECRET || '');
   const nowIso = options.now instanceof Date ? options.now.toISOString() : (options.nowIso || new Date().toISOString());
 
@@ -171,14 +185,29 @@ async function runStartupPlatformBootstrap(options = {}) {
     password: platformOwnerPassword,
     nowIso,
   });
+  let platformOwnerPasswordReset = false;
+  if (resetPasswords) {
+    const owner = one(options.db,
+      "SELECT id,role,tenant_id,status FROM users WHERE phone=?", [OWNER_PHONE]);
+    if (!owner || owner.role !== 'platform_owner' || owner.tenant_id
+      || owner.status !== 'active') {
+      throw bootstrapError('平台运维账号不存在或状态无效，无法重置密码', 'PLATFORM_OWNER_RESET_TARGET_INVALID', 409);
+    }
+    const passwordHash = await bcrypt.hash(platformOwnerPassword, 12);
+    options.db.run(`UPDATE users SET password=?,session_version=session_version+1,last_login_at=NULL
+      WHERE id=?`, [passwordHash, owner.id]);
+    platformOwner.passwordReset = true;
+    platformOwnerPasswordReset = true;
+  }
   const blankSupervisor = ensureBlankSupervisorTenant(options.db, {
     password: blankSupervisorPassword,
     nowIso,
+    resetPassword: resetPasswords,
   });
 
   const summary = { platformOwner, blankSupervisor };
   if (typeof options.persist === 'function' && (
-    platformOwner.created || blankSupervisor.created || blankSupervisor.updated
+    platformOwner.created || platformOwnerPasswordReset || blankSupervisor.created || blankSupervisor.updated
   )) {
     await options.persist();
   }
