@@ -94,3 +94,32 @@ test('平台初始化默认关闭，开启时要求确认口令和两个运行�
     /BLANK_SUPERVISOR_PASSWORD/
   );
 });
+
+test('显式重置开关才会更新两个账号密码并撤销旧会话', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  let saves = 0;
+  await runStartupPlatformBootstrap({ db, env, persist: async () => { saves += 1; } });
+  const oldOwnerHash = one(db, "SELECT password FROM users WHERE phone='13222514178'").password;
+  const oldBlankHash = one(db, "SELECT password FROM users WHERE phone='17713302589'").password;
+  const resetEnv = {
+    ...env,
+    PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START: 'true',
+    PLATFORM_OWNER_PASSWORD: 'ResetOwner!789',
+    BLANK_SUPERVISOR_PASSWORD: 'ResetBlank!789',
+  };
+  const result = await runStartupPlatformBootstrap({
+    db, env: resetEnv, persist: async () => { saves += 1; },
+  });
+  assert.equal(result.summary.platformOwner.passwordReset, true);
+  assert.equal(result.summary.blankSupervisor.passwordReset, true);
+  assert.equal(saves, 2);
+  const owner = one(db, "SELECT password,session_version FROM users WHERE phone='13222514178'");
+  const blank = one(db, "SELECT password,session_version FROM users WHERE phone='17713302589'");
+  assert.notEqual(owner.password, oldOwnerHash);
+  assert.notEqual(blank.password, oldBlankHash);
+  assert.equal(bcrypt.compareSync(resetEnv.PLATFORM_OWNER_PASSWORD, owner.password), true);
+  assert.equal(bcrypt.compareSync(resetEnv.BLANK_SUPERVISOR_PASSWORD, blank.password), true);
+  assert.equal(owner.session_version, 2);
+  assert.equal(blank.session_version, 2);
+});
