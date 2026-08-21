@@ -48,6 +48,11 @@ services:
         sync: false
       - key: TENANT_MIGRATION_STAFF_LIMIT
         sync: false
+      # 平台运维和发财企业只允许受保护的一次性初始化。
+      - key: APPLY_PLATFORM_BOOTSTRAP_ON_START
+        sync: false
+      - key: PLATFORM_BOOTSTRAP_CONFIRM
+        sync: false
       - key: SEED_WORKFORCE_DEMO
         value: "false"
       # 平台运维初始化和空白企业凭据只由 Render 安全注入。

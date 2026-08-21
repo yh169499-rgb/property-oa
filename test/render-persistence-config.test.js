@@ -25,3 +25,26 @@ test('Render 声明千问报告配置但不把 API Key 写入仓库', () => {
   assert.match(readme, /`AI_REPORT_ENABLED`[\s\S]{0,80}控制 AI 报告润色是否启用/);
   assert.doesNotMatch(readme, /\b[A-Z][A-Z0-9_]*(?:SECRET|KEY|PASSWORD|TOKEN)[A-Z0-9_]*\s*=\s*\S+/);
 });
+
+test('Render 声明一次性平台账号初始化开关和受保护凭据', () => {
+  for (const key of [
+    'APPLY_PLATFORM_BOOTSTRAP_ON_START',
+    'PLATFORM_BOOTSTRAP_CONFIRM',
+    'PLATFORM_PROVISIONING_SECRET',
+    'PLATFORM_OWNER_PASSWORD',
+    'BLANK_SUPERVISOR_PASSWORD',
+  ]) {
+    assert.match(renderYaml, new RegExp(`key:\\s*${key}`));
+  }
+  for (const key of [
+    'PLATFORM_BOOTSTRAP_CONFIRM',
+    'PLATFORM_PROVISIONING_SECRET',
+    'PLATFORM_OWNER_PASSWORD',
+    'BLANK_SUPERVISOR_PASSWORD',
+  ]) {
+    const block = renderYaml.match(new RegExp(`- key: ${key}\\n([\\s\\S]*?)(?=\\n\\s*- key:|$)`));
+    assert.ok(block, `missing ${key}`);
+    assert.match(block[1], /sync:\s*false/);
+    assert.doesNotMatch(block[1], /\bvalue\s*:/);
+  }
+});
