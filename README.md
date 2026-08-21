@@ -231,6 +231,18 @@ TENANT_MIGRATION_STAFF_LIMIT=4
 
 保存并重新部署后，日志出现“启动租户迁移完成”且服务进入 Live，即表示迁移成功。启动迁移会清理无法关联人员或小区的 `ai_report_analyses` 缓存；这些是可重新生成的 AI 缓存，不是工单报告原始数据，清理不会删除工单。确认服务正常后，应立即删除 `TENANT_MIGRATION_CONFIRM`，并将 `APPLY_TENANT_MIGRATION_ON_START` 改为 `false`；迁移已完成时即使暂时保留开关也不会重复写入。若日志仍出现 `TENANT_MIGRATION_CONFLICT`，请停止部署并先处理冲突，不要关闭生产租户校验。
 
+### 免费 Render 的一次性平台账号初始化
+
+平台初始化已经接入统一的受保护启动流程，不使用旧的 `STANDALONE_MANAGER_PASSWORD` 变量。需要在 Render Environment 中临时配置以下开关和密钥：
+
+- `APPLY_PLATFORM_BOOTSTRAP_ON_START`
+- `PLATFORM_BOOTSTRAP_CONFIRM`，值为 `PROVISION-PLATFORM-BOOTSTRAP`
+- `PLATFORM_PROVISIONING_SECRET`
+- `PLATFORM_OWNER_PASSWORD`
+- `BLANK_SUPERVISOR_PASSWORD`
+
+保存并重新部署后，日志出现“平台账号初始化完成”即表示两个账号已写入持久化数据库。初始化只创建平台运维账号和“发财”空白企业主管，不创建小区、工单、排班、考勤、绩效或报告数据；重复执行不会覆盖已有密码。确认登录成功后，立即关闭 `APPLY_PLATFORM_BOOTSTRAP_ON_START` 并清空 `PLATFORM_BOOTSTRAP_CONFIRM`，保留两个密码变量供后续运维核对但不要在日志或代码中打印。
+
 ### 固定生产账号与多租户迁移
 
 | 手机号 | 身份 | 数据规划 |

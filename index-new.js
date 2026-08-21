@@ -8,13 +8,21 @@ const { createServerApp } = require('./server-app');
 // 启动
 async function start() {
   await initDB();
-  const { runStartupStandaloneManager } = require('./services/startup-standalone-manager');
-  const standaloneManager = await runStartupStandaloneManager({
+  const { runStartupTenantMigration } = require('./services/startup-tenant-migration');
+  const tenantMigration = await runStartupTenantMigration({
     db: getDB(),
     persist: saveDB,
   });
-  if (standaloneManager.applied) {
-    console.log('✅ 独立主管账号迁移完成:', JSON.stringify(standaloneManager.summary));
+  if (tenantMigration.applied) {
+    console.log('✅ 租户数据迁移完成:', JSON.stringify(tenantMigration.summary));
+  }
+  const { runStartupPlatformBootstrap } = require('./services/startup-platform-bootstrap');
+  const platformBootstrap = await runStartupPlatformBootstrap({
+    db: getDB(),
+    persist: saveDB,
+  });
+  if (platformBootstrap.applied) {
+    console.log('✅ 平台账号初始化完成:', JSON.stringify(platformBootstrap.summary));
   }
   const { runStartupRetainedMigration } = require('./services/startup-retained-migration');
   const retainedMigration = await runStartupRetainedMigration({
