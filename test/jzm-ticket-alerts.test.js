@@ -7,6 +7,8 @@ const {
 } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
 const {
+  getTenantAlertConfig,
+  sendTicketAlert,
   setMessageSenderForTests,
   resetMessageSenderForTests,
 } = require('../services/jzm-messaging');
@@ -147,4 +149,33 @@ test('主管待派单提醒发送到企业固定预警群并@主管', async (t) 
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /当前还有 1 张工单待派单/);
   assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['manager-contact-a']);
+});
+
+test('未配置企业不回退到其他企业群或联系人，缺失处理人映射不降级@主管', async (t) => {
+  const calls = [];
+  setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
+  t.after(() => resetMessageSenderForTests());
+  const db = await fixture();
+  const server = await tenantServer(db);
+  t.after(() => server.close());
+  await configure(server);
+
+  const tenantB = getTenantAlertConfig(db, 'tenant-b');
+  assert.equal(tenantB.roomId, '');
+  assert.equal(tenantB.managerContactId, '');
+  assert.deepEqual(tenantB.contactMap, {});
+  await sendTicketAlert({
+    db, tenantId: 'tenant-b', kind: 'created',
+    ticket: { id: 'WB-1', cat: '水暖', message: 'B 企业工单', created: '2026-08-24T00:00:00Z' },
+    assignee: null,
+  });
+  assert.equal(calls.at(-1).body.imRoomId, '');
+  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, []);
+
+  await sendTicketAlert({
+    db, tenantId: 'tenant-a', kind: 'assigned',
+    ticket: { id: 'WA-1', cat: '电路', worker: '未配置师傅', message: '不应@主管' },
+    assignee: { displayName: '未配置师傅' },
+  });
+  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, []);
 });
