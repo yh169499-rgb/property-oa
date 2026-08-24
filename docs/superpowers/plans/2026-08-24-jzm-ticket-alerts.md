@@ -177,13 +177,13 @@ POST /api/settings/jzm-alert
 **文件：**
 - 任务 2-5 中列出的全部文件
 
-- [ ] **步骤 1：检查敏感信息**
+- [x] **步骤 1：检查敏感信息**
 
 运行：`rg -n "JZMM_MSG_TOKEN\\s*=|mentionContactIds.*[A-Za-z0-9]{16,}" . --glob '!node_modules/**'`
 
 预期：只出现环境变量名、测试占位符或文档示例，不出现真实 Token。
 
-- [ ] **步骤 2：提交**
+- [x] **步骤 2：提交**
 
 ```bash
 git add services/jzm-messaging.js services/tenant-alert-config.js routes/tickets.js routes/settings.js config.js .env.example docs/API.md test/jzm-ticket-alerts.test.js
