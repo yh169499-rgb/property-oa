@@ -237,11 +237,14 @@ TENANT_MIGRATION_STAFF_LIMIT=4
 
 - `APPLY_PLATFORM_BOOTSTRAP_ON_START`
 - `PLATFORM_BOOTSTRAP_CONFIRM`，值为 `PROVISION-PLATFORM-BOOTSTRAP`
+- `PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START`（仅忘记初始密码时临时设为 `true`）
 - `PLATFORM_PROVISIONING_SECRET`
 - `PLATFORM_OWNER_PASSWORD`
 - `BLANK_SUPERVISOR_PASSWORD`
 
 保存并重新部署后，日志出现“平台账号初始化完成”即表示两个账号已写入持久化数据库。初始化只创建平台运维账号和“发财”空白企业主管，不创建小区、工单、排班、考勤、绩效或报告数据；重复执行不会覆盖已有密码。确认登录成功后，立即关闭 `APPLY_PLATFORM_BOOTSTRAP_ON_START` 并清空 `PLATFORM_BOOTSTRAP_CONFIRM`，保留两个密码变量供后续运维核对但不要在日志或代码中打印。
+
+如果首次密码已写错或遗失，可在同一次初始化中临时将 `PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START` 设为 `true`，并更新两个密码变量；部署日志出现初始化完成后，先验证两个账号，再把该开关改回 `false`。该开关会使两个账号的旧会话立即失效，不能长期保持开启。
 
 ### 固定生产账号与多租户迁移
 
