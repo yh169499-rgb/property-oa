@@ -38,6 +38,10 @@ function validatePassword(value, name) {
   return password;
 }
 
+function isEnabled(value) {
+  return /^true$/i.test(String(value || '').trim().replace(/^['"]|['"]$/g, ''));
+}
+
 function businessRowsForTenant(db, tenantId) {
   return TENANT_TABLES
     .filter(table => table !== 'users' && table !== 'staff_profiles' && tableExists(db, table))
@@ -163,17 +167,27 @@ function ensureBlankSupervisorTenant(db, input) {
 
 async function runStartupPlatformBootstrap(options = {}) {
   const env = options.env || process.env;
-  if (String(env.APPLY_PLATFORM_BOOTSTRAP_ON_START || '').toLowerCase() !== 'true') {
+  const confirmation = String(env.PLATFORM_BOOTSTRAP_CONFIRM || '').trim();
+  const hasBootstrapInputs = Boolean(
+    confirmation
+    && String(env.PLATFORM_PROVISIONING_SECRET || '').trim()
+    && String(env.PLATFORM_OWNER_PASSWORD || '')
+    && String(env.BLANK_SUPERVISOR_PASSWORD || '')
+  );
+  const enabled = isEnabled(env.APPLY_PLATFORM_BOOTSTRAP_ON_START) || (
+    confirmation === CONFIRM_PHRASE && hasBootstrapInputs
+  );
+  if (!enabled) {
     return { applied: false, reason: 'disabled' };
   }
   if (!options.db) throw bootstrapError('缺少数据库实例', 'PLATFORM_BOOTSTRAP_DB_MISSING', 500);
-  if (String(env.PLATFORM_BOOTSTRAP_CONFIRM || '') !== CONFIRM_PHRASE) {
+  if (confirmation !== CONFIRM_PHRASE) {
     throw bootstrapError(`平台初始化必须提供确认口令 ${CONFIRM_PHRASE}`, 'PLATFORM_BOOTSTRAP_CONFIRM_REQUIRED');
   }
 
   const platformOwnerPassword = validatePassword(env.PLATFORM_OWNER_PASSWORD, 'PLATFORM_OWNER_PASSWORD');
   const blankSupervisorPassword = validatePassword(env.BLANK_SUPERVISOR_PASSWORD, 'BLANK_SUPERVISOR_PASSWORD');
-  const resetPasswords = String(env.PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START || '').toLowerCase() === 'true';
+  const resetPasswords = isEnabled(env.PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START);
   const expectedSecret = String(env.PLATFORM_PROVISIONING_SECRET || '');
   const nowIso = options.now instanceof Date ? options.now.toISOString() : (options.nowIso || new Date().toISOString());
 
