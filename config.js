@@ -58,6 +58,8 @@ module.exports = {
   JZMM_SESSION_ID: process.env.JZMM_SESSION_ID || '',
   JZMM_ALERT_SESSION_ID: process.env.JZMM_ALERT_SESSION_ID || process.env.JZMM_SESSION_ID || '',
   JZMM_MSG_TOKEN: process.env.JZMM_MSG_TOKEN || '',
+  // 外部建单入口的独立入站令牌；不得复用消息发送 Token。
+  JZMM_INGEST_TOKEN: process.env.JZMM_INGEST_TOKEN || '',
   JZMM_IM_BOT_ID: process.env.JZMM_IM_BOT_ID || '',
   JZMM_ALERT_ROOM_ID: process.env.JZMM_ALERT_ROOM_ID || '',
   JZMM_MANAGER_CONTACT_ID: process.env.JZMM_MANAGER_CONTACT_ID || '',

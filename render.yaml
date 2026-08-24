@@ -84,5 +84,7 @@ services:
       # 通过 /api/settings/jzm-alert 按租户保存，不在仓库中写入。
       - key: JZMM_MSG_TOKEN
         sync: false
+      - key: JZMM_INGEST_TOKEN
+        sync: false
       - key: JZMM_MSG_BASE_URL
         value: https://open.dpclouds.com

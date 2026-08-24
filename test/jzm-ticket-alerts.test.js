@@ -6,6 +6,8 @@ const {
   tenantServer,
 } = require('./helpers/tenant-fixture');
 const { authHeader } = require('./helpers/auth');
+const config = require('../config');
+const { one } = require('./helpers/tenant-fixture');
 const {
   getTenantAlertConfig,
   sendTicketAlert,
@@ -34,7 +36,7 @@ async function fixture() {
 async function request(server, path, user, options = {}) {
   const response = await fetch(`${server.url}${path}`, {
     ...options,
-    headers: { ...authHeader(user), ...(options.headers || {}) },
+    headers: { ...(user ? authHeader(user) : {}), ...(options.headers || {}) },
   });
   return { response, body: await response.json() };
 }
@@ -178,4 +180,61 @@ test('未配置企业不回退到其他企业群或联系人，缺失处理人�
     assignee: { displayName: '未配置师傅' },
   });
   assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, []);
+});
+
+test('外部建单按企业名称归属租户并触发该企业预警', async (t) => {
+  const calls = [];
+  setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
+  t.after(() => resetMessageSenderForTests());
+  const db = await fixture();
+  const server = await tenantServer(db, undefined, { id: 'tenant-a', name: '测试企业' });
+  t.after(() => server.close());
+  const previousToken = config.JZMM_INGEST_TOKEN;
+  config.JZMM_INGEST_TOKEN = 'integration-test-token';
+  t.after(() => { config.JZMM_INGEST_TOKEN = previousToken; });
+
+  const result = await request(server, '/api/tickets/external', null, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-JZM-Ingest-Token': 'integration-test-token',
+    },
+    body: JSON.stringify({
+      enterprise_name: '测试企业',
+      roomid: 'room-a', imbotid: 'bot-a', contactid: 'manager-contact-a',
+      type: 'repair', cat: '水暖', desc: '3号楼漏水', loc: '3号楼',
+      message: '请尽快处理', community_name: '测试小区',
+      status: 'done', worker: '不应由外部接口指定',
+    }),
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.record.status, 'wait');
+  assert.equal(result.body.record.worker, null);
+  const stored = one(db, 'SELECT tenant_id,status,worker FROM tickets WHERE id = ?', [result.body.record.id]);
+  assert.deepEqual(stored, { tenant_id: 'tenant-a', status: 'wait', worker: '' });
+  assert.equal(getTenantAlertConfig(db, 'tenant-a').roomId, 'room-a');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.at(-1).body.imRoomId, 'room-a');
+  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['manager-contact-a']);
+});
+
+test('外部建单拒绝错误令牌和未知企业', async (t) => {
+  const server = await tenantServer(await fixture(), undefined, { id: 'tenant-a', name: '测试企业' });
+  t.after(() => server.close());
+  const previousToken = config.JZMM_INGEST_TOKEN;
+  config.JZMM_INGEST_TOKEN = 'integration-test-token';
+  t.after(() => { config.JZMM_INGEST_TOKEN = previousToken; });
+  const base = { type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼', message: '请处理', community_name: '测试小区' };
+  const unauthorized = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'bad' },
+    body: JSON.stringify({ ...base, enterprise_name: '测试企业' }),
+  });
+  assert.equal(unauthorized.response.status, 401);
+  assert.equal(unauthorized.body.code, 'INVALID_INTEGRATION_TOKEN');
+  const unknown = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' },
+    body: JSON.stringify({ ...base, enterprise_name: '不存在企业' }),
+  });
+  assert.equal(unknown.response.status, 404);
+  assert.equal(unknown.body.code, 'ENTERPRISE_NOT_FOUND');
 });

@@ -17,7 +17,8 @@ const {
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
 const { isSupervisorUser } = require('../services/roles');
-const { sendTicketAlert } = require('../services/jzm-messaging');
+const { sendTicketAlert, saveTenantAlertConfig } = require('../services/jzm-messaging');
+const { requireIntegrationToken, alertConfigFromBody } = require('../services/external-ingest');
 const {
   STAFF_TICKET_TYPES,
   ticketReadScope,
@@ -327,11 +328,20 @@ router.get('/:id', requireAuth, (req, res) => {
   res.json({ data: rowToTicket(row) });
 });
 
-// POST /api/tickets
-router.post('/', requireAuth, async (req, res) => {
+// POST /api/tickets（外部接入路由必须在 /:id 之前声明）
+router.post('/external', requireIntegrationToken, createTicket);
+router.post('/', requireAuth, createTicket);
+
+async function createTicket(req, res) {
   const t = req.body || {};
   if (clientTenantProvided(t)) return clientTenantError(res);
   const supervisor = isSupervisorUser(req.user);
+  const external = Boolean(req.externalIntegration);
+  let externalAlertConfig = null;
+  if (external) {
+    try { externalAlertConfig = alertConfigFromBody(t); }
+    catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' }); }
+  }
   const type = String(t.type || 'repair').trim().toLowerCase();
   if (!STAFF_TICKET_TYPES.has(type)) {
     return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
@@ -341,7 +351,15 @@ router.post('/', requireAuth, async (req, res) => {
   catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
   try { assertCommunityAccess(req, community.id); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
-  const rawId = supervisor && t.id ? String(t.id).trim() : '';
+  if (externalAlertConfig) {
+    try {
+      saveTenantAlertConfig(getDB(), req.user.tenant_id, externalAlertConfig);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' });
+    }
+  }
+  // 外部系统不能覆盖内部编号、状态、优先级、处理人或创建时间，避免伪造历史数据。
+  const rawId = supervisor && !external && t.id ? String(t.id).trim() : '';
   const invalidIds = ['测试', 'test', ''];
   let id;
   if (rawId && !invalidIds.includes(rawId.toLowerCase())) { id = rawId; }
@@ -350,20 +368,20 @@ router.post('/', requireAuth, async (req, res) => {
     const maxNum = maxRow ? parseInt(maxRow.id.replace('WX', '')) || 0 : 0;
     id = 'WX' + String(maxNum + 1).padStart(4, '0');
   }
-  const now = supervisor && t.created ? t.created : new Date().toISOString();
+  const now = supervisor && !external && t.created ? t.created : new Date().toISOString();
   const communityId = community.id;
   const cat = t.cat || '其他';
   const loc = t.loc || '';
-  const requestedStatus = supervisor ? String(t.status || 'wait') : 'wait';
+  const requestedStatus = supervisor && !external ? String(t.status || 'wait') : 'wait';
   if (!['wait', 'doing'].includes(requestedStatus)) {
     return res.status(400).json({ error: '工单初始状态不合法', code: 'INVALID_TICKET_INITIAL_STATE' });
   }
-  const requestedPriority = supervisor ? String(t.priority || 'normal') : 'normal';
+  const requestedPriority = supervisor && !external ? String(t.priority || 'normal') : 'normal';
   if (!['low', 'normal', 'high', 'urgent'].includes(requestedPriority)) {
     return res.status(400).json({ error: '工单优先级不合法', code: 'INVALID_TICKET_PRIORITY' });
   }
   let assignee = null;
-  const requestedWorker = supervisor ? String(t.worker || '').trim() : '';
+  const requestedWorker = supervisor && !external ? String(t.worker || '').trim() : '';
   if (requestedWorker) {
     try { assignee = resolveAssignee(getDB(), requestedWorker, req.user.id, req.user.tenant_id); }
     catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
@@ -410,8 +428,8 @@ router.post('/', requireAuth, async (req, res) => {
     const tenantPlaceholder = tenantAware ? '?, ' : '';
     const values = [id, type, cat, t.desc || '', loc, priority, requestedStatus,
       assignee ? assignee.displayName : '', t.message || '', now,
-      supervisor ? (t.estimated_hours || 0) : 0,
-      supervisor ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
+      supervisor && !external ? (t.estimated_hours || 0) : 0,
+      supervisor && !external ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
       repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1,
       activePerformanceRuleId(getDB(), req.user.tenant_id),
       assignee ? assignee.assigneeUserId : null,
@@ -436,7 +454,7 @@ router.post('/', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
+}
 
 // PATCH /api/tickets/:id
 router.patch('/:id', requireAuth, async (req, res) => {

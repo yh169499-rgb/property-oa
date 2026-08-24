@@ -132,6 +132,7 @@ server/
 | POST | /api/pending-registrations/:id/reject | 登录 | 审核拒绝 |
 | GET | /api/tickets | 登录 | 工单列表 |
 | POST | /api/tickets | 登录 | 创建工单 |
+| POST | /api/tickets/external | `X-JZM-Ingest-Token` | 外部系统按企业名称创建工单并自动触发预警 |
 | PATCH | /api/tickets/:id | 登录 | 更新工单 |
 | DELETE | /api/tickets/:id | **Admin** | 删除工单 |
 | POST | /api/tickets/:id/photos | 登录 | 上传照片 |
@@ -165,6 +166,8 @@ server/
 | SUPABASE_SYNC_REQUIRED | 远程快照不可用时的安全启动闸门 |
 | JZMM_ACCESS_KEY_ID | 句子秒懂 AccessKeyId |
 | JZMM_ACCESS_KEY_SECRET | 句子秒懂 AccessKeySecret |
+| JZMM_MSG_TOKEN | 句子秒懂消息发送 Token（仅服务端） |
+| JZMM_INGEST_TOKEN | 外部建单入站令牌（独立于消息发送 Token，仅服务端） |
 | JZMM_BOT_ID | 秒懂机器人 ID |
 | JZMM_EVENT_ID | 秒懂事件 ID |
 | JZMM_SESSION_ID | 默认会话 ID |

@@ -25,6 +25,7 @@
 | GET/POST/DELETE | `/api/users[/:id]` | 本企业主管 | 仅本企业普通人员；客户端不能传 `staffLimit`/`staff_limit` |
 | GET/POST | `/api/pending-registrations[/:id/approve|reject]` | 本企业主管 | 仅本企业申请，容量不足返回 `409` |
 | GET/POST/PATCH/DELETE | `/api/tickets[/:id]` | 企业用户 | 首先按租户过滤，再应用本人/小区权限 |
+| POST | `/api/tickets/external` | `X-JZM-Ingest-Token` | 按企业名称解析租户，系统生成工单并触发企业预警 |
 | GET/POST/PATCH/DELETE | `/api/communities[/:id]` | 企业用户/主管 | 仅本企业小区和邀请码 |
 | GET/POST/PATCH/DELETE | `/api/shifts`、`/api/shift-templates` | 企业用户/主管 | 仅本企业人员和模板 |
 | GET/POST | `/api/reports/*`、`/api/settings/*` | 企业用户/主管 | 统计、缓存、绩效规则和设置均按租户隔离 |
@@ -63,15 +64,62 @@ Token 或联系人映射。
 外部秒回发送接口使用 `POST /api/v2/message/send?token=...`，消息体为
 `{ imBotId, imRoomId, messageType: 7, payload: { text, mentionContactIds } }`。
 
+## 外部系统按企业名称建单
+
+秒回或其他外部系统不需要为每家企业伪造 Bearer 登录会话。使用服务端环境变量
+`JZMM_INGEST_TOKEN` 配置的独立入站令牌，调用 `POST /api/tickets/external`，并在
+请求体中传入企业名称。服务端会按企业名称（忽略首尾空格、大小写）精确解析 active
+企业，找到该企业主管后在该企业租户内创建工单；不会接受客户端传入 `tenant_id`。
+
+请求头：
+
+```http
+X-JZM-Ingest-Token: <Render 中配置的 JZMM_INGEST_TOKEN>
+Content-Type: application/json
+```
+
+请求示例（首次建单时也可以把该企业的秒回 ID 一并交给系统保存）：
+
+```json
+{
+  "enterprise_name": "企业名称",
+  "roomid": "企业固定预警群 roomId",
+  "imbotid": "企业固定机器人 imBotId",
+  "contactid": "主管 contactId",
+  "contact_map": { "张师傅": "维修师傅 contactId" },
+  "type": "repair",
+  "cat": "水暖",
+  "desc": "3号楼2单元漏水",
+  "loc": "3号楼2单元",
+  "message": "请尽快处理",
+  "community_name": "小区名称",
+  "feedback_person": "闫亚多",
+  "feedback_group": "工单冠军居民群",
+  "original_message": "居民原始消息"
+}
+```
+
+`enterprise_name` 也兼容 `enterpriseName`、`company_name`、`tenant_name`；秒回 ID
+兼容 `roomId`/`room_id`、`imBotId`/`im_bot_id`、`contactId`/`contact_id`。携带任意
+一个秒回配置字段时，三项群/机器人/主管联系人必须同时提供，系统会按该企业保存，之后
+创建、派单、完工和待派单提醒均自动使用该企业自己的 room、机器人和联系人映射。
+
+外部接口只允许系统生成工单号、当前时间、`wait` 状态、`normal` 优先级和未派单状态；
+请求中即使带有 `id`、`status`、`priority`、`worker` 或 `created` 也不会覆盖这些内部字段。
+小区仍按企业范围校验：单小区可省略，多小区必须传 `community_id`、`communityId` 或
+`community_name`。未知企业返回 `404 ENTERPRISE_NOT_FOUND`，同名企业返回
+`409 ENTERPRISE_AMBIGUOUS`，停用企业返回 `403 ENTERPRISE_DISABLED`，令牌错误返回
+`401 INVALID_INTEGRATION_TOKEN`。
+
 ## 平台读接口
 
 读取接口不接受请求体。查询参数均为可选且必须通过服务端白名单校验；响应不包含任何凭据或密钥。
 
 ## 外部建单接口
 
-外部系统调用企业工单接口时，仍需使用该企业用户的 Bearer 会话；企业归属由登录身份
-确定，不能由请求体伪造。单小区企业可以省略小区字段，系统自动归属；多小区企业必须
-传入 `community_id`、`communityId` 或 `community_name`，名称无法唯一匹配时会拒绝建单。
+企业内部前端调用 `/api/tickets` 时仍需使用企业用户的 Bearer 会话；企业归属由登录
+身份确定，不能由请求体伪造。外部系统请使用上面的 `/api/tickets/external`，由服务端
+根据企业名称解析归属。
 
 ### POST `/api/tickets`
 

@@ -20,7 +20,7 @@ const enterpriseApplicationRoutes = require('./routes/enterprise-applications');
 const { createAiReportRouter } = require('./routes/ai-reports');
 
 function isEnterpriseGateExempt(pathname) {
-  return ['/platform', '/enterprise-applications'].some(prefix => (
+  return ['/platform', '/enterprise-applications', '/tickets/external'].some(prefix => (
     pathname === prefix || pathname.startsWith(`${prefix}/`)
   ));
 }
@@ -53,6 +53,16 @@ function createServerApp(options = {}) {
   app.use('/api/reset-password', loginLimiter);
   app.use('/api/platform/login', loginLimiter);
   app.use('/api/enterprise-applications', loginLimiter);
+
+  // 外部系统使用独立令牌接入；令牌之外再加请求频率保护，避免误配置或泄露时被刷单。
+  const integrationLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: '外部建单请求过于频繁，请稍后再试', code: 'INTEGRATION_RATE_LIMITED' },
+  });
+  app.use('/api/tickets/external', integrationLimiter);
 
   app.use(express.static(path.join(__dirname, 'public')));
   app.use('/uploads', requireAuth, requireTenantUser, (req, res, next) => {
