@@ -23,6 +23,7 @@ const STATUS_CLASS = { wait: 'wait', doing: 'doing', pending: 'pending', confirm
 let state = { tickets: [], staff: [], communities: [] };
 let currentRole = 'eng_lead';
 let currentCommunity = 'default';
+let currentSupervisorProfileId = null;
 let charts = {};   // echarts 实例缓存
 let useApi = true; // 是否使用后端 API
 
@@ -31,12 +32,13 @@ let useApi = true; // 是否使用后端 API
    ============================================================ */
 async function load() {
   // 不再从浏览器恢复人员/工单明细，避免旧缓存绕过服务端权限；服务端 API 成功后再填充内存状态。
-  state.staff = JSON.parse(JSON.stringify(SEED.staff));
+  state.staff = [];
   currentRole = localStorage.getItem(LS_ROLE) || 'eng_lead';
   currentCommunity = localStorage.getItem(LS_COMMUNITY) || 'default';
 
   // 加载小区列表
   if (useApi) {
+    await reloadStaff();
     try {
       var isLead = currentRole === 'eng_lead';
       var myName = currentRole.replace(/^worker_|^pm_keeper_/, '');
@@ -49,17 +51,6 @@ async function load() {
 
   // 工单从 API 加载（按当前小区筛选）
   if (useApi) {
-    // 加载人员状态
-    try {
-      var stResp = await fetch(API_BASE + '/api/staff/status', { headers: authHeaders() });
-      var stJson = await stResp.json();
-      if (stJson.data) {
-        stJson.data.forEach(function(r) {
-          var s = state.staff.find(function(x) { return x.name === r.name; });
-          if (s) s.status = r.status;
-        });
-      }
-    } catch(e) { /* ignore */ }
     try {
       var resp = await fetch(API_BASE + '/api/tickets?community_id=' + encodeURIComponent(currentCommunity), { headers: authHeaders() });
       var json = await resp.json();
@@ -73,6 +64,63 @@ async function load() {
   // API 不可用时只保留空状态，不能使用可能过期或越权的浏览器工单缓存。
   state.tickets = [];
   saveLocal();
+}
+
+function staffRoleFromPosition(position) {
+  var value = String(position || '').trim();
+  if (/管家/.test(value)) return '物业管家';
+  if (/维修|工程/.test(value)) return '维修工';
+  return '';
+}
+
+function staffFromProfile(profile) {
+  var role = staffRoleFromPosition(profile && profile.position);
+  if (!role || !profile || !profile.name) return null;
+  return {
+    id: String(profile.id || profile.user_id || profile.name),
+    name: String(profile.name),
+    role: role,
+    skill: String(profile.skill || ''),
+    phone: String(profile.phone || ''),
+    status: profile.employment_status === 'active' ? 'on' : 'off',
+    employmentStatus: String(profile.employment_status || 'active'),
+    managerId: profile.manager_id == null ? null : String(profile.manager_id),
+  };
+}
+
+async function reloadStaff() {
+  if (!useApi) {
+    state.staff = [];
+    return;
+  }
+  currentSupervisorProfileId = null;
+  var ownProfile = null;
+  try {
+    var ownResponse = await fetch(API_BASE + '/api/me', { headers: authHeaders() });
+    var ownPayload = await ownResponse.json();
+    if (ownResponse.ok && ownPayload.data) {
+      ownProfile = ownPayload.data;
+      if (currentRole === 'eng_lead' && ownProfile.id != null) {
+        currentSupervisorProfileId = String(ownProfile.id);
+      }
+    }
+  } catch (e) { /* 未登录时没有本人档案 */ }
+  var profiles = [];
+  try {
+    var response = await fetch(API_BASE + '/api/staff/profiles', { headers: authHeaders() });
+    var payload = await response.json();
+    if (response.ok && Array.isArray(payload.data)) profiles = payload.data;
+  } catch (e) { /* 普通人员没有档案管理权限，继续读取本人档案 */ }
+  if (!profiles.length && ownProfile) profiles = [ownProfile];
+  state.staff = profiles.map(staffFromProfile).filter(Boolean);
+  try {
+    var statusResponse = await fetch(API_BASE + '/api/staff/status', { headers: authHeaders() });
+    var statusPayload = await statusResponse.json();
+    (statusPayload.data || []).forEach(function (row) {
+      var staff = state.staff.find(function (item) { return item.name === row.name; });
+      if (staff) staff.status = row.status;
+    });
+  } catch (e) { /* 状态不可用时使用档案的在职状态 */ }
 }
 
 function saveLocal() {
@@ -677,11 +725,14 @@ function ageLabel(t) {
 }
 function ticketSla(t) { return t.priority === 'urgent' ? 2 : (t.priority === 'high' ? 8 : (t.priority === 'normal' ? 24 : 48)); }
 function isOnTime(t) { var h = durHours(t.created, t.finished); return h != null && h <= ticketSla(t); }
-function activeStaff(role) {
+function activeStaff() {
   var now = new Date();
   var currentHM = now.getHours() * 60 + now.getMinutes();
   return state.staff.filter(s => {
-    if (s.role !== role || s.status !== 'on') return false;
+    var isManaged = currentRole !== 'eng_lead'
+      || !currentSupervisorProfileId
+      || String(s.managerId || '') === String(currentSupervisorProfileId);
+    if (!isManaged || (s.role !== '维修工' && s.role !== '物业管家') || s.status !== 'on') return false;
     // 检查值班时间
     var start = parseHM(s.dutyStart || '00:00');
     var end = parseHM(s.dutyEnd || '23:59');
@@ -818,8 +869,8 @@ function buildActions(t) {
   var urgeBtn = (isLead(t) && t.status === 'pending') ? `<button class="btn sm" style="background:var(--warning);color:#fff" onclick="urgeTicket('${t.id}')">⚡ 催办</button>` : '';
 
   if(t.status==='wait'){
-    if(!isLead(t)) return hint(`仅${repair?'工程部':'物业'}主管可指派。`);
-    var people=activeStaff(repair?'维修工':'物业管家'); if(!people.length)return hint('暂无可派单人员（全部正在处理、请假或不在值班时段）。');
+    if(!isLead(t)) return hint('仅主管可指派。');
+    var people=activeStaff(); if(!people.length)return hint('暂无可派单人员（直属人员全部正在处理、请假或不在值班时段）。');
     var defHrs = CAT_DEFAULT_HOURS[t.cat] || 2;
     var timeOpts = [0.5,1,1.5,2,2.5,3,4,5,6,8].map(h => `<option value="${h}"${h===defHrs?' selected':''}>${h}小时</option>`).join('');
     return `<select id="assignWorker">${people.map(s=>`<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.skill)}</option>`).join('')}</select><select id="assignDuration" title="预计处理时间">${timeOpts}</select><button class="btn" onclick="assignTicket('${t.id}')">确认指派</button>`;
@@ -1610,6 +1661,7 @@ function enterApp(user){
   if(roleLabel){roleLabel.style.display='inline';roleLabel.textContent=user.name+' · '+(['admin','lead','manager','supervisor','主管','经理'].indexOf(user.role) >= 0 ? '主管' : user.role==='worker'?'维修工':'管家');}
   // 重新加载数据（小区列表 + 工单），然后渲染
   (async function(){
+    await reloadStaff();
     await reloadCommunities();
     await reloadTickets();
     enhanceState();

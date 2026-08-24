@@ -66,6 +66,21 @@ test('系统标题不拼接测试小区名称', () => {
   assert.doesNotMatch(app, /name \+ '工单系统'/);
 });
 
+test('派单候选人必须来自当前企业服务端档案，不能使用静态演示人员', () => {
+  assert.match(app, /function reloadStaff\s*\(/);
+  assert.match(app, /\/api\/staff\/profiles/);
+  assert.match(app, /await reloadStaff\(\)/);
+  assert.doesNotMatch(app, /state\.staff = JSON\.parse\(JSON\.stringify\(SEED\.staff\)\)/);
+});
+
+test('主管可将任意类型工单派给直属维修师傅或物业管家', () => {
+  assert.match(app, /function activeStaff\s*\(\)/);
+  assert.match(app, /activeStaff\(\)/);
+  assert.doesNotMatch(app, /activeStaff\(repair \? '维修工' : '物业管家'\)/);
+  assert.match(app, /仅主管可指派/);
+  assert.match(app, /managerId/);
+});
+
 test('人员报告提供按需千问润色并固定展示六类管理解读', () => {
   assert.match(report, /AI 优化并润色/);
   assert.match(report, /AI 润色报告/);
