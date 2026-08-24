@@ -208,9 +208,8 @@ test('外部建单按企业名称归属租户并触发该企业预警', async (t
     }),
   });
   assert.equal(result.response.status, 200);
-  assert.equal(result.body.record.status, 'wait');
-  assert.equal(result.body.record.worker, null);
-  const stored = one(db, 'SELECT tenant_id,status,worker FROM tickets WHERE id = ?', [result.body.record.id]);
+  assert.deepEqual(result.body, { success: true });
+  const stored = one(db, 'SELECT tenant_id,status,worker FROM tickets ORDER BY created DESC LIMIT 1');
   assert.deepEqual(stored, { tenant_id: 'tenant-a', status: 'wait', worker: '' });
   assert.equal(getTenantAlertConfig(db, 'tenant-a').roomId, 'room-a');
   await new Promise((resolve) => setImmediate(resolve));

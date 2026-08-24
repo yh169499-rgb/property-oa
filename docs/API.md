@@ -106,6 +106,8 @@ Content-Type: application/json
 
 外部接口只允许系统生成工单号、当前时间、`wait` 状态、`normal` 优先级和未派单状态；
 请求中即使带有 `id`、`status`、`priority`、`worker` 或 `created` 也不会覆盖这些内部字段。
+建单或合并成功时只返回 `200 {"success": true}`；工单详情、工单号和归属信息保存在系统
+内部，不作为外部接口响应返回。失败时仍返回 `error` 与稳定的 `code` 方便调用方处理。
 小区仍按企业范围校验：单小区可省略，多小区必须传 `community_id`、`communityId` 或
 `community_name`。未知企业返回 `404 ENTERPRISE_NOT_FOUND`，同名企业返回
 `409 ENTERPRISE_AMBIGUOUS`，停用企业返回 `403 ENTERPRISE_DISABLED`，令牌错误返回

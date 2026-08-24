@@ -407,6 +407,7 @@ async function createTicket(req, res) {
       [feedbackCount, repeatKey, recentOpen.id, ...tenantParams]);
     await saveDB();
     const mergedTicket = rowToTicket(ticketForTenant(req, recentOpen.id));
+    if (external) return res.json({ success: true });
     return res.json({ success: true, action: 'merged', merged: true, mergedInto: recentOpen.id, record: mergedTicket });
   }
 
@@ -450,6 +451,7 @@ async function createTicket(req, res) {
     notifyTicketAlert({
       db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee,
     });
+    if (external) return res.json({ success: true });
     res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
     res.status(500).json({ error: e.message });
