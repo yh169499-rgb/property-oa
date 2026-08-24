@@ -39,10 +39,6 @@ function parseContactMap(value) {
 
 function getEnvConfig() {
   return {
-    roomId: String(config.JZMM_ALERT_ROOM_ID || '').trim(),
-    imBotId: String(config.JZMM_IM_BOT_ID || '').trim(),
-    managerContactId: String(config.JZMM_MANAGER_CONTACT_ID || '').trim(),
-    contactMap: parseContactMap(config.JZMM_CONTACT_MAP_JSON),
     msgToken: String(config.JZMM_MSG_TOKEN || '').trim(),
     baseUrl: String(config.JZMM_MSG_BASE_URL || 'https://open.dpclouds.com').replace(/\/+$/, ''),
   };
@@ -61,10 +57,11 @@ function getTenantAlertConfig(db, tenantId) {
   const environment = getEnvConfig();
   const stored = getStoredConfig(db, tenantId);
   return {
-    roomId: String(stored.roomId || environment.roomId).trim(),
-    imBotId: String(stored.imBotId || environment.imBotId).trim(),
-    managerContactId: String(stored.managerContactId || environment.managerContactId).trim(),
-    contactMap: { ...environment.contactMap, ...parseContactMap(stored.contactMap) },
+    // 群、机器人和联系人必须按租户配置，禁止使用跨租户环境默认值回退。
+    roomId: String(stored.roomId || '').trim(),
+    imBotId: String(stored.imBotId || '').trim(),
+    managerContactId: String(stored.managerContactId || '').trim(),
+    contactMap: parseContactMap(stored.contactMap),
     msgToken: environment.msgToken,
     baseUrl: environment.baseUrl,
     updatedAt: stored.updatedAt || '',
@@ -187,11 +184,13 @@ async function sendMessage(configured, text, mentionContactIds = []) {
 
 async function sendTicketAlert({ db, tenantId, kind, ticket, actor, assignee }) {
   const configured = getTenantAlertConfig(db, tenantId);
-  const contact = kind === 'completed'
+  const isWorkerTarget = kind === 'completed' || kind === 'assigned' || (kind === 'created' && assignee);
+  const contact = isWorkerTarget
     ? contactIdFor(configured, assignee || { name: ticket?.worker })
-    : kind === 'created' || kind === 'assigned'
-      ? contactIdFor(configured, assignee) || configured.managerContactId
-      : configured.managerContactId;
+    : configured.managerContactId;
+  if (isWorkerTarget && !contact) {
+    console.warn('[秒回预警] 未找到处理人 contactId，消息不降级 @主管:', ticket?.worker || assignee?.displayName || '未指定');
+  }
   const text = formatTicketAlert(kind, ticket, actor, assignee);
   return sendMessage(configured, text, [contact]);
 }
