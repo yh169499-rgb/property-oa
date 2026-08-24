@@ -17,6 +17,7 @@ const {
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
 const { isSupervisorUser } = require('../services/roles');
+const { sendTicketAlert } = require('../services/jzm-messaging');
 const {
   STAFF_TICKET_TYPES,
   ticketReadScope,
@@ -65,8 +66,28 @@ function rowToTicket(row) {
     performanceRuleVersionId: row.performance_rule_version_id == null ? null : Number(row.performance_rule_version_id),
     notes: meta.notes || [], urged: meta.urged || [],
     suspendReason: meta.suspendReason || '', suspendEstimate: meta.suspendEstimate || '',
-    steps: meta.steps || []
+    steps: meta.steps || [],
+    feedbackPerson: meta.feedbackPerson || meta.feedback_person || '',
+    feedbackGroup: meta.feedbackGroup || meta.feedback_group || '',
+    originalMessage: meta.originalMessage || meta.original_message || ''
   };
+}
+
+function notificationMetadata(input = {}) {
+  const source = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const value = {
+    ...source,
+    feedbackPerson: input.feedback_person || input.feedbackPerson || input.reporter || input.reporter_name || source.feedbackPerson || source.feedback_person || '',
+    feedbackGroup: input.feedback_group || input.feedbackGroup || input.group_name || input.groupName || source.feedbackGroup || source.feedback_group || '',
+    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message || input.message || '',
+  };
+  return JSON.stringify(value);
+}
+
+function notifyTicketAlert(args) {
+  sendTicketAlert(args).catch((error) => {
+    console.warn('[秒回预警] 工单提醒失败:', error.message);
+  });
 }
 
 function tableExists(name) {
@@ -381,6 +402,7 @@ router.post('/', requireAuth, async (req, res) => {
   const isRecurring = Boolean(repeatOf);
   const recurrenceNote = isRecurring ? `近30天同类问题复发${repeatCount}次，关联历史工单${repeatOf}` : '';
   const priority = isRecurring ? raiseRecurringPriority(requestedPriority) : requestedPriority;
+  const metadata = notificationMetadata(t);
 
   try {
     const tenantAware = tableHasColumn('tickets', 'tenant_id');
@@ -394,18 +416,22 @@ router.post('/', requireAuth, async (req, res) => {
       activePerformanceRuleId(getDB(), req.user.tenant_id),
       assignee ? assignee.assigneeUserId : null,
       assignee ? assignee.assigneeStaffProfileId : null,
-      assignee ? now : ''];
+      assignee ? now : '',
+      metadata];
     if (tenantAware) values.unshift(req.user.tenant_id);
     run(
       `INSERT INTO tickets (${tenantColumn}id, type, cat, desc, loc, priority, status, worker, message,
         created, estimated_hours, session_id, community_id, repeat_key, repeat_of,
         repeat_count, is_recurring, recurrence_note, feedback_count,
-        performance_rule_version_id, assignee_user_id, assignee_staff_profile_id, assigned_at)
-       VALUES (${tenantPlaceholder}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        performance_rule_version_id, assignee_user_id, assignee_staff_profile_id, assigned_at, metadata)
+       VALUES (${tenantPlaceholder}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       values);
     await saveDB();
     const row = ticketForTenant(req, id);
     const ticket = rowToTicket(row);
+    notifyTicketAlert({
+      db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee,
+    });
     res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -432,6 +458,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     });
   }
   const action = detectTicketAction(before, updates);
+  let assignee = null;
   const allowed = { status: 'status', worker: 'worker', priority: 'priority', finished: 'finished', reject_reason: 'reject_reason', rejectReason: 'reject_reason', estimated_hours: 'estimated_hours', cat: 'cat', loc: 'loc', desc: 'desc', message: 'message', sessionId: 'session_id', metadata: 'metadata', performance_rule_version_id: 'performance_rule_version_id' };
   const sets = [], values = [];
   for (const [key, col] of Object.entries(allowed)) {
@@ -440,7 +467,6 @@ router.patch('/:id', requireAuth, async (req, res) => {
   if (updates.worker !== undefined &&
       (updates.worker !== before.worker || before.assignee_user_id == null || before.assignee_staff_profile_id == null)) {
     const workerName = String(updates.worker || '').trim();
-    let assignee = null;
     if (workerName) {
       try { assignee = resolveAssignee(db, workerName, req.user.id, req.user.tenant_id); }
       catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
@@ -502,7 +528,19 @@ router.patch('/:id', requireAuth, async (req, res) => {
     await saveDB();
     const row = ticketForTenant(req, req.params.id);
     if (!row) return res.status(404).json({ error: '工单不存在' });
-    res.json({ success: true, community_resolution: community, record: rowToTicket(row) });
+    const ticket = rowToTicket(row);
+    if (assignee && (action === 'assign' || before.worker !== ticket.worker)) {
+      notifyTicketAlert({
+        db: getDB(), tenantId: req.user.tenant_id, kind: 'assigned', ticket, actor: req.user, assignee,
+      });
+    }
+    if (updates.status === 'done' && before.status !== 'done') {
+      notifyTicketAlert({
+        db: getDB(), tenantId: req.user.tenant_id, kind: 'completed', ticket, actor: req.user,
+        assignee: assignee || { displayName: ticket.worker, name: ticket.worker },
+      });
+    }
+    res.json({ success: true, community_resolution: community, record: ticket });
   } catch (e) {
     if (transactionStarted) {
       try { db.run('ROLLBACK'); } catch (rollbackError) {}

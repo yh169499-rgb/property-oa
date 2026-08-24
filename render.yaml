@@ -80,3 +80,9 @@ services:
         value: report-analysis-v1
       - key: AI_API_KEY
         sync: false
+      # 秒回预警发送 Token；企业的 roomId、imBotId、主管/员工 contactId
+      # 通过 /api/settings/jzm-alert 按租户保存，不在仓库中写入。
+      - key: JZMM_MSG_TOKEN
+        sync: false
+      - key: JZMM_MSG_BASE_URL
+        value: https://open.dpclouds.com
