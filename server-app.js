@@ -32,6 +32,8 @@ function requireEnterpriseAccount(req, res, next) {
 
 function createServerApp(options = {}) {
   const app = express();
+  // Render terminates TLS at a trusted single reverse proxy and forwards the client IP.
+  app.set('trust proxy', 1);
   const configuredOrigins = String(process.env.CORS_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
   app.use(cors({
     // 同源部署不需要跨域；只有显式配置的前端域名才允许 CORS。
