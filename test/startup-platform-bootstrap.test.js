@@ -123,3 +123,20 @@ test('显式重置开关才会更新两个账号密码并撤销旧会话', async
   assert.equal(owner.session_version, 2);
   assert.equal(blank.session_version, 2);
 });
+
+test('Render 环境值带空格或未设置启动开关时仍可用确认口令初始化', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  const result = await runStartupPlatformBootstrap({
+    db,
+    env: {
+      ...env,
+      APPLY_PLATFORM_BOOTSTRAP_ON_START: ' "false" ',
+      PLATFORM_BOOTSTRAP_RESET_PASSWORDS_ON_START: ' true ',
+    },
+    persist: async () => {},
+  });
+  assert.equal(result.applied, true);
+  assert.equal(result.summary.platformOwner.created, true);
+  assert.equal(result.summary.blankSupervisor.created, true);
+});
