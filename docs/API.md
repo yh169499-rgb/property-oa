@@ -29,9 +29,76 @@
 | GET/POST/PATCH/DELETE | `/api/shifts`、`/api/shift-templates` | 企业用户/主管 | 仅本企业人员和模板 |
 | GET/POST | `/api/reports/*`、`/api/settings/*` | 企业用户/主管 | 统计、缓存、绩效规则和设置均按租户隔离 |
 
+### 秒回统一预警群
+
+每个企业使用一个固定的秒回预警群。发送 Token 只从 Render 的
+`JZMM_MSG_TOKEN` 服务端环境变量读取；群 `roomId`、机器人 `imBotId`、主管
+`contactId` 和人员联系人映射由本企业主管在系统设置中保存。接口不会在响应中返回
+Token 或联系人映射。
+
+| 方法 | 路径 | 角色 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/settings/jzm-alert` | 主管 | 查看当前企业群、机器人和联系人配置状态（不返回密钥） |
+| POST | `/api/settings/jzm-alert` | 主管 | 保存 `roomId`、`imBotId`、`managerContactId`、`contactMap` |
+
+`POST` 请求示例：
+
+```json
+{
+  "roomId": "企业固定预警群 roomId",
+  "imBotId": "企业固定机器人 imBotId",
+  "managerContactId": "主管 contactId",
+  "contactMap": {
+    "张师傅": "维修师傅 contactId",
+    "13800000002": "维修师傅 contactId"
+  }
+}
+```
+
+成功创建工单后，系统向该群发送“紧急消息提醒”：未派单时 `@主管`，已派单时
+`@处理人`。工单从处理中提交并被主管完工后，发送“工单完结提醒”并 `@处理人`。
+定时提醒和 `POST /api/reminder/trigger` 只统计当前企业待派单工单，并发送
+`主管待派单`提醒并 `@主管`。发送失败只记录服务端告警，不影响工单原始写入。
+
+外部秒回发送接口使用 `POST /api/v2/message/send?token=...`，消息体为
+`{ imBotId, imRoomId, messageType: 7, payload: { text, mentionContactIds } }`。
+
 ## 平台读接口
 
 读取接口不接受请求体。查询参数均为可选且必须通过服务端白名单校验；响应不包含任何凭据或密钥。
+
+## 外部建单接口
+
+外部系统调用企业工单接口时，仍需使用该企业用户的 Bearer 会话；企业归属由登录身份
+确定，不能由请求体伪造。单小区企业可以省略小区字段，系统自动归属；多小区企业必须
+传入 `community_id`、`communityId` 或 `community_name`，名称无法唯一匹配时会拒绝建单。
+
+### POST `/api/tickets`
+
+请求示例：
+
+```json
+{
+  "type": "repair",
+  "cat": "水暖",
+  "desc": "3号楼2单元漏水",
+  "loc": "3号楼2单元",
+  "message": "请尽快处理",
+  "community_name": "小区名称"
+}
+```
+
+支持的 `type` 为 `repair`（报修）、`complaint`（投诉）和 `help`（帮助）。服务端会
+校验小区是否属于当前企业，并生成工单号和 `wait` 初始状态。主管也可以在同一请求中
+传入有效的 `worker`，此时工单初始为 `doing` 并直接通知该处理人；普通人员提交的
+`worker`、状态、优先级和创建时间会被忽略或强制覆盖。
+
+建单成功后，系统异步向该企业固定秒回预警群发送消息：未派单 `@主管`，已派单
+`@处理人`。秒回发送失败不会回滚工单，接口仍返回原始工单记录。
+
+错误：`400 COMMUNITY_REQUIRED`（多小区缺少小区）、`400 COMMUNITY_NOT_FOUND`
+（未知小区）、`400 COMMUNITY_AMBIGUOUS`（同名小区不唯一）、`401`（会话无效）、
+`403`（无权访问小区）或 `400 INVALID_TICKET_TYPE`（类型不支持）。
 
 ### GET /api/platform/overview
 

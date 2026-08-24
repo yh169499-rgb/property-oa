@@ -16,6 +16,11 @@ const {
   listRuleVersions,
   createRuleVersion,
 } = require('../services/performance');
+const {
+  publicTenantAlertConfig,
+  saveTenantAlertConfig,
+  sendWaitingTicketsAlert,
+} = require('../services/jzm-messaging');
 
 const REPORT_BUSINESS_ERRORS = new Set([
   'PROFILE_NOT_FOUND',
@@ -97,10 +102,10 @@ function setIntervalSetting(tenantId, key, intervalMinutes) {
   return value;
 }
 
-function getWaitingTicketsReminder(tenantId) {
-  const waitTickets = queryAll(`SELECT * FROM tickets
+function getWaitingTicketCount(tenantId) {
+  const row = queryOne(`SELECT COUNT(*) AS count FROM tickets
     WHERE tenant_id = ? AND status = 'wait'`, [tenantId]);
-  return waitTickets.length ? `当前还有 ${waitTickets.length} 张工单待派单，请尽快处理。` : null;
+  return Number(row?.count || 0);
 }
 
 function startReminders(tenantId) {
@@ -110,8 +115,8 @@ function startReminders(tenantId) {
   const reminderInterval = getIntervalSetting(tenantId, 'reminder_interval_minutes') * 60000;
   if (reminderInterval <= 0) return;
   const timer = setInterval(async () => {
-    const reminder = getWaitingTicketsReminder(tenantId);
-    if (reminder) await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, reminder).catch(() => {});
+    const count = getWaitingTicketCount(tenantId);
+    if (count > 0) await sendWaitingTicketsAlert({ db: getDB(), tenantId, count }).catch(() => {});
   }, reminderInterval);
   reminderTimers.set(tenantId, timer);
 }
@@ -150,6 +155,24 @@ router.use(requireAuth, (req, res, next) => {
   next();
 });
 
+// GET/POST /api/settings/jzm-alert
+router.get('/settings/jzm-alert', requireAdmin, (req, res) => {
+  res.json({ data: publicTenantAlertConfig(getDB(), req.user.tenant_id) });
+});
+
+router.post('/settings/jzm-alert', requireAdmin, async (req, res) => {
+  try {
+    const data = saveTenantAlertConfig(getDB(), req.user.tenant_id, req.body || {});
+    await saveDB();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      error: error.message || '保存秒回预警配置失败',
+      code: error.code || 'JZM_ALERT_CONFIG_ERROR',
+    });
+  }
+});
+
 // POST /api/notify
 router.post('/notify', requireAuth, async (req, res) => {
   const { ticketId, event } = req.body;
@@ -169,11 +192,10 @@ router.post('/notify', requireAuth, async (req, res) => {
 
 // GET /api/reminder/trigger
 router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
-  const reminder = getWaitingTicketsReminder(req.user.tenant_id);
-  if (reminder) {
-    await triggerJzmWorkflowEvent(config.JZMM_ALERT_SESSION_ID, reminder).catch(() => {});
-    res.json({ success: true, message: '已推送' });
-  } else { res.json({ success: true, message: '当前无待派单' }); }
+  const count = getWaitingTicketCount(req.user.tenant_id);
+  if (!count) return res.json({ success: true, message: '当前无待派单', count: 0 });
+  const result = await sendWaitingTicketsAlert({ db: getDB(), tenantId: req.user.tenant_id, count });
+  res.json({ success: true, sent: Boolean(result.success), message: result.success ? '已推送' : '工单存在，但秒回预警未发送', count });
 });
 
 // GET/POST /api/settings/reminder
