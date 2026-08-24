@@ -138,7 +138,9 @@ Content-Type: application/json
 }
 ```
 
-支持的 `type` 为 `repair`（报修）、`complaint`（投诉）和 `help`（帮助）。服务端会
+支持的 `type` 为 `repair`（报修）、`complaint`（投诉）和 `help`（帮助）。为兼容秒回模型
+偶尔返回的别名，`/api/tickets/external` 也接受 `complain`，并在服务端归一化保存为
+`complaint`。服务端会
 校验小区是否属于当前企业，并生成工单号和 `wait` 初始状态。主管也可以在同一请求中
 传入有效的 `worker`，此时工单初始为 `doing` 并直接通知该处理人；普通人员提交的
 `worker`、状态、优先级和创建时间会被忽略或强制覆盖。

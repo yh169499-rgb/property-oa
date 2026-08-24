@@ -113,6 +113,13 @@ function clientTenantError(res) {
   });
 }
 
+// 秒回/外部模型有时使用 complain；系统内部统一使用 complaint，
+// 这样报表、权限范围和提醒逻辑都只需要处理一个规范值。
+function normalizeTicketType(value) {
+  const type = String(value || 'repair').trim().toLowerCase();
+  return type === 'complain' ? 'complaint' : type;
+}
+
 function ticketForTenant(req, ticketId) {
   if (!tableHasColumn('tickets', 'tenant_id')) {
     return queryOne('SELECT * FROM tickets WHERE id = ?', [ticketId]);
@@ -342,7 +349,7 @@ async function createTicket(req, res) {
     try { externalAlertConfig = alertConfigFromBody(t); }
     catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' }); }
   }
-  const type = String(t.type || 'repair').trim().toLowerCase();
+  const type = normalizeTicketType(t.type);
   if (!STAFF_TICKET_TYPES.has(type)) {
     return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
   }

@@ -202,15 +202,16 @@ test('外部建单按企业名称归属租户并触发该企业预警', async (t
     body: JSON.stringify({
       enterprise_name: '测试企业',
       roomid: 'room-a', imbotid: 'bot-a', contactid: 'manager-contact-a',
-      type: 'repair', cat: '水暖', desc: '3号楼漏水', loc: '3号楼',
+      // 上游秒回模型可能返回 complain；服务端应归一化为 complaint。
+      type: 'complain', cat: '水暖', desc: '3号楼漏水', loc: '3号楼',
       message: '请尽快处理', community_name: '测试小区',
       status: 'done', worker: '不应由外部接口指定',
     }),
   });
   assert.equal(result.response.status, 200);
   assert.deepEqual(result.body, { success: true });
-  const stored = one(db, 'SELECT tenant_id,status,worker FROM tickets ORDER BY created DESC LIMIT 1');
-  assert.deepEqual(stored, { tenant_id: 'tenant-a', status: 'wait', worker: '' });
+  const stored = one(db, 'SELECT tenant_id,type,status,worker FROM tickets ORDER BY created DESC LIMIT 1');
+  assert.deepEqual(stored, { tenant_id: 'tenant-a', type: 'complaint', status: 'wait', worker: '' });
   assert.equal(getTenantAlertConfig(db, 'tenant-a').roomId, 'room-a');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.at(-1).body.imRoomId, 'room-a');
