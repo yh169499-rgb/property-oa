@@ -86,7 +86,13 @@ function notificationMetadata(input = {}) {
 }
 
 function notifyTicketAlert(args) {
-  sendTicketAlert(args).catch((error) => {
+  sendTicketAlert(args).then((result) => {
+    if (!result || result.success) return;
+    console.warn('[秒回预警] 工单提醒未发送:', JSON.stringify({
+      error: result.error || '',
+      skipped: Boolean(result.skipped),
+    }));
+  }).catch((error) => {
     console.warn('[秒回预警] 工单提醒失败:', error.message);
   });
 }
