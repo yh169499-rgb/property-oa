@@ -834,7 +834,9 @@ const JZMM_MANAGER_CONTACT_ID = process.env.JZMM_MANAGER_CONTACT_ID || '78813022
  */
 async function sendJzmMessage(roomId, text, mentionContactId) {
   const configuredBaseUrl = String(process.env.JZMM_MSG_BASE_URL || '').trim().replace(/\/+$/, '');
-  const baseUrl = !configuredBaseUrl || configuredBaseUrl === 'https://open.dpclouds.com'
+  const baseUrl = !configuredBaseUrl
+    || configuredBaseUrl === 'https://open.dpclouds.com'
+    || configuredBaseUrl === 'https://ae-mh.ddregion.com'
     ? 'https://ae-mh.ddregion.com'
     : configuredBaseUrl;
   const url = `${baseUrl}/api/v2/message/send?token=${JZMM_MSG_TOKEN}`;
