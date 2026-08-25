@@ -246,6 +246,7 @@ input[type="number"] { -moz-appearance: textfield; }
 }
 .platform-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .platform-section-heading h1, .platform-section-heading h2 { font-size: 20px; letter-spacing: -.02em; }
+.platform-section-description { margin-top: 6px; color: var(--text-3); font-size: 12px; }
 .platform-eyebrow { color: var(--primary); font-size: 10px; font-weight: 750; letter-spacing: .16em; }
 .platform-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .platform-overview-card {
@@ -271,6 +272,17 @@ input[type="number"] { -moz-appearance: textfield; }
 .platform-actions { display: flex; gap: 8px; }
 .platform-row-message { margin-top: 5px; max-width: 220px; font-size: 11px; }
 .platform-empty-state { padding: 28px !important; color: var(--text-3); text-align: center !important; }
+.platform-data-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+.platform-data-toolbar label { display: grid; gap: 6px; min-width: 190px; color: var(--text-2); font-size: 12px; font-weight: 650; }
+.platform-data-toolbar label.platform-data-search { min-width: 240px; flex: 1; }
+.platform-data-toolbar select, .platform-data-toolbar input { width: 100%; min-height: 38px; }
+.platform-data-table-wrap { max-height: 560px; overflow: auto; border: 1px solid var(--hairline-soft); border-radius: 10px; }
+.platform-data-table-wrap .platform-table { min-width: 980px; }
+.platform-data-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; color: var(--text-2); font-size: 12px; }
+.platform-data-editor-dialog { width: min(92vw, 560px); }
+.platform-data-editor-fields { display: grid; gap: 12px; max-height: 58vh; overflow: auto; padding-right: 4px; }
+.platform-data-editor-fields label { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 650; }
+.platform-data-editor-fields textarea { min-height: 88px; resize: vertical; }
 .platform-dialog {
   width: min(92vw, 420px);
   padding: 0;
