@@ -10,6 +10,7 @@ const config = require('../config');
 const { one } = require('./helpers/tenant-fixture');
 const {
   getTenantAlertConfig,
+  saveTenantAlertConfig,
   sendTicketAlert,
   setMessageSenderForTests,
   resetMessageSenderForTests,
@@ -107,6 +108,31 @@ test('秒回消息请求使用最终 hub-api 发送路径', async (t) => {
   assert.equal(captured.url, 'https://ae-bg.ddregion.com/hub-api/api/v2/message/send?token=');
 });
 
+test('文本消息使用 mention 字段原生@主管', async (t) => {
+  const db = await fixture();
+  saveTenantAlertConfig(db, 'tenant-a', {
+    roomId: 'room-a',
+    imBotId: 'bot-a',
+    managerContactId: 'manager-contact-a',
+    contactMap: {},
+  });
+  let captured;
+  setMessageSenderForTests(async (input) => {
+    captured = input;
+    return { success: true };
+  });
+  t.after(() => resetMessageSenderForTests());
+  await sendTicketAlert({
+    db,
+    tenantId: 'tenant-a',
+    kind: 'created',
+    ticket: { id: 'WX-MENTION', cat: '测试', message: '艾特主管' },
+    actor: { name: '系统测试' },
+  });
+  assert.deepEqual(captured.body.payload.mention, ['manager-contact-a']);
+  assert.equal(Object.hasOwn(captured.body.payload, 'mentionContactIds'), false);
+});
+
 test('创建工单按是否派单选择主管或处理人进行提醒', async (t) => {
   const calls = [];
   setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
@@ -122,7 +148,7 @@ test('创建工单按是否派单选择主管或处理人进行提醒', async (t
   assert.equal(unassigned.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.at(-1).body.imRoomId, 'room-a');
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['manager-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['manager-contact-a']);
   assert.match(calls.at(-1).body.payload.text, /紧急消息提醒/);
 
   const assigned = await request(server, '/api/tickets', SUPERVISOR, {
@@ -131,7 +157,7 @@ test('创建工单按是否派单选择主管或处理人进行提醒', async (t
   });
   assert.equal(assigned.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['worker-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-a']);
 });
 
 test('派单和完工会分别发送处理人提醒与完工提醒', async (t) => {
@@ -154,7 +180,7 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   });
   assert.equal(assigned.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['worker-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-a']);
 
   const submitted = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -168,7 +194,7 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   assert.equal(completed.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /工单完结提醒/);
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['worker-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-a']);
 });
 
 test('主管待派单提醒发送到企业固定预警群并@主管', async (t) => {
@@ -188,7 +214,7 @@ test('主管待派单提醒发送到企业固定预警群并@主管', async (t) 
   assert.equal(result.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /当前还有 1 张工单待派单/);
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['manager-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['manager-contact-a']);
 });
 
 test('未配置企业不回退到其他企业群或联系人，缺失处理人映射不降级@主管', async (t) => {
@@ -210,14 +236,14 @@ test('未配置企业不回退到其他企业群或联系人，缺失处理人�
     assignee: null,
   });
   assert.equal(calls.at(-1).body.imRoomId, '');
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, []);
+  assert.deepEqual(calls.at(-1).body.payload.mention, []);
 
   await sendTicketAlert({
     db, tenantId: 'tenant-a', kind: 'assigned',
     ticket: { id: 'WA-1', cat: '电路', worker: '未配置师傅', message: '不应@主管' },
     assignee: { displayName: '未配置师傅' },
   });
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, []);
+  assert.deepEqual(calls.at(-1).body.payload.mention, []);
 });
 
 test('外部建单按企业名称归属租户并触发该企业预警', async (t) => {
@@ -253,7 +279,7 @@ test('外部建单按企业名称归属租户并触发该企业预警', async (t
   assert.equal(getTenantAlertConfig(db, 'tenant-a').roomId, 'room-a');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.at(-1).body.imRoomId, 'room-a');
-  assert.deepEqual(calls.at(-1).body.payload.mentionContactIds, ['manager-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['manager-contact-a']);
 });
 
 test('外部建单拒绝错误令牌和未知企业', async (t) => {
