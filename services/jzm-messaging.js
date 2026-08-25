@@ -40,7 +40,7 @@ function parseContactMap(value) {
 function getEnvConfig() {
   return {
     msgToken: String(config.JZMM_MSG_TOKEN || '').trim(),
-    baseUrl: String(config.JZMM_MSG_BASE_URL || 'https://open.dpclouds.com').replace(/\/+$/, ''),
+    baseUrl: String(config.JZMM_MSG_BASE_URL || 'https://ae-mh.ddregion.com').replace(/\/+$/, ''),
   };
 }
 
@@ -166,6 +166,11 @@ async function sendMessage(configured, text, mentionContactIds = []) {
   // 测试注入器不依赖生产 Token，仍返回完整的请求体供断言。
   if (testSender) return testSender(request);
   if (!configured.msgToken || !configured.roomId || !configured.imBotId) {
+    console.warn('[秒回预警] 未发送：配置不完整', JSON.stringify({
+      tokenConfigured: Boolean(configured.msgToken),
+      roomConfigured: Boolean(configured.roomId),
+      botConfigured: Boolean(configured.imBotId),
+    }));
     return { success: false, skipped: true, error: '秒回预警配置不完整' };
   }
   try {
@@ -173,7 +178,14 @@ async function sendMessage(configured, text, mentionContactIds = []) {
       method: 'POST', headers: request.headers, body: JSON.stringify(body),
     });
     const result = await response.json().catch(() => ({}));
-    if (response.ok && Number(result.errcode) === 0) return { success: true, data: result };
+    if (response.ok && Number(result.errcode) === 0) {
+      console.log('[秒回预警] 消息发送成功', JSON.stringify({
+        baseUrl: configured.baseUrl,
+        roomId: configured.roomId,
+        requestId: result.requestId || '',
+      }));
+      return { success: true, data: result };
+    }
     console.warn('[秒回预警] 消息发送失败:', JSON.stringify(result));
     return { success: false, error: result };
   } catch (error) {
