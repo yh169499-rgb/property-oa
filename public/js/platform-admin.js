@@ -3,6 +3,8 @@
 
   var locks = new WeakSet();
   var selectedApplicationId = null;
+  var dataCenterState = { tenantId: '', tableKey: '', page: 1, pageSize: 20, total: 0, catalog: [], rows: [] };
+  var dataEditorContext = null;
 
   function redirectToLogin() {
     sessionStorage.removeItem('platform_token');
@@ -13,6 +15,11 @@
     if (code === 'STAFF_LIMIT_BELOW_ACTIVE_COUNT') return '人数上限不能低于当前在职人数，原配置未修改。';
     if (status === 409) return '数据已发生变化，请刷新后重试。';
     if (status === 429) return '操作过于频繁，请稍后再试。';
+    if (code === 'PLATFORM_DATA_DELETE_FORBIDDEN') return '数据中心不允许删除数据。';
+    if (code === 'PLATFORM_DATA_FIELD_FORBIDDEN') return '包含不允许修改的字段，请仅修改业务资料。';
+    if (code === 'PLATFORM_DATA_PRIVILEGE_ESCALATION') return '不能通过数据中心提升账号权限。';
+    if (code === 'PHONE_CONFLICT') return '手机号已被其他账号使用。';
+    if (code === 'INVALID_TICKET_TRANSITION') return '工单状态转换不合法。';
     return '操作失败，请稍后重试。';
   }
 
@@ -133,6 +140,162 @@
     var staffLimit = tenant.staffLimit ?? tenant.staff_limit;
     if (!Number.isInteger(staffLimit) || staffLimit < 1 || staffLimit > 999) return null;
     return { id: tenant.id.trim(), name: tenant.name.trim(), staffLimit: staffLimit };
+  }
+
+  function setDataStatus(message, kind) {
+    setStatus(document.getElementById('platform-data-status'), message, kind);
+  }
+
+  function dataTableOptionLabel(table) {
+    return (table.label || table.key) + '（' + String(table.count ?? 0) + ' 条' + (table.editable ? '，可编辑' : '，只读') + '）';
+  }
+
+  function renderDataSelectOptions(select, items, selected, labeler) {
+    if (!select) return;
+    select.replaceChildren();
+    items.forEach(function (item) {
+      var option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = labeler(item);
+      option.selected = item.value === selected;
+      select.appendChild(option);
+    });
+  }
+
+  async function loadDataCenterTenants() {
+    var tenantSelect = document.getElementById('platform-data-tenant');
+    if (!tenantSelect) return;
+    var data = await apiFetch('/api/platform/tenants');
+    var tenants = listFrom(data, ['tenants', 'items']).map(validTenantData).filter(Boolean);
+    if (!tenants.length) {
+      tenantSelect.replaceChildren();
+      dataCenterState.tenantId = '';
+      dataCenterState.catalog = [];
+      renderDataSelectOptions(document.getElementById('platform-data-table'), [], '', function () { return ''; });
+      renderDataRows({ columns: [], rows: [], total: 0, page: 1, pageSize: dataCenterState.pageSize });
+      return;
+    }
+    var current = tenants.some(function (tenant) { return tenant.id === dataCenterState.tenantId; })
+      ? dataCenterState.tenantId : tenants[0].id;
+    dataCenterState.tenantId = current;
+    renderDataSelectOptions(tenantSelect, tenants.map(function (tenant) { return { value: tenant.id, label: tenant.name }; }), current, function (item) { return item.label; });
+    await loadDataCenterCatalog();
+  }
+
+  async function loadDataCenterCatalog() {
+    if (!dataCenterState.tenantId) return;
+    var data = await apiFetch('/api/platform/tenants/' + encodeURIComponent(dataCenterState.tenantId) + '/data-tables');
+    dataCenterState.catalog = Array.isArray(data) ? data : listFrom(data, ['tables', 'items']);
+    var selected = dataCenterState.catalog.some(function (table) { return table.key === dataCenterState.tableKey; })
+      ? dataCenterState.tableKey : (dataCenterState.catalog[0] && dataCenterState.catalog[0].key) || '';
+    dataCenterState.tableKey = selected;
+    renderDataSelectOptions(document.getElementById('platform-data-table'), dataCenterState.catalog.map(function (table) { return { value: table.key, label: dataTableOptionLabel(table) }; }), selected, function (item) { return item.label; });
+    dataCenterState.page = 1;
+    await loadDataCenterRows();
+  }
+
+  function formatDataCell(value, type) {
+    if (value == null || value === '') return '—';
+    if (type === 'boolean') return Number(value) ? '是' : '否';
+    if (type === 'json') {
+      try { return typeof value === 'string' ? JSON.stringify(JSON.parse(value)) : JSON.stringify(value); } catch (_) { return String(value); }
+    }
+    return String(value);
+  }
+
+  function renderDataRows(data) {
+    var head = document.getElementById('platform-data-head');
+    var body = document.getElementById('platform-data-body');
+    var pageLabel = document.getElementById('platform-data-page');
+    var previous = document.getElementById('platform-data-prev');
+    var next = document.getElementById('platform-data-next');
+    if (!head || !body) return;
+    var columns = Array.isArray(data.columns) ? data.columns : [];
+    var headRow = document.createElement('tr');
+    columns.forEach(function (column) { appendTextCell(headRow, column.label || column.key); });
+    var table = dataCenterState.catalog.find(function (item) { return item.key === dataCenterState.tableKey; });
+    if (table && table.editable) appendTextCell(headRow, '操作');
+    head.replaceChildren(headRow);
+    var rows = Array.isArray(data.rows) ? data.rows : [];
+    if (!rows.length) {
+      replaceWithEmptyState(body, columns.length + (table && table.editable ? 1 : 0), '暂无数据');
+    } else {
+      var fragment = document.createDocumentFragment();
+      rows.forEach(function (rowData) {
+        var row = document.createElement('tr');
+        columns.forEach(function (column) { appendTextCell(row, formatDataCell(rowData[column.key], column.type)); });
+        if (table && table.editable) {
+          var action = document.createElement('td');
+          var edit = document.createElement('button');
+          edit.type = 'button'; edit.className = 'btn gray sm'; edit.textContent = '编辑';
+          edit.addEventListener('click', function () { openDataEditor(table, rowData, columns); });
+          action.appendChild(edit); row.appendChild(action);
+        }
+        fragment.appendChild(row);
+      });
+      body.replaceChildren(fragment);
+    }
+    var page = Number(data.page || dataCenterState.page || 1);
+    var pageSize = Number(data.pageSize || dataCenterState.pageSize || 20);
+    var total = Number(data.total || 0);
+    dataCenterState.page = page; dataCenterState.pageSize = pageSize; dataCenterState.total = total; dataCenterState.rows = rows;
+    if (pageLabel) pageLabel.textContent = '第 ' + page + ' 页，共 ' + total + ' 条';
+    if (previous) previous.disabled = page <= 1;
+    if (next) next.disabled = page * pageSize >= total;
+  }
+
+  async function loadDataCenterRows() {
+    if (!dataCenterState.tenantId || !dataCenterState.tableKey) return;
+    setDataStatus('正在加载数据…');
+    var search = document.getElementById('platform-data-search-input');
+    var query = new URLSearchParams({ page: String(dataCenterState.page), pageSize: String(dataCenterState.pageSize) });
+    if (search && search.value.trim()) query.set('search', search.value.trim());
+    var data = await apiFetch('/api/platform/tenants/' + encodeURIComponent(dataCenterState.tenantId) + '/data/' + encodeURIComponent(dataCenterState.tableKey) + '?' + query.toString());
+    renderDataRows(data);
+    setDataStatus('数据已更新。', 'is-success');
+  }
+
+  function openDataEditor(table, rowData, columns) {
+    var dialog = document.getElementById('data-editor-dialog');
+    var fields = document.getElementById('data-editor-fields');
+    var title = document.getElementById('data-editor-title');
+    if (!dialog || !fields) return;
+    dataEditorContext = { table: table, row: rowData, columns: columns };
+    title.textContent = '编辑' + (table.label || table.key);
+    fields.replaceChildren();
+    columns.filter(function (column) { return column.editable; }).forEach(function (column) {
+      var label = document.createElement('label');
+      label.textContent = column.label || column.key;
+      var input = document.createElement('input');
+      input.name = column.key; input.value = rowData[column.key] == null ? '' : String(rowData[column.key]);
+      input.maxLength = 2000;
+      if (column.type === 'number') input.type = 'number';
+      if (column.type === 'date') input.type = 'date';
+      if (column.type === 'time') input.type = 'time';
+      if (column.type === 'datetime') input.type = 'datetime-local';
+      if (column.key === 'message' || column.key === 'desc' || column.key === 'note') { input = document.createElement('textarea'); input.name = column.key; input.value = rowData[column.key] == null ? '' : String(rowData[column.key]); input.maxLength = 4000; }
+      label.appendChild(input); fields.appendChild(label);
+    });
+    setStatus(document.getElementById('data-editor-status'), '');
+    dialog.showModal();
+  }
+
+  async function saveDataEditor() {
+    if (!dataEditorContext) return;
+    var form = document.getElementById('data-editor-form');
+    var submit = document.getElementById('data-editor-submit');
+    var patch = {};
+    Array.from(form.querySelectorAll('[name]')).forEach(function (input) { patch[input.name] = input.value; });
+    await withSubmitLock(submit, async function () {
+      try {
+        await apiFetch('/api/platform/tenants/' + encodeURIComponent(dataCenterState.tenantId) + '/data/' + encodeURIComponent(dataEditorContext.table.key) + '/' + encodeURIComponent(dataEditorContext.row[dataEditorContext.table.idColumn]), { method: 'PATCH', body: JSON.stringify(patch) });
+        document.getElementById('data-editor-dialog').close();
+        setDataStatus('修改已保存，审计记录已写入。', 'is-success');
+        await loadDataCenterCatalog();
+      } catch (error) {
+        setStatus(document.getElementById('data-editor-status'), error.message, 'is-error');
+      }
+    });
   }
 
   async function loadOverview() {
@@ -300,7 +463,7 @@
     logs.forEach(function (log) {
       var row = document.createElement('tr');
       appendTextCell(row, formatTime(log.createdAt ?? log.created_at));
-      appendTextCell(row, log.actorName ?? log.actor_name ?? '平台运维');
+      appendTextCell(row, log.actorName ?? log.actor_name ?? '管理平台');
       appendTextCell(row, log.action);
       appendTextCell(row, log.targetName ?? log.target_name ?? log.targetType ?? log.target_type);
       fragment.appendChild(row);
@@ -319,7 +482,7 @@
   async function refreshData() {
     setStatus(document.getElementById('platform-admin-status'), '正在刷新…');
     try {
-      await Promise.all([loadOverview(), loadApplications(), loadTenants(), loadAudit()]);
+      await Promise.all([loadOverview(), loadApplications(), loadTenants(), loadAudit(), loadDataCenterTenants()]);
       setStatus(document.getElementById('platform-admin-status'), '数据已更新。', 'is-success');
     } catch (error) {
       showPageError(error);
@@ -339,6 +502,14 @@
     var approvalSubmit = document.getElementById('approval-submit');
     var approvalStatus = document.getElementById('approval-status');
     var approvalLimit = document.getElementById('approval-staff-limit');
+    var dataTenant = document.getElementById('platform-data-tenant');
+    var dataTable = document.getElementById('platform-data-table');
+    var dataRefresh = document.getElementById('platform-data-refresh');
+    var dataSearch = document.getElementById('platform-data-search');
+    var dataPrev = document.getElementById('platform-data-prev');
+    var dataNext = document.getElementById('platform-data-next');
+    var dataEditorForm = document.getElementById('data-editor-form');
+    var dataEditorCancel = document.getElementById('data-editor-cancel');
 
     logout.addEventListener('click', redirectToLogin);
     refresh.addEventListener('click', function () { withSubmitLock(refresh, refreshData); });
@@ -357,6 +528,14 @@
         }
       });
     });
+    if (dataTenant) dataTenant.addEventListener('change', function () { dataCenterState.tenantId = dataTenant.value; loadDataCenterCatalog().catch(showPageError); });
+    if (dataTable) dataTable.addEventListener('change', function () { dataCenterState.tableKey = dataTable.value; dataCenterState.page = 1; loadDataCenterRows().catch(showPageError); });
+    if (dataRefresh) dataRefresh.addEventListener('click', function () { withSubmitLock(dataRefresh, loadDataCenterTenants).catch(showPageError); });
+    if (dataSearch) dataSearch.addEventListener('click', function () { dataCenterState.page = 1; loadDataCenterRows().catch(showPageError); });
+    if (dataPrev) dataPrev.addEventListener('click', function () { if (dataCenterState.page > 1) { dataCenterState.page -= 1; loadDataCenterRows().catch(showPageError); } });
+    if (dataNext) dataNext.addEventListener('click', function () { if (dataCenterState.page * dataCenterState.pageSize < dataCenterState.total) { dataCenterState.page += 1; loadDataCenterRows().catch(showPageError); } });
+    if (dataEditorCancel) dataEditorCancel.addEventListener('click', function () { document.getElementById('data-editor-dialog').close(); });
+    if (dataEditorForm) dataEditorForm.addEventListener('submit', function (event) { event.preventDefault(); saveDataEditor().catch(showPageError); });
     refreshData();
   }
 
@@ -365,6 +544,8 @@
     updateTenant: updateTenant,
     approveApplication: approveApplication,
     rejectApplication: rejectApplication,
+    listDataCenterRows: loadDataCenterRows,
+    updateDataCenterRow: saveDataEditor,
     withSubmitLock: withSubmitLock,
     saveTenantChanges: saveTenantChanges,
   };
