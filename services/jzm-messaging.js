@@ -3,6 +3,8 @@ const config = require('../config');
 const { queryAll, queryOne } = require('../db');
 
 const ALERT_SETTING_KEY = 'jzm_alert_config';
+const DEFAULT_MSG_BASE_URL = 'https://ae-mh.ddregion.com';
+const LEGACY_MSG_BASE_URL = 'https://open.dpclouds.com';
 let testSender = null;
 
 function tableExists(db, name) {
@@ -38,9 +40,13 @@ function parseContactMap(value) {
 }
 
 function getEnvConfig() {
+  const configuredBaseUrl = String(config.JZMM_MSG_BASE_URL || '').trim().replace(/\/+$/, '');
   return {
     msgToken: String(config.JZMM_MSG_TOKEN || '').trim(),
-    baseUrl: String(config.JZMM_MSG_BASE_URL || 'https://ae-mh.ddregion.com').replace(/\/+$/, ''),
+    // Render 旧服务可能仍保存旧环境变量；自动迁移，避免继续请求已失效域名。
+    baseUrl: !configuredBaseUrl || configuredBaseUrl === LEGACY_MSG_BASE_URL
+      ? DEFAULT_MSG_BASE_URL
+      : configuredBaseUrl,
   };
 }
 
