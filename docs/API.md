@@ -62,7 +62,8 @@ Token 或联系人映射。
 `主管待派单`提醒并 `@主管`。发送失败只记录服务端告警，不影响工单原始写入。
 
 外部秒回发送接口使用 `POST https://ae-bg.ddregion.com/hub-api/api/v2/message/send?token=...`，消息体为
-`{ imBotId, imRoomId, messageType: 7, payload: { text, mentionContactIds } }`。
+`{ imBotId, imRoomId, messageType: 7, payload: { text, mention } }`，其中 `mention`
+为需要原生 `@` 的联系人 wxid 数组。
 
 ## 外部系统按企业名称建单
 
