@@ -64,7 +64,7 @@ module.exports = {
   JZMM_ALERT_ROOM_ID: process.env.JZMM_ALERT_ROOM_ID || '',
   JZMM_MANAGER_CONTACT_ID: process.env.JZMM_MANAGER_CONTACT_ID || '',
   JZMM_CONTACT_MAP_JSON: process.env.JZMM_CONTACT_MAP_JSON || '{}',
-  JZMM_MSG_BASE_URL: process.env.JZMM_MSG_BASE_URL || 'https://open.dpclouds.com',
+  JZMM_MSG_BASE_URL: process.env.JZMM_MSG_BASE_URL || 'https://ae-mh.ddregion.com',
 
   // SLA 阈值（小时）
   SLA_THRESHOLDS: { urgent: 2, high: 8, normal: 24, low: 48 },
