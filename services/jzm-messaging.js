@@ -153,7 +153,7 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
   const original = meta.originalMessage || ticket?.message || ticket?.desc || '';
   const worker = ticket?.worker || assignee?.displayName || '未指定';
   if (kind === 'completed') {
-    return `————工单完结提醒————\n时段：${formatTime(ticket?.finished || new Date().toISOString())}\n工单号：${ticket?.id || ''}\n反馈事件：${ticket?.cat || '其他'}\n处理人：${worker}\n原文消息：${original}\n———！！已处理完毕！！———`;
+    return `————工单完结提醒————\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n处理人：${worker}\n状态：该工单已处理完成\n完成时间：${formatTime(ticket?.finished || new Date().toISOString())}\n————————————`;
   }
   if (kind === 'waiting') {
     return `主管待派单${ticket?.count ? `，当前还有 ${ticket.count} 张工单待派单，请尽快处理。` : ''}`;
@@ -162,6 +162,40 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
     return `————新的派单提醒————\n您有新的派单，请及时处理。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
   }
   return `————紧急消息提醒————\n时段：${formatTime(ticket?.created || new Date().toISOString())}\n反馈人：${reporter}\n反馈群：${group}\n反馈事件：${ticket?.cat || '其他'}\n反馈原因：${ticket?.message || ticket?.desc || ''}\n原文消息：${original}\n———！！请注意留意！！———`;
+}
+
+function safeIdentifier(value) {
+  const text = String(value ?? '').trim();
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(text) ? text : '';
+}
+
+function messageFailure(code, details = {}) {
+  const error = { code };
+  if (Number.isInteger(details.httpStatus) && details.httpStatus >= 100 && details.httpStatus <= 599) {
+    error.httpStatus = details.httpStatus;
+  }
+  if (Number.isFinite(details.errcode)) {
+    error.errcode = details.errcode;
+  } else {
+    const errcode = safeIdentifier(details.errcode);
+    if (errcode) error.errcode = errcode;
+  }
+  const requestId = safeIdentifier(details.requestId);
+  if (requestId) error.requestId = requestId;
+  return { success: false, error };
+}
+
+function upstreamFailure(result, httpStatus) {
+  const details = result?.error && typeof result.error === 'object' ? result.error : {};
+  return messageFailure('JZM_MESSAGE_UPSTREAM_ERROR', {
+    httpStatus: result?.httpStatus ?? details.httpStatus ?? httpStatus,
+    errcode: result?.errcode ?? details.errcode,
+    requestId: result?.requestId ?? details.requestId,
+  });
+}
+
+function warnMessageFailure(label, failure) {
+  console.warn(label, JSON.stringify(failure.error));
 }
 
 async function sendMessage(configured, text, mentionContactIds = []) {
@@ -177,45 +211,54 @@ async function sendMessage(configured, text, mentionContactIds = []) {
     headers: { 'Content-Type': 'application/json' },
     body,
   };
-  // 测试注入器不依赖生产 Token，仍返回完整的请求体供断言。
-  if (testSender) return testSender(request);
-  if (!configured.msgToken || !configured.roomId || !configured.imBotId) {
-    console.warn('[秒回预警] 未发送：配置不完整', JSON.stringify({
-      tokenConfigured: Boolean(configured.msgToken),
-      roomConfigured: Boolean(configured.roomId),
-      botConfigured: Boolean(configured.imBotId),
-    }));
-    return { success: false, skipped: true, error: '秒回预警配置不完整' };
-  }
   try {
+    // 测试注入器与真实网络请求共享同一脱敏失败边界。
+    if (testSender) {
+      const result = await testSender(request);
+      if (result?.success === false) {
+        const failure = upstreamFailure(result);
+        warnMessageFailure('[秒回预警] 消息发送失败:', failure);
+        return failure;
+      }
+      return result;
+    }
+    if (!configured.msgToken || !configured.roomId || !configured.imBotId) {
+      const failure = messageFailure('JZM_MESSAGE_CONFIG_INCOMPLETE');
+      warnMessageFailure('[秒回预警] 未发送:', failure);
+      return failure;
+    }
     const response = await fetch(request.url, {
       method: 'POST', headers: request.headers, body: JSON.stringify(body),
     });
     const result = await response.json().catch(() => ({}));
     if (response.ok && Number(result.errcode) === 0) {
       console.log('[秒回预警] 消息发送成功', JSON.stringify({
-        baseUrl: configured.baseUrl,
-        roomId: configured.roomId,
-        requestId: result.requestId || '',
+        requestId: safeIdentifier(result.requestId),
       }));
       return { success: true, data: result };
     }
-    console.warn('[秒回预警] 消息发送失败:', JSON.stringify(result));
-    return { success: false, error: result };
-  } catch (error) {
-    console.warn('[秒回预警] 网络错误:', error.message);
-    return { success: false, error: error.message };
+    const failure = upstreamFailure(result, response.status);
+    warnMessageFailure('[秒回预警] 消息发送失败:', failure);
+    return failure;
+  } catch (_) {
+    const failure = messageFailure('JZM_MESSAGE_NETWORK_ERROR');
+    warnMessageFailure('[秒回预警] 网络错误:', failure);
+    return failure;
   }
 }
 
 async function sendTicketAlert({ db, tenantId, kind, ticket, actor, assignee }) {
   const configured = getTenantAlertConfig(db, tenantId);
-  const isWorkerTarget = kind === 'completed' || kind === 'assigned' || (kind === 'created' && assignee);
-  const contact = isWorkerTarget
-    ? contactIdFor(configured, assignee || { name: ticket?.worker })
-    : configured.managerContactId;
+  const isWorkerTarget = kind === 'assigned' || (kind === 'created' && assignee);
+  const contact = kind === 'completed'
+    ? ''
+    : isWorkerTarget
+      ? contactIdFor(configured, assignee || { name: ticket?.worker })
+      : configured.managerContactId;
   if (isWorkerTarget && !contact) {
-    console.warn('[秒回预警] 未找到处理人 contactId，消息不降级 @主管:', ticket?.worker || assignee?.displayName || '未指定');
+    console.warn('[秒回预警] 未找到处理人 contactId，消息不降级 @主管:', JSON.stringify({
+      code: 'JZM_CONTACT_NOT_CONFIGURED',
+    }));
   }
   const text = formatTicketAlert(kind, ticket, actor, assignee);
   return sendMessage(configured, text, [contact]);
