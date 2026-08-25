@@ -158,6 +158,9 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
   if (kind === 'waiting') {
     return `主管待派单${ticket?.count ? `，当前还有 ${ticket.count} 张工单待派单，请尽快处理。` : ''}`;
   }
+  if (kind === 'assigned') {
+    return `————新的派单提醒————\n您有新的派单，请及时处理。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
   return `————紧急消息提醒————\n时段：${formatTime(ticket?.created || new Date().toISOString())}\n反馈人：${reporter}\n反馈群：${group}\n反馈事件：${ticket?.cat || '其他'}\n反馈原因：${ticket?.message || ticket?.desc || ''}\n原文消息：${original}\n———！！请注意留意！！———`;
 }
 
