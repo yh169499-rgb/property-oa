@@ -60,6 +60,8 @@ Token 或联系人映射。
 `@处理人`。工单从处理中提交并被主管完工后，发送“工单完结提醒”并 `@处理人`。
 定时提醒和 `POST /api/reminder/trigger` 只统计当前企业待派单工单，并发送
 `主管待派单`提醒并 `@主管`。发送失败只记录服务端告警，不影响工单原始写入。
+首次派单或改派给其他处理人后，系统向同一预警群发送“您有新的派单，请及时处理”，
+并通过企业联系人映射原生 `@`当前处理人；处理人未变时不重复发送。
 
 外部秒回发送接口使用 `POST https://ae-bg.ddregion.com/hub-api/api/v2/message/send?token=...`，消息体为
 `{ imBotId, imRoomId, messageType: 7, payload: { text, mention } }`，其中 `mention`
