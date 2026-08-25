@@ -3,23 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>平台运维后台 | 工单系统</title>
+  <title>管理平台后台 | 工单系统</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="platform-admin-page">
   <header class="platform-admin-header">
     <div>
       <strong>工单系统</strong>
-      <span>平台运维后台</span>
+      <span>管理平台后台</span>
     </div>
     <button id="platform-logout" class="btn gray sm" type="button">退出平台</button>
   </header>
 
   <div class="platform-admin-shell">
-    <nav class="platform-admin-nav" aria-label="平台运维功能">
+    <nav class="platform-admin-nav" aria-label="管理平台功能">
       <a href="#overview">总览</a>
       <a href="#applications">企业/主管申请</a>
       <a href="#tenants">企业列表与配置</a>
+      <a href="#data-center">企业数据中心</a>
       <a href="#audit">平台审计日志</a>
     </nav>
 
@@ -51,6 +52,31 @@
             <thead><tr><th>企业名称</th><th>在职人数 / 总人数上限</th><th>状态</th><th>操作</th></tr></thead>
             <tbody id="platform-tenants-body"></tbody>
           </table>
+        </div>
+      </section>
+
+      <section id="data-center" class="platform-section" data-section="data-center">
+        <div class="platform-section-heading">
+          <div><p class="platform-eyebrow">DATA CENTER</p><h2>企业数据中心</h2><p class="platform-section-description">按企业查看业务数据；允许修正业务字段，保留审计记录，禁止删除。</p></div>
+          <button id="platform-data-refresh" class="btn gray sm" type="button">刷新数据</button>
+        </div>
+        <div class="platform-data-toolbar">
+          <label>企业<select id="platform-data-tenant" aria-label="选择企业"></select></label>
+          <label>数据表<select id="platform-data-table" aria-label="选择数据表"></select></label>
+          <label class="platform-data-search">搜索<input id="platform-data-search-input" type="search" maxlength="120" placeholder="按关键字搜索"></label>
+          <button id="platform-data-search" class="btn sm" type="button">查询</button>
+        </div>
+        <p id="platform-data-status" class="platform-form-status" role="status" aria-live="polite"></p>
+        <div class="platform-table-wrap platform-data-table-wrap">
+          <table class="platform-table">
+            <thead id="platform-data-head"></thead>
+            <tbody id="platform-data-body"></tbody>
+          </table>
+        </div>
+        <div class="platform-data-pagination">
+          <button id="platform-data-prev" class="btn gray sm" type="button">上一页</button>
+          <span id="platform-data-page">第 1 页</span>
+          <button id="platform-data-next" class="btn gray sm" type="button">下一页</button>
         </div>
       </section>
 
@@ -86,6 +112,18 @@
       <div class="platform-dialog-actions">
         <button id="approval-cancel" class="btn gray" type="button">取消</button>
         <button id="approval-submit" class="btn" type="submit">确认批准</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="data-editor-dialog" class="platform-dialog platform-data-editor-dialog">
+    <form id="data-editor-form" method="dialog">
+      <h2 id="data-editor-title">编辑数据</h2>
+      <div id="data-editor-fields" class="platform-data-editor-fields"></div>
+      <p id="data-editor-status" class="platform-form-status" role="status"></p>
+      <div class="platform-dialog-actions">
+        <button id="data-editor-cancel" class="btn gray" type="button">取消</button>
+        <button id="data-editor-submit" class="btn" type="submit">保存修改</button>
       </div>
     </form>
   </dialog>
