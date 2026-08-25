@@ -3,8 +3,12 @@ const config = require('../config');
 const { queryAll, queryOne } = require('../db');
 
 const ALERT_SETTING_KEY = 'jzm_alert_config';
-const DEFAULT_MSG_BASE_URL = 'https://ae-mh.ddregion.com';
-const LEGACY_MSG_BASE_URLS = new Set(['https://open.dpclouds.com']);
+const DEFAULT_MSG_BASE_URL = 'https://ae-bg.ddregion.com/hub-api';
+const LEGACY_MSG_BASE_URLS = new Set([
+  'https://open.dpclouds.com',
+  'https://ae-mh.ddregion.com',
+  'https://test-aa-hub.ddregion.com',
+]);
 let testSender = null;
 
 function tableExists(db, name) {
