@@ -61,7 +61,7 @@ Token 或联系人映射。
 定时提醒和 `POST /api/reminder/trigger` 只统计当前企业待派单工单，并发送
 `主管待派单`提醒并 `@主管`。发送失败只记录服务端告警，不影响工单原始写入。
 
-外部秒回发送接口使用 `POST https://ae-mh.ddregion.com/api/v2/message/send?token=...`，消息体为
+外部秒回发送接口使用 `POST https://test-aa-hub.ddregion.com/api/v2/message/send?token=...`，消息体为
 `{ imBotId, imRoomId, messageType: 7, payload: { text, mentionContactIds } }`。
 
 ## 外部系统按企业名称建单
