@@ -162,11 +162,12 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
 }
 
 async function sendMessage(configured, text, mentionContactIds = []) {
+  const mention = [...new Set(mentionContactIds.filter(Boolean))];
   const body = {
     imBotId: configured.imBotId,
     imRoomId: configured.roomId,
     messageType: 7,
-    payload: { text, mentionContactIds: [...new Set(mentionContactIds.filter(Boolean))] },
+    payload: { text, mention },
   };
   const request = {
     url: `${configured.baseUrl}/api/v2/message/send?token=${encodeURIComponent(configured.msgToken)}`,
