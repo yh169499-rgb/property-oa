@@ -45,6 +45,14 @@ async function request(server, path, user, options = {}) {
   return { response, body: await response.json() };
 }
 
+function captureWarnings(t) {
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.map((value) => String(value)).join(' '));
+  t.after(() => { console.warn = originalWarn; });
+  return warnings;
+}
+
 async function configure(server) {
   return request(server, '/api/settings/jzm-alert', SUPERVISOR, {
     method: 'POST',
@@ -139,6 +147,142 @@ test('文本消息使用 mention 字段原生@主管', async (t) => {
   assert.equal(Object.hasOwn(captured.body.payload, 'mentionContactIds'), false);
 });
 
+test('测试发送器异常与上游失败仅暴露安全错误元数据', async (t) => {
+  const db = await fixture();
+  const previousToken = config.JZMM_MSG_TOKEN;
+  const token = 'real-test-msg-token-should-never-leak';
+  config.JZMM_MSG_TOKEN = token;
+  t.after(() => { config.JZMM_MSG_TOKEN = previousToken; });
+  t.after(() => resetMessageSenderForTests());
+  saveTenantAlertConfig(db, 'tenant-a', {
+    roomId: 'secret-room-a',
+    imBotId: 'secret-bot-a',
+    managerContactId: 'secret-manager-contact-a',
+    contactMap: {},
+  });
+  const warnings = captureWarnings(t);
+  const sensitiveText = '敏感消息正文-不得记录';
+  const sensitiveError = `request to https://example.test/send?token=${token} failed; room=secret-room-a; body=${sensitiveText}`;
+
+  setMessageSenderForTests(async () => { throw new Error(sensitiveError); });
+  const networkFailure = await sendTicketAlert({
+    db, tenantId: 'tenant-a', kind: 'created',
+    ticket: { id: 'SAFE-1', cat: '测试', message: sensitiveText },
+  });
+  assert.deepEqual(networkFailure, {
+    success: false,
+    error: { code: 'JZM_MESSAGE_NETWORK_ERROR' },
+  });
+
+  setMessageSenderForTests(async () => ({
+    success: false,
+    httpStatus: 502,
+    error: { errcode: 40013, requestId: 'req-safe-1', message: sensitiveError },
+  }));
+  const upstreamFailure = await sendTicketAlert({
+    db, tenantId: 'tenant-a', kind: 'created',
+    ticket: { id: 'SAFE-2', cat: '测试', message: sensitiveText },
+  });
+  assert.deepEqual(upstreamFailure, {
+    success: false,
+    error: {
+      code: 'JZM_MESSAGE_UPSTREAM_ERROR',
+      httpStatus: 502,
+      errcode: 40013,
+      requestId: 'req-safe-1',
+    },
+  });
+
+  const visibleFailureData = JSON.stringify({ warnings, networkFailure, upstreamFailure });
+  for (const secret of [token, sensitiveError, sensitiveText, 'secret-room-a', 'secret-bot-a', 'secret-manager-contact-a']) {
+    assert.equal(visibleFailureData.includes(secret), false, `失败日志或返回值不得包含：${secret}`);
+  }
+  assert.match(warnings.join('\n'), /JZM_MESSAGE_NETWORK_ERROR/);
+  assert.match(warnings.join('\n'), /req-safe-1/);
+});
+
+test('通知 reject 或返回失败不回滚工单创建与状态更新且路由日志脱敏', async (t) => {
+  const db = await fixture();
+  const server = await tenantServer(db);
+  t.after(() => server.close());
+  await configure(server);
+  const previousToken = config.JZMM_MSG_TOKEN;
+  const token = 'route-test-msg-token-should-never-leak';
+  config.JZMM_MSG_TOKEN = token;
+  t.after(() => { config.JZMM_MSG_TOKEN = previousToken; });
+  t.after(() => resetMessageSenderForTests());
+  const warnings = captureWarnings(t);
+  const sensitiveError = `https://example.test/send?token=${token} room-a bot-a manager-contact-a 路由敏感正文`;
+
+  setMessageSenderForTests(async () => { throw new Error(sensitiveError); });
+  const created = await request(server, '/api/tickets', SUPERVISOR, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'repair', cat: '安防', desc: '门禁异常', loc: '东门', message: '路由敏感正文', community_id: 'c1' }),
+  });
+  assert.equal(created.response.status, 200);
+  const id = created.body.record.id;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(one(db, 'SELECT id FROM tickets WHERE id = ? AND tenant_id = ?', [id, 'tenant-a']).id, id);
+
+  setMessageSenderForTests(async () => ({
+    success: false,
+    httpStatus: 503,
+    error: { errcode: 50001, requestId: 'req-route-safe', message: sensitiveError },
+  }));
+  const updated = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ worker: '张师傅', status: 'doing' }),
+  });
+  assert.equal(updated.response.status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    one(db, 'SELECT status, worker FROM tickets WHERE id = ? AND tenant_id = ?', [id, 'tenant-a']),
+    { status: 'doing', worker: '张师傅' }
+  );
+
+  const warningText = warnings.join('\n');
+  for (const secret of [token, sensitiveError, '路由敏感正文', 'room-a', 'bot-a', 'manager-contact-a']) {
+    assert.equal(warningText.includes(secret), false, `路由日志不得包含：${secret}`);
+  }
+  assert.match(warningText, /JZM_MESSAGE_NETWORK_ERROR/);
+  assert.match(warningText, /req-route-safe/);
+});
+
+test('不同租户提醒只使用各自群机器人与联系人映射', async (t) => {
+  const db = await fixture();
+  seedTenant(db, { id: 'tenant-b', name: '测试企业B' });
+  saveTenantAlertConfig(db, 'tenant-a', {
+    roomId: 'room-a', imBotId: 'bot-a', managerContactId: 'manager-a',
+    contactMap: { '张师傅': 'worker-a' },
+  });
+  saveTenantAlertConfig(db, 'tenant-b', {
+    roomId: 'room-b', imBotId: 'bot-b', managerContactId: 'manager-b',
+    contactMap: { '王师傅': 'worker-b' },
+  });
+  const calls = [];
+  setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
+  t.after(() => resetMessageSenderForTests());
+
+  await sendTicketAlert({
+    db, tenantId: 'tenant-a', kind: 'created',
+    ticket: { id: 'TA-1', cat: '水暖', message: 'A 企业工单' },
+  });
+  await sendTicketAlert({
+    db, tenantId: 'tenant-b', kind: 'assigned',
+    ticket: { id: 'TB-1', cat: '电路', worker: '王师傅', message: 'B 企业工单' },
+    assignee: { displayName: '王师傅' },
+  });
+
+  assert.deepEqual(calls.map(({ body }) => ({
+    roomId: body.imRoomId,
+    botId: body.imBotId,
+    mention: body.payload.mention,
+  })), [
+    { roomId: 'room-a', botId: 'bot-a', mention: ['manager-a'] },
+    { roomId: 'room-b', botId: 'bot-b', mention: ['worker-b'] },
+  ]);
+});
+
 test('创建工单按是否派单选择主管或处理人进行提醒', async (t) => {
   const calls = [];
   setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
@@ -180,6 +324,7 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   });
   const id = created.body.record.id;
   await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['manager-contact-a']);
   const assigned = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ worker: '张师傅', status: 'doing' }),
@@ -224,7 +369,22 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   assert.equal(completed.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /工单完结提醒/);
-  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-b']);
+  assert.match(calls.at(-1).body.payload.text, new RegExp(id));
+  assert.match(calls.at(-1).body.payload.text, /门窗/);
+  assert.match(calls.at(-1).body.payload.text, /1号楼/);
+  assert.match(calls.at(-1).body.payload.text, /处理人：李师傅/);
+  assert.match(calls.at(-1).body.payload.text, /该工单已处理完成/);
+  assert.match(calls.at(-1).body.payload.text, /完成时间：/);
+  assert.deepEqual(calls.at(-1).body.payload.mention, []);
+
+  const callsAfterCompletion = calls.length;
+  const completedAgain = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'done', priority: '普通' }),
+  });
+  assert.equal(completedAgain.response.status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, callsAfterCompletion, '重复保存已完成工单不应重复提醒');
 });
 
 test('主管待派单提醒发送到企业固定预警群并@主管', async (t) => {
