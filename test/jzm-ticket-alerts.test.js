@@ -74,6 +74,16 @@ test('秒回消息服务默认使用生产消息接口地址', () => {
   assert.equal(configured.baseUrl, 'https://ae-mh.ddregion.com');
 });
 
+test('Render 旧消息地址会自动迁移到生产地址', () => {
+  const previous = config.JZMM_MSG_BASE_URL;
+  config.JZMM_MSG_BASE_URL = 'https://open.dpclouds.com';
+  try {
+    assert.equal(getTenantAlertConfig(null, 'tenant-a').baseUrl, 'https://ae-mh.ddregion.com');
+  } finally {
+    config.JZMM_MSG_BASE_URL = previous;
+  }
+});
+
 test('创建工单按是否派单选择主管或处理人进行提醒', async (t) => {
   const calls = [];
   setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
