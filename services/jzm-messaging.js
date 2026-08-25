@@ -146,11 +146,22 @@ function metadataFor(ticket) {
   };
 }
 
+function cleanMessageText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const parsed = parseJson(text, null);
+  if (parsed && !Array.isArray(parsed)) {
+    return String(parsed['整理消息'] || parsed.message || parsed.content || '').trim();
+  }
+  return text;
+}
+
 function formatTicketAlert(kind, ticket, actor, assignee) {
   const meta = metadataFor(ticket);
-  const reporter = meta.feedbackPerson || actor?.name || '系统';
-  const group = meta.feedbackGroup || ticket?.sessionId || '工单系统';
-  const original = meta.originalMessage || ticket?.message || ticket?.desc || '';
+  const reporter = String(meta.feedbackPerson || '').trim();
+  const group = String(meta.feedbackGroup || '').trim();
+  const reason = cleanMessageText(ticket?.desc || ticket?.message);
+  const original = cleanMessageText(meta.originalMessage);
   const worker = ticket?.worker || assignee?.displayName || '未指定';
   if (kind === 'completed') {
     return `————工单完结提醒————\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n处理人：${worker}\n状态：该工单已处理完成\n完成时间：${formatTime(ticket?.finished || new Date().toISOString())}\n————————————`;
@@ -161,7 +172,17 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
   if (kind === 'assigned') {
     return `————新的派单提醒————\n您有新的派单，请及时处理。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
   }
-  return `————紧急消息提醒————\n时段：${formatTime(ticket?.created || new Date().toISOString())}\n反馈人：${reporter}\n反馈群：${group}\n反馈事件：${ticket?.cat || '其他'}\n反馈原因：${ticket?.message || ticket?.desc || ''}\n原文消息：${original}\n———！！请注意留意！！———`;
+  const lines = [
+    '————紧急消息提醒————',
+    `时段：${formatTime(ticket?.created || new Date().toISOString())}`,
+  ];
+  if (reporter) lines.push(`反馈人：${reporter}`);
+  if (group) lines.push(`反馈群：${group}`);
+  lines.push(`反馈事件：${ticket?.cat || '其他'}`);
+  if (reason) lines.push(`反馈原因：${reason}`);
+  if (original) lines.push(`原文消息：${original}`);
+  lines.push('———！！请注意留意！！———');
+  return lines.join('\n');
 }
 
 function safeIdentifier(value) {
@@ -200,11 +221,12 @@ function warnMessageFailure(label, failure) {
 
 async function sendMessage(configured, text, mentionContactIds = []) {
   const mention = [...new Set(mentionContactIds.filter(Boolean))];
+  const formattedText = mention.length ? `\n${text}` : text;
   const body = {
     imBotId: configured.imBotId,
     imRoomId: configured.roomId,
     messageType: 7,
-    payload: { text, mention },
+    payload: { text: formattedText, mention },
   };
   const request = {
     url: `${configured.baseUrl}/api/v2/message/send?token=${encodeURIComponent(configured.msgToken)}`,
