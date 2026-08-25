@@ -85,15 +85,39 @@ function notificationMetadata(input = {}) {
   return JSON.stringify(value);
 }
 
+function safeMessagingIdentifier(value) {
+  const text = String(value ?? '').trim();
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(text) ? text : '';
+}
+
+function safeMessagingError(error, fallbackCode) {
+  const source = error && typeof error === 'object' ? error : {};
+  const code = safeMessagingIdentifier(source.code) || fallbackCode;
+  const safe = { code };
+  if (Number.isInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599) {
+    safe.httpStatus = source.httpStatus;
+  }
+  if (Number.isFinite(source.errcode)) {
+    safe.errcode = source.errcode;
+  } else {
+    const errcode = safeMessagingIdentifier(source.errcode);
+    if (errcode) safe.errcode = errcode;
+  }
+  const requestId = safeMessagingIdentifier(source.requestId);
+  if (requestId) safe.requestId = requestId;
+  return safe;
+}
+
 function notifyTicketAlert(args) {
   sendTicketAlert(args).then((result) => {
     if (!result || result.success) return;
-    console.warn('[秒回预警] 工单提醒未发送:', JSON.stringify({
-      error: result.error || '',
-      skipped: Boolean(result.skipped),
+    console.warn('[秒回预警] 工单提醒未发送:', JSON.stringify(
+      safeMessagingError(result.error, 'JZM_MESSAGE_SEND_FAILED')
+    ));
+  }).catch(() => {
+    console.warn('[秒回预警] 工单提醒失败:', JSON.stringify({
+      code: 'JZM_MESSAGE_UNEXPECTED_ERROR',
     }));
-  }).catch((error) => {
-    console.warn('[秒回预警] 工单提醒失败:', error.message);
   });
 }
 
