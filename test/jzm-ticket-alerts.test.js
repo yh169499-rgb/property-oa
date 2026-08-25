@@ -71,17 +71,40 @@ test('主管可保存和读取企业秒回预警配置，响应不泄露 Token',
 
 test('秒回消息服务默认使用生产消息接口地址', () => {
   const configured = getTenantAlertConfig(null, 'tenant-a');
-  assert.equal(configured.baseUrl, 'https://ae-mh.ddregion.com');
+  assert.equal(configured.baseUrl, 'https://ae-bg.ddregion.com/hub-api');
 });
 
 test('Render 旧消息地址会自动迁移到生产地址', () => {
   const previous = config.JZMM_MSG_BASE_URL;
-  config.JZMM_MSG_BASE_URL = 'https://open.dpclouds.com';
   try {
-    assert.equal(getTenantAlertConfig(null, 'tenant-a').baseUrl, 'https://ae-mh.ddregion.com');
+    for (const legacyUrl of [
+      'https://open.dpclouds.com',
+      'https://ae-mh.ddregion.com',
+      'https://test-aa-hub.ddregion.com',
+    ]) {
+      config.JZMM_MSG_BASE_URL = legacyUrl;
+      assert.equal(getTenantAlertConfig(null, 'tenant-a').baseUrl, 'https://ae-bg.ddregion.com/hub-api');
+    }
   } finally {
     config.JZMM_MSG_BASE_URL = previous;
   }
+});
+
+test('秒回消息请求使用最终 hub-api 发送路径', async (t) => {
+  let captured;
+  setMessageSenderForTests(async (input) => {
+    captured = input;
+    return { success: true };
+  });
+  t.after(() => resetMessageSenderForTests());
+  await sendTicketAlert({
+    db: null,
+    tenantId: 'tenant-a',
+    kind: 'created',
+    ticket: { id: 'WX-URL', cat: '测试', message: '路径验证' },
+    actor: { name: '系统测试' },
+  });
+  assert.equal(captured.url, 'https://ae-bg.ddregion.com/hub-api/api/v2/message/send?token=');
 });
 
 test('创建工单按是否派单选择主管或处理人进行提醒', async (t) => {
