@@ -3,9 +3,9 @@ function detectTicketAction(before, updates) {
   if (updates._action === 'urge') return 'urge';
   if (updates._action !== undefined) return null;
 
-  if (updates.worker !== undefined &&
-      updates.worker !== before.worker &&
-      String(updates.worker || '').trim()) return 'assign';
+  const nextWorker = updates.worker === undefined ? undefined : String(updates.worker || '').trim();
+  const currentWorker = String(before.worker || '').trim();
+  if (nextWorker !== undefined && nextWorker !== currentWorker && nextWorker) return 'assign';
   if (before.status === 'confirm' && updates.status === 'done') return 'approve_complete';
   if (before.status === 'confirm' && updates.status === 'doing' &&
       (updates.rejectReason || updates.reject_reason)) return 'reject';
