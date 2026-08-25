@@ -17,6 +17,12 @@ const {
   getPlatformOverview,
   listPlatformAuditLogs,
 } = require('../services/platform-tenants');
+const {
+  listDataTables,
+  listDataRows,
+  updateDataRow,
+  deleteDataRow,
+} = require('../services/platform-data-center');
 
 const router = express.Router();
 
@@ -77,6 +83,32 @@ router.post('/applications/:id/reject', asyncHandler(async (req, res) => {
 
 router.get('/tenants', (req, res) => {
   res.json({ data: listTenants(database.getDB(), req.user) });
+});
+
+router.get('/tenants/:tenantId/data-tables', (req, res) => {
+  res.json({ data: listDataTables(database.getDB(), req.user, req.params.tenantId) });
+});
+
+router.get('/tenants/:tenantId/data/:table', (req, res) => {
+  res.json({ data: listDataRows(database.getDB(), req.user, req.params.tenantId, req.params.table, req.query) });
+});
+
+router.patch('/tenants/:tenantId/data/:table/:id', asyncHandler(async (req, res) => {
+  const result = updateDataRow(
+    database.getDB(),
+    req.user,
+    req.params.tenantId,
+    req.params.table,
+    req.params.id,
+    req.body,
+  );
+  await database.saveDB();
+  res.json({ success: true, data: result });
+}));
+
+router.delete('/tenants/:tenantId/data/:table/:id', (req, res) => {
+  deleteDataRow(database.getDB(), req.user, req.params.tenantId, req.params.table, req.params.id);
+  res.status(405).json({ error: '管理平台数据中心不允许删除数据', code: 'PLATFORM_DATA_DELETE_FORBIDDEN' });
 });
 
 router.patch('/tenants/:id', asyncHandler(async (req, res) => {
