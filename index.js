@@ -833,7 +833,7 @@ const JZMM_MANAGER_CONTACT_ID = process.env.JZMM_MANAGER_CONTACT_ID || '78813022
  * 通过句子秒懂发送消息API直接发消息到群（支持@人）
  */
 async function sendJzmMessage(roomId, text, mentionContactId) {
-  const baseUrl = process.env.JZMM_MSG_BASE_URL || 'https://open.dpclouds.com';
+  const baseUrl = process.env.JZMM_MSG_BASE_URL || 'https://ae-mh.ddregion.com';
   const url = `${baseUrl}/api/v2/message/send?token=${JZMM_MSG_TOKEN}`;
   const body = {
     imBotId: JZMM_IM_BOT_ID,
