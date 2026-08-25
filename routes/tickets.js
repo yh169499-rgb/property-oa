@@ -473,7 +473,8 @@ async function createTicket(req, res) {
 
 // PATCH /api/tickets/:id
 router.patch('/:id', requireAuth, async (req, res) => {
-  const updates = req.body || {};
+  const updates = { ...(req.body || {}) };
+  if (updates.worker !== undefined) updates.worker = String(updates.worker || '').trim();
   if (clientTenantProvided(updates)) return clientTenantError(res);
   if (updates._action !== undefined && updates._action !== 'urge') {
     return res.status(400).json({ error: '不支持的工单动作' });
