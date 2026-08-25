@@ -69,6 +69,11 @@ test('主管可保存和读取企业秒回预警配置，响应不泄露 Token',
   assert.equal(loaded.body.data.managerContactIdConfigured, true);
 });
 
+test('秒回消息服务默认使用生产消息接口地址', () => {
+  const configured = getTenantAlertConfig(null, 'tenant-a');
+  assert.equal(configured.baseUrl, 'https://ae-mh.ddregion.com');
+});
+
 test('创建工单按是否派单选择主管或处理人进行提醒', async (t) => {
   const calls = [];
   setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
