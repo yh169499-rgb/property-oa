@@ -22,15 +22,18 @@ async function fixture() {
   const db = await createFullTestDB();
   db.run(`INSERT INTO users (id, phone, password, name, role, status) VALUES
     (1, '13800000001', 'x', '主管', '主管', 'active'),
-    (2, '13800000002', 'x', '张师傅', 'worker', 'active')`);
+    (2, '13800000002', 'x', '张师傅', 'worker', 'active'),
+    (3, '13800000003', 'x', '李师傅', 'worker', 'active')`);
   db.run(`INSERT INTO staff_profiles
     (id, user_id, name, position, manager_id, employment_status, created_at, updated_at) VALUES
     (1, 1, '主管', '主管', NULL, 'active', '2026-01-01', '2026-01-01'),
-    (2, 2, '张师傅', '维修师傅', 1, 'active', '2026-01-01', '2026-01-01')`);
+    (2, 2, '张师傅', '维修师傅', 1, 'active', '2026-01-01', '2026-01-01'),
+    (3, 3, '李师傅', '维修师傅', 1, 'active', '2026-01-01', '2026-01-01')`);
   db.run(`INSERT INTO communities (id, name, created) VALUES ('c1', '测试小区', '2026-01-01')`);
   seedTenant(db, { id: 'tenant-a', name: '测试企业' });
   db.run(`INSERT INTO community_memberships (tenant_id, community_id, staff_profile_id, created_at)
-    VALUES ('tenant-a', 'c1', 1, '2026-01-01'), ('tenant-a', 'c1', 2, '2026-01-01')`);
+    VALUES ('tenant-a', 'c1', 1, '2026-01-01'), ('tenant-a', 'c1', 2, '2026-01-01'),
+      ('tenant-a', 'c1', 3, '2026-01-01')`);
   return db;
 }
 
@@ -50,7 +53,10 @@ async function configure(server) {
       roomId: 'room-a',
       imBotId: 'bot-a',
       managerContactId: 'manager-contact-a',
-      contactMap: { '张师傅': 'worker-contact-a', '13800000002': 'worker-contact-a' },
+      contactMap: {
+        '张师傅': 'worker-contact-a', '13800000002': 'worker-contact-a',
+        '李师傅': 'worker-contact-b',
+      },
     }),
   });
 }
@@ -62,7 +68,7 @@ test('主管可保存和读取企业秒回预警配置，响应不泄露 Token',
   assert.equal(saved.response.status, 200);
   assert.equal(saved.body.data.roomId, 'room-a');
   assert.equal(saved.body.data.imBotId, 'bot-a');
-  assert.equal(saved.body.data.contactCount, 2);
+  assert.equal(saved.body.data.contactCount, 3);
   assert.equal(Object.hasOwn(saved.body.data, 'msgToken'), false);
 
   const loaded = await request(server, '/api/settings/jzm-alert', SUPERVISOR);
@@ -181,6 +187,30 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   assert.equal(assigned.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-a']);
+  assert.match(calls.at(-1).body.payload.text, /新的派单提醒/);
+  assert.match(calls.at(-1).body.payload.text, /您有新的派单，请及时处理/);
+  assert.match(calls.at(-1).body.payload.text, new RegExp(id));
+  assert.match(calls.at(-1).body.payload.text, /门窗/);
+  assert.match(calls.at(-1).body.payload.text, /1号楼/);
+
+  const callsAfterAssignment = calls.length;
+  const unchangedAssignee = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ worker: ' 张师傅 ', priority: '紧急' }),
+  });
+  assert.equal(unchangedAssignee.response.status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, callsAfterAssignment, '处理人未变时不应重复发送派单提醒');
+
+  const reassigned = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ worker: '李师傅' }),
+  });
+  assert.equal(reassigned.response.status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, callsAfterAssignment + 1, '改派应只新增一条提醒');
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-b']);
+  assert.match(calls.at(-1).body.payload.text, /您有新的派单，请及时处理/);
 
   const submitted = await request(server, `/api/tickets/${id}`, SUPERVISOR, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -194,7 +224,7 @@ test('派单和完工会分别发送处理人提醒与完工提醒', async (t) =
   assert.equal(completed.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /工单完结提醒/);
-  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-a']);
+  assert.deepEqual(calls.at(-1).body.payload.mention, ['worker-contact-b']);
 });
 
 test('主管待派单提醒发送到企业固定预警群并@主管', async (t) => {
