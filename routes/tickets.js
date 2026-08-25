@@ -78,9 +78,9 @@ function notificationMetadata(input = {}) {
   const source = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
   const value = {
     ...source,
-    feedbackPerson: input.feedback_person || input.feedbackPerson || input.reporter || input.reporter_name || source.feedbackPerson || source.feedback_person || '',
+    feedbackPerson: input.feedback_person || input.feedbackPerson || source.feedbackPerson || source.feedback_person || '',
     feedbackGroup: input.feedback_group || input.feedbackGroup || input.group_name || input.groupName || source.feedbackGroup || source.feedback_group || '',
-    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message || input.message || '',
+    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message || '',
   };
   return JSON.stringify(value);
 }
