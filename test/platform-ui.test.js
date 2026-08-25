@@ -140,9 +140,9 @@ test('平台与申请页面使用独立脚本且系统标题固定', () => {
   const platformAdmin = readPublic('platform-admin.html');
   const enterpriseApply = readPublic('enterprise-apply.html');
 
-  assert.match(platformLogin, /<title>平台运维登录 \| 工单系统<\/title>/);
+  assert.match(platformLogin, /<title>管理平台登录 \| 工单系统<\/title>/);
   assert.match(platformLogin, /js\/platform-login\.js/);
-  assert.match(platformAdmin, /<title>平台运维后台 \| 工单系统<\/title>/);
+  assert.match(platformAdmin, /<title>管理平台后台 \| 工单系统<\/title>/);
   assert.match(platformAdmin, /js\/platform-admin\.js/);
   assert.match(enterpriseApply, /<title>申请企业主管账号 \| 工单系统<\/title>/);
   assert.match(enterpriseApply, /js\/enterprise-apply\.js/);
