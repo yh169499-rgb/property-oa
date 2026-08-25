@@ -117,6 +117,29 @@ Content-Type: application/json
 
 读取接口不接受请求体。查询参数均为可选且必须通过服务端白名单校验；响应不包含任何凭据或密钥。
 
+### 企业数据中心
+
+管理平台的数据中心只允许无租户的 `platform_owner` 访问，用于按企业查看和修正业务数据。
+内部角色名和 `/api/platform` 路径保持兼容，页面名称为“管理平台”。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/platform/tenants/:tenantId/data-tables` | 返回该企业允许查看的数据表目录、字段元数据、记录数和是否可编辑 |
+| GET | `/api/platform/tenants/:tenantId/data/:table` | 按白名单表分页查询；支持 `page`、`pageSize`、`search` |
+| PATCH | `/api/platform/tenants/:tenantId/data/:table/:id` | 修改白名单中的业务字段，写入 `platform_audit_logs` |
+| DELETE | `/api/platform/tenants/:tenantId/data/:table/:id` | 永久返回 `405 PLATFORM_DATA_DELETE_FORBIDDEN`，平台数据中心不提供删除 |
+
+允许查看的表包括账号、人员档案、小区、工单、排班、班次模板、考勤记录、工单流转、绩效规则、
+AI 报告和人员生命周期日志。`tenant_settings`、平台审计日志以及任何密码、密码哈希、JWT、
+API Key、Session 信息均不通过该目录暴露。所有查询强制追加目标 `tenant_id`，未知表返回
+`404 PLATFORM_DATA_TABLE_NOT_FOUND`，跨租户记录统一按不存在处理。
+
+可编辑范围仅限业务资料：人员姓名、手机号、职位（不能填写主管/平台权限字样）、在职状态、
+入职日期、出生年月；小区名称和地址；工单描述、分类、位置、留言、优先级、状态和预计工时；
+班次模板与排班字段。账号/人员资料修改会同步双方资料并增加会话版本，手机号冲突返回
+`409 PHONE_CONFLICT`。工单状态修改复用企业端状态流转校验并记录工单活动；禁止通过数据中心
+修改角色、密码、租户归属、主管关系、派单人或删除历史记录。
+
 ## 外部建单接口
 
 企业内部前端调用 `/api/tickets` 时仍需使用企业用户的 Bearer 会话；企业归属由登录
