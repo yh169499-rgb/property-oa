@@ -109,6 +109,14 @@ Content-Type: application/json
 一个秒回配置字段时，三项群/机器人/主管联系人必须同时提供，系统会按该企业保存，之后
 创建、派单、完工和待派单提醒均自动使用该企业自己的 room、机器人和联系人映射。
 
+反馈人只读取 `feedback_person`，并兼容同义驼峰字段 `feedbackPerson`；未传或传空值时，
+预警消息省略整行“反馈人”，不会使用主管或其他账号姓名代替。创建提醒中的字段按请求体
+排版：`feedback_group` 对应反馈群、`cat` 对应反馈事件、`desc` 对应反馈原因、
+`original_message` 对应原文消息。未传 `original_message` 时省略原文消息整行，不使用
+`message` 重复填充；若作为备用内容的 `message` 是包含 `整理消息` 的 JSON 字符串，
+只输出其中的纯文本。包含原生 mention 的创建和派单消息会让 `@人员` 单独占第一行，
+消息标题从第二行开始；不带 mention 的完工消息不会增加开头空行。
+
 外部接口只允许系统生成工单号、当前时间、`wait` 状态、`normal` 优先级和未派单状态；
 请求中即使带有 `id`、`status`、`priority`、`worker` 或 `created` 也不会覆盖这些内部字段。
 建单或合并成功时只返回 `200 {"success": true}`；工单详情、工单号和归属信息保存在系统
