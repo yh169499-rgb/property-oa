@@ -340,7 +340,7 @@
       var statsPath = manager
         ? '/api/reports/manager/' + encodeURIComponent(state.profile.id) + managerPeriodQuery(state.period)
         : '/api/me/stats?period=' + encodeURIComponent(state.period);
-      var communityId = state.profile.community_id || localStorage.getItem('juzi_oa_community_v1') || 'default';
+      var communityId = state.profile.community_id || sessionStorage.getItem('juzi_oa_community_v1') || 'default';
       var results = await Promise.all([
         request(statsPath),
         request('/api/calendar/day?date=' + encodeURIComponent(state.calendarDate || dateKey(new Date()))),

@@ -15,7 +15,7 @@
   var activeTab = 'organization';
 
   function root() { return document.getElementById('management-workspace'); }
-  function token() { return localStorage.getItem('auth_token'); }
+  function token() { return sessionStorage.getItem('auth_token'); }
   function headers(json) {
     var value = {};
     if (json) value['Content-Type'] = 'application/json';
@@ -599,7 +599,7 @@
     var to = node('input'); to.type = 'date'; to.value = today;
     var currentControl = document.getElementById('community-select');
     var currentId = currentControl && currentControl.value
-      ? currentControl.value : (localStorage.getItem('juzi_oa_community_v1') || 'default');
+      ? currentControl.value : (sessionStorage.getItem('juzi_oa_community_v1') || 'default');
     var currentName = currentControl && currentControl.selectedOptions[0]
       ? currentControl.selectedOptions[0].textContent : currentId;
     var community = select([
@@ -641,7 +641,7 @@
 
   function legacyProfiles() {
     try {
-      var stored = JSON.parse(localStorage.getItem('juzi_oa_demo_v1') || '{}');
+      var stored = JSON.parse(sessionStorage.getItem('juzi_oa_demo_v1') || '{}');
       return (stored.staff || []).map(function (person) {
         var profile = {
           name: person.name || '', phone: person.phone || '', skill: person.skill || '',
@@ -825,12 +825,15 @@
     var profileImport = node('button', 'card management-setting', '导入旧人员资料');
     profileImport.addEventListener('click', openProfileImport);
     links.appendChild(profileImport);
-    var intervals = [1, 3, 5, 10, 15, 30, 60, 0].map(function (minutes) {
-      return { value: minutes, label: minutes ? minutes + ' 分钟' : '关闭推送' };
-    });
     var reminder = node('div', 'card management-setting');
-    reminder.appendChild(node('strong', '', '待派单提醒'));
-    var reminderSelect = select(intervals, 5);
+    reminder.appendChild(node('strong', '', '工单未处理提醒'));
+    var reminderSelect = document.createElement('input');
+    reminderSelect.type = 'number';
+    reminderSelect.min = '0';
+    reminderSelect.max = '1440';
+    reminderSelect.step = '1';
+    reminderSelect.value = '5';
+    reminderSelect.placeholder = '分钟，0 为关闭';
     reminderSelect.id = 'reminder-interval';
     reminder.appendChild(reminderSelect);
     var reminderButton = node('button', 'btn sm', '保存');
@@ -844,7 +847,10 @@
     links.appendChild(reminder);
     var sla = node('div', 'card management-setting');
     sla.appendChild(node('strong', '', 'SLA 超时告警'));
-    var slaSelect = select(intervals.slice(2), 0);
+    var slaIntervals = [5, 10, 15, 30, 60, 0].map(function (minutes) {
+      return { value: minutes, label: minutes ? minutes + ' 分钟' : '关闭推送' };
+    });
+    var slaSelect = select(slaIntervals, 0);
     slaSelect.id = 'sla-interval';
     sla.appendChild(slaSelect);
     var slaButton = node('button', 'btn sm', '保存');

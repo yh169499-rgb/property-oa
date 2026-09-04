@@ -10,6 +10,7 @@ const {
   detectTicketAction,
   resolveAssignee,
   recordTicketActivity,
+  buildTicketTimeline,
 } = require('../services/ticket-activity');
 
 test('detectTicketAction recognizes the six workflow actions', () => {
@@ -94,6 +95,25 @@ test('recordTicketActivity inserts a parameterized activity row', async () => {
   assert.deepEqual(row, [
     1, "WX'7", 3, 9, 'reject', '{"reason":"材料\'不足"}',
     '2026-07-30T10:00:00.000Z',
+  ]);
+});
+
+test('历史工单至少生成创建、派单和完成时间线', async () => {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run(`CREATE TABLE ticket_activity_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT, ticket_id TEXT,
+    actor_user_id INTEGER, actor_staff_id INTEGER, action TEXT,
+    metadata TEXT, created_at TEXT
+  )`);
+  const steps = buildTicketTimeline(db, {
+    id: 'WX-HISTORY', tenant_id: 'tenant-a', created: '2026-09-01T01:00:00.000Z',
+    assigned_at: '2026-09-01T02:00:00.000Z', finished: '2026-09-01T03:00:00.000Z',
+    worker: '张师傅', status: 'done',
+  });
+  assert.deepEqual(steps.map((step) => step.action), ['create', 'assign', 'approve_complete']);
+  assert.deepEqual(steps.map((step) => step.time), [
+    '2026-09-01T01:00:00.000Z', '2026-09-01T02:00:00.000Z', '2026-09-01T03:00:00.000Z',
   ]);
 });
 
