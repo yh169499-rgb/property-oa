@@ -38,6 +38,8 @@ async function start() {
     await saveDB();
     console.log('✅ 演示数据已写入:', JSON.stringify(seeded.inserted));
   }
+  const { restoreReminderSchedulers } = require('./services/ticket-reminders');
+  await restoreReminderSchedulers(getDB(), { getDatabase: getDB, persist: saveDB });
   const app = createServerApp();
   app.listen(config.PORT, () => {
     console.log(`✅ 物业工单系统已启动: http://localhost:${config.PORT}`);

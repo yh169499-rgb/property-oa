@@ -3,10 +3,14 @@
  */
 const API = {
   base: '',
-  token: localStorage.getItem('auth_token') || '',
+  token: sessionStorage.getItem('auth_token') || '',
 
-  setToken(t) { this.token = t; localStorage.setItem('auth_token', t); },
-  clearToken() { this.token = ''; localStorage.removeItem('auth_token'); },
+  setToken(t) { this.token = t; sessionStorage.setItem('auth_token', t); },
+  clearToken() {
+    this.token = '';
+    sessionStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_token');
+  },
 
   async request(method, path, body) {
     const opts = {
@@ -24,6 +28,7 @@ const API = {
         if (resp.status === 401) {
           // token 过期，清除登录状态
           this.clearToken();
+          sessionStorage.removeItem('login_user');
           localStorage.removeItem('login_user');
           toast('登录已过期，请重新登录');
           if (typeof showLoginPage === 'function') showLoginPage();

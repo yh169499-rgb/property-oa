@@ -172,6 +172,24 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
   if (kind === 'assigned') {
     return `————新的派单提醒————\n您有新的派单，请及时处理。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
   }
+  if (kind === 'submitted') {
+    return `————工单待确认提醒————\n处理人 ${worker} 已提交处理结果，等待您确认。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
+  if (kind === 'returned') {
+    return `————工单退回提醒————\n处理人 ${actor?.name || worker} 已退回工单，请及时重新派单。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
+  if (kind === 'suspended') {
+    return `————工单搁置提醒————\n处理人 ${actor?.name || worker} 已搁置工单，请及时跟进或重新派单。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
+  if (kind === 'overdue_worker') {
+    return `————工单超时提醒————\n该工单已超过 ${ticket?.reminderIntervalMinutes || ''} 分钟未处理，请及时跟进。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
+  if (kind === 'overdue_manager') {
+    const statusText = {
+      wait: '待派单', pending: '搁置中', confirm: '待确认',
+    }[ticket?.status] || '未处理';
+    return `————工单超时提醒————\n该工单处于“${statusText}”状态已超过 ${ticket?.reminderIntervalMinutes || ''} 分钟，请及时处理。\n工单号：${ticket?.id || ''}\n事件：${ticket?.cat || '其他'}\n地点：${ticket?.loc || '未填写'}\n————————————`;
+  }
   const lines = [
     '————紧急消息提醒————',
     `时段：${formatTime(ticket?.created || new Date().toISOString())}`,
@@ -271,7 +289,8 @@ async function sendMessage(configured, text, mentionContactIds = []) {
 
 async function sendTicketAlert({ db, tenantId, kind, ticket, actor, assignee }) {
   const configured = getTenantAlertConfig(db, tenantId);
-  const isWorkerTarget = kind === 'assigned' || (kind === 'created' && assignee);
+  const isWorkerTarget = kind === 'assigned' || kind === 'overdue_worker'
+    || (kind === 'created' && assignee);
   const contact = kind === 'completed'
     ? ''
     : isWorkerTarget

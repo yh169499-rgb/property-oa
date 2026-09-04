@@ -22,6 +22,19 @@ function fail(res, error) {
   });
 }
 
+function assertUniqueCommunityName(tenantId, name, excludedId = '') {
+  const normalized = String(name || '').trim();
+  if (!normalized) throw httpError(400, 'COMMUNITY_NAME_REQUIRED', '小区名称必填');
+  const duplicate = queryOne(
+    `SELECT id FROM communities
+     WHERE tenant_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id <> ?
+     LIMIT 1`,
+    [tenantId, normalized, String(excludedId || '')]
+  );
+  if (duplicate) throw httpError(409, 'COMMUNITY_NAME_EXISTS', '当前企业已存在同名小区');
+  return normalized;
+}
+
 function syncMemberships(tenantId, communityId, allowedStaff, actorUserId) {
   run('DELETE FROM community_memberships WHERE tenant_id = ? AND community_id = ?', [tenantId, communityId]);
   if (!Array.isArray(allowedStaff)) return;
@@ -141,13 +154,13 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
     assertNoClientTenant(req.body);
     const tenantId = tenantIdFrom(req);
     const { name, address, allowedStaff } = req.body;
-    if (!name) return res.status(400).json({ error: '小区名称必填' });
+    const normalizedName = assertUniqueCommunityName(tenantId, name);
     validateAllowedStaff(tenantId, allowedStaff);
     const id = 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const now = new Date().toISOString();
     run(
       'INSERT INTO communities (id, tenant_id, name, address, created) VALUES (?, ?, ?, ?, ?)',
-      [id, tenantId, name, address || '', now]
+      [id, tenantId, normalizedName, address || '', now]
     );
     if (Array.isArray(allowedStaff)) {
       syncPermissions(tenantId, id, allowedStaff, req.user.id);
@@ -155,7 +168,7 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
     await saveDB();
     res.json({
       success: true,
-      community: { id, tenant_id: tenantId, name, address: address || '', created: now, allowedStaff: allowedStaff || [] },
+      community: { id, tenant_id: tenantId, name: normalizedName, address: address || '', created: now, allowedStaff: allowedStaff || [] },
     });
   } catch (error) {
     fail(res, error);
@@ -175,7 +188,10 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
     validateAllowedStaff(tenantId, allowedStaff);
     const sets = [];
     const values = [];
-    if (name !== undefined) { sets.push('name = ?'); values.push(name); }
+    if (name !== undefined) {
+      sets.push('name = ?');
+      values.push(assertUniqueCommunityName(tenantId, name, req.params.id));
+    }
     if (address !== undefined) { sets.push('address = ?'); values.push(address); }
     if (sets.length) {
       run(

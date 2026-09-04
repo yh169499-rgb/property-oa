@@ -13,6 +13,7 @@ const TENANT_TABLES = [
   'attendance_records',
   'attendance_change_logs',
   'tenant_settings',
+  'ticket_reminder_state',
   'ticket_activity_logs',
   'workforce_import_batches',
   'performance_rule_versions',
@@ -247,6 +248,52 @@ function rebuildWorkforceTenantUniques(db) {
   for (const definition of definitions) rebuildTenantUniqueTable(db, definition);
 }
 
+function mergeCommunityReferences(db, tenantId, canonicalId, duplicateId) {
+  for (const table of ['community_permissions', 'community_memberships']) {
+    if (!tableExists(db, table)) continue;
+    const columns = columnNames(db, table);
+    if (!columns.includes('community_id') || !columns.includes('tenant_id')) continue;
+    const copiedColumns = table === 'community_permissions'
+      ? ['tenant_id', 'community_id', 'staff_name']
+      : ['tenant_id', 'community_id', 'staff_profile_id', 'created_at', 'created_by_user_id']
+        .filter((column) => columns.includes(column));
+    const selectColumns = copiedColumns.map((column) => (
+      column === 'community_id' ? '?' : column
+    ));
+    db.run(`INSERT OR IGNORE INTO ${table} (${copiedColumns.join(', ')})
+      SELECT ${selectColumns.join(', ')} FROM ${table}
+      WHERE tenant_id = ? AND community_id = ?`, [canonicalId, tenantId, duplicateId]);
+    db.run(`DELETE FROM ${table} WHERE tenant_id = ? AND community_id = ?`, [tenantId, duplicateId]);
+  }
+  for (const table of ['tickets', 'invite_codes', 'pending_registrations', 'ai_report_analyses']) {
+    if (!tableExists(db, table)) continue;
+    const columns = columnNames(db, table);
+    if (!columns.includes('community_id') || !columns.includes('tenant_id')) continue;
+    db.run(`UPDATE ${table} SET community_id = ?
+      WHERE tenant_id = ? AND community_id = ?`, [canonicalId, tenantId, duplicateId]);
+  }
+}
+
+function consolidateDuplicateCommunities(db) {
+  if (!tableExists(db, 'communities')) return;
+  const columns = columnNames(db, 'communities');
+  if (!columns.includes('tenant_id')) return;
+  const groups = values(db, `SELECT tenant_id, LOWER(TRIM(name)) AS normalized_name
+    FROM communities
+    GROUP BY tenant_id, LOWER(TRIM(name))
+    HAVING COUNT(*) > 1`);
+  for (const [tenantId, normalizedName] of groups) {
+    const duplicates = values(db, `SELECT id FROM communities
+      WHERE tenant_id = ? AND LOWER(TRIM(name)) = ?
+      ORDER BY created ASC, id ASC`, [tenantId, normalizedName]).map((row) => row[0]);
+    const canonicalId = duplicates.shift();
+    for (const duplicateId of duplicates) {
+      mergeCommunityReferences(db, tenantId, canonicalId, duplicateId);
+      db.run('DELETE FROM communities WHERE tenant_id = ? AND id = ?', [tenantId, duplicateId]);
+    }
+  }
+}
+
 function ensureTenantSchema(db) {
   db.run('SAVEPOINT ensure_tenant_schema');
   try {
@@ -302,6 +349,14 @@ function ensureTenantSchema(db) {
       UNIQUE (tenant_id, key)
     )`);
 
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_reminder_state (
+      tenant_id TEXT NOT NULL,
+      ticket_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      last_sent_at TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, ticket_id, status)
+    )`);
+
     db.run(`CREATE TABLE IF NOT EXISTS staff_lifecycle_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id TEXT NOT NULL DEFAULT '',
@@ -332,6 +387,7 @@ function ensureTenantSchema(db) {
     rebuildStaffStatus(db);
     rebuildPerformanceRules(db);
     rebuildWorkforceTenantUniques(db);
+    consolidateDuplicateCommunities(db);
 
     db.run('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone)');
     db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_active_platform_owner
@@ -343,6 +399,8 @@ function ensureTenantSchema(db) {
       ON tenants(owner_user_id) WHERE owner_user_id IS NOT NULL`);
     db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_status_tenant_name
       ON staff_status(tenant_id, name)`);
+    db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_communities_tenant_normalized_name
+      ON communities(tenant_id, LOWER(TRIM(name)))`);
     if (tableExists(db, 'performance_rule_versions')) {
       db.run(`CREATE UNIQUE INDEX IF NOT EXISTS uq_performance_tenant_version
         ON performance_rule_versions(tenant_id, version_no)`);

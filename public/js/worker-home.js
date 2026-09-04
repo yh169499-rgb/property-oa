@@ -204,7 +204,7 @@
         request('/api/me/stats?period=month'),
         request('/api/calendar/day?date=' + encodeURIComponent(dateKey(new Date()))),
         request('/api/staff/directory?community_id=' + encodeURIComponent(
-          profileResult.data.community_id || localStorage.getItem('juzi_oa_community_v1') || 'default')),
+          profileResult.data.community_id || sessionStorage.getItem('juzi_oa_community_v1') || 'default')),
       ]);
       render(buildWorkerHomeModel(
         profileResult.data,

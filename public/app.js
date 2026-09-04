@@ -10,7 +10,7 @@ const API_BASE = ''; // 同域，留空即可；部署到 Render 后改为实际
 
 function authHeaders(json) {
   var headers = json ? { 'Content-Type': 'application/json' } : {};
-  var token = localStorage.getItem('auth_token');
+  var token = sessionStorage.getItem('auth_token');
   if (token) headers.Authorization = 'Bearer ' + token;
   return headers;
 }
@@ -33,8 +33,8 @@ let useApi = true; // 是否使用后端 API
 async function load() {
   // 不再从浏览器恢复人员/工单明细，避免旧缓存绕过服务端权限；服务端 API 成功后再填充内存状态。
   state.staff = [];
-  currentRole = localStorage.getItem(LS_ROLE) || 'eng_lead';
-  currentCommunity = localStorage.getItem(LS_COMMUNITY) || 'default';
+  currentRole = sessionStorage.getItem(LS_ROLE) || 'eng_lead';
+  currentCommunity = sessionStorage.getItem(LS_COMMUNITY) || 'default';
 
   // 加载小区列表
   if (useApi) {
@@ -125,7 +125,7 @@ async function reloadStaff() {
 
 function saveLocal() {
   // 仅保存非敏感 UI 偏好；人员、工单、手机号和权限全部由服务端持久化。
-  localStorage.setItem(LS_KEY, JSON.stringify({ version: 2, preferences: { community: currentCommunity } }));
+  sessionStorage.setItem(LS_KEY, JSON.stringify({ version: 2, preferences: { community: currentCommunity } }));
 }
 function save() { saveLocal(); }
 
@@ -133,7 +133,7 @@ async function apiPatch(recordId, updates) {
   if (!useApi || !recordId) return;
   try {
     var headers = { 'Content-Type': 'application/json' };
-    var token = localStorage.getItem('auth_token');
+    var token = sessionStorage.getItem('auth_token');
     if (token) headers['Authorization'] = 'Bearer ' + token;
     await fetch(API_BASE + '/api/tickets/' + recordId, {
       method: 'PATCH',
@@ -248,7 +248,7 @@ function initRole() {
   else { currentRole = 'eng_lead'; sel.value = currentRole; }
   sel.onchange = () => {
     currentRole = sel.value;
-    localStorage.setItem(LS_ROLE, currentRole);
+    sessionStorage.setItem(LS_ROLE, currentRole);
     toast('已切换角色：' + sel.options[sel.selectedIndex].text);
     applyRoleView();
   };
@@ -305,29 +305,45 @@ async function reloadCommunities() {
    详情抽屉 & 照片
    ============================================================ */
 let openTicketId = null;
+let drawerPhotoObjectUrls = [];
 
-function loadDrawerPhotos(ticketId) {
-  fetch(API_BASE + '/api/tickets/' + ticketId + '/photos', { headers: authHeaders() })
-    .then(function(r) { return r.json(); })
-    .then(function(json) {
-      var container = $('#drawer-photos');
-      if (!container) return;
-      var photos = json.data || [];
-      if (!photos.length) {
-        container.innerHTML = '<span style="color:#aaa;font-size:13px">暂无现场照片</span>';
-        return;
+function releaseDrawerPhotoUrls() {
+  drawerPhotoObjectUrls.forEach(function(url) { URL.revokeObjectURL(url); });
+  drawerPhotoObjectUrls = [];
+}
+
+async function loadDrawerPhotos(ticketId) {
+  var container = $('#drawer-photos');
+  if (!container) return;
+  releaseDrawerPhotoUrls();
+  try {
+    var metadataResponse = await fetch(API_BASE + '/api/tickets/' + ticketId + '/photos', { headers: authHeaders() });
+    if (!metadataResponse.ok) throw new Error('照片列表读取失败');
+    var json = await metadataResponse.json();
+    var photos = json.data || [];
+    if (!photos.length) {
+      container.innerHTML = '<span style="color:#aaa;font-size:13px">暂无现场照片</span>';
+      return;
+    }
+    var loaded = await Promise.all(photos.map(async function(p) {
+      var response = await fetch(API_BASE + p.url, { headers: authHeaders() });
+      if (!response.ok) throw new Error('照片读取失败');
+      var blob = await response.blob();
+      var objectUrl = URL.createObjectURL(blob);
+      drawerPhotoObjectUrls.push(objectUrl);
+      return { objectUrl: objectUrl, name: p.originalName || p.filename || '现场材料', type: blob.type || '' };
+    }));
+    container.innerHTML = '<div class="photos">' + loaded.map(function(p, i) {
+      if (!p.type.startsWith('image/')) {
+        return '<a class="btn sm ghost" href="' + esc(p.objectUrl) + '" download="' + esc(p.name) + '">下载 ' + esc(p.name) + '</a>';
       }
-      container.innerHTML = '<div class="photos">' + photos.map(function(p, i) {
-        var src = API_BASE + p.url;
-        return '<div class="photo" style="display:inline-block;margin:0 8px 8px 0;cursor:pointer">' +
-          '<img src="' + esc(src) + '" alt="现场照片' + (i + 1) + '" style="width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #e6eaf0" onclick="previewPhoto(\'' + esc(src) + '\')">' +
-          '<small style="display:block;text-align:center;color:#8c8c8c;margin-top:4px">照片' + (i + 1) + '</small></div>';
-      }).join('') + '</div>';
-    })
-    .catch(function() {
-      var container = $('#drawer-photos');
-      if (container) container.innerHTML = '<span style="color:#aaa;font-size:13px">照片加载失败</span>';
-    });
+      return '<button type="button" class="photo" style="display:inline-block;margin:0 8px 8px 0;cursor:pointer;border:0;background:transparent" onclick="previewPhoto(\'' + esc(p.objectUrl) + '\')">' +
+        '<img src="' + esc(p.objectUrl) + '" alt="现场照片' + (i + 1) + '" style="width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #e6eaf0">' +
+        '<small style="display:block;text-align:center;color:#8c8c8c;margin-top:4px">' + esc(p.name) + '</small></button>';
+    }).join('') + '</div>';
+  } catch (error) {
+    container.innerHTML = '<span style="color:#aaa;font-size:13px">照片加载失败，请重新打开工单</span>';
+  }
 }
 
 function previewPhoto(src) {
@@ -342,6 +358,7 @@ function closeDrawer() {
   $('#drawerMask').classList.remove('open');
   $('#drawer').classList.remove('open');
   openTicketId = null;
+  releaseDrawerPhotoUrls();
 }
 
 /* ============================================================
@@ -349,14 +366,16 @@ function closeDrawer() {
    ============================================================ */
 function pushStep(t, title, who) { t.steps.push({ title, who, time: new Date().toISOString() }); }
 
-function uploadPhoto(id) {
-  // 创建隐藏的文件输入框
+function selectAndUploadPhotos(id, useCamera) {
   var input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/*';
-  input.multiple = true;
+  input.multiple = !useCamera;
+  if (useCamera) input.capture = 'environment';
+  input.style.display = 'none';
+  document.body.appendChild(input);
   input.onchange = function() {
-    if (!input.files.length) return;
+    if (!input.files.length) { input.remove(); return; }
     var formData = new FormData();
     for (var i = 0; i < Math.min(input.files.length, 10); i++) {
       formData.append('photos', input.files[i]);
@@ -377,14 +396,17 @@ function uploadPhoto(id) {
           if (!t.steps.some(s => s.title.includes('现场确认'))) pushStep(t, '现场确认', t.worker);
           save();
         }
-        afterAction(id, '已上传 ' + d.uploaded + ' 张照片');
+        loadDrawerPhotos(id);
       } else {
         toast('上传失败: ' + (d.error || '未知错误'));
       }
-    }).catch(() => toast('上传失败，网络错误'));
+    }).catch(() => toast('上传失败，网络错误')).finally(function() { input.remove(); });
   };
   input.click();
 }
+
+function capturePhoto(id) { selectAndUploadPhotos(id, true); }
+function uploadPhoto(id) { selectAndUploadPhotos(id, false); }
 
 
 /* ============================================================
@@ -526,7 +548,7 @@ function initCommunitySelect() {
   }
   sel.onchange = function() {
     currentCommunity = sel.value;
-    localStorage.setItem(LS_COMMUNITY, currentCommunity);
+    sessionStorage.setItem(LS_COMMUNITY, currentCommunity);
     var name = state.communities.find(function(c) { return c.id === currentCommunity; });
     toast('已切换到：' + (name ? name.name : currentCommunity));
     updateLogo();
@@ -687,7 +709,7 @@ async function deleteCommunity(id) {
     state.communities = state.communities.filter(function(x) { return x.id !== id; });
     if (currentCommunity === id) {
       currentCommunity = 'default';
-      localStorage.setItem(LS_COMMUNITY, currentCommunity);
+      sessionStorage.setItem(LS_COMMUNITY, currentCommunity);
       reloadTickets();
     }
     initCommunitySelect();
@@ -876,7 +898,7 @@ function buildActions(t) {
     return `<select id="assignWorker">${people.map(s=>`<option value="${esc(s.name)}">${esc(s.name)} · ${esc(s.skill)}</option>`).join('')}</select><select id="assignDuration" title="预计处理时间">${timeOpts}</select><button class="btn" onclick="assignTicket('${t.id}')">确认指派</button>`;
   }
   if(t.status==='doing'){
-    if(mine) return `<button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
+    if(mine) return `<button class="btn teal" onclick="capturePhoto('${t.id}')">拍照</button><button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
     return hint(`已指派给 ${esc(t.worker||'处理人')}。`) + ` ${urgeBtn} ${noteBtn}`;
   }
   if(t.status==='pending'){
@@ -1100,7 +1122,7 @@ function updateNavBadges() {
   var isLead = currentRole === 'eng_lead';
   var myName = roleStaffName();
   state.tickets.forEach(function(t) {
-    if (t.status !== 'wait' || counts[t.type] === undefined) return;
+    if (t.status === 'done' || counts[t.type] === undefined) return;
     if (isLead) { counts[t.type]++; }
     else { if (t.worker === myName) counts[t.type]++; }
   });
@@ -1147,7 +1169,7 @@ function initDoneFilters(){
 function saveReminderInterval(){
   var sel=$('#reminder-interval');
   var minutes=parseInt(sel.value);
-  fetch(API_BASE+'/api/settings/reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intervalMinutes:minutes})}).then(r=>r.json()).then(d=>{
+  fetch(API_BASE+'/api/settings/reminder',{method:'POST',headers:authHeaders(true),body:JSON.stringify({intervalMinutes:minutes})}).then(r=>r.json()).then(d=>{
     $('#reminder-status').textContent='✓ '+d.message;
     setTimeout(()=>$('#reminder-status').textContent='',3000);
   }).catch(()=>{$('#reminder-status').textContent='保存失败';});
@@ -1155,17 +1177,17 @@ function saveReminderInterval(){
 function saveSlaInterval(){
   var sel=$('#sla-interval');
   var minutes=parseInt(sel.value);
-  fetch(API_BASE+'/api/settings/sla',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intervalMinutes:minutes})}).then(r=>r.json()).then(d=>{
+  fetch(API_BASE+'/api/settings/sla',{method:'POST',headers:authHeaders(true),body:JSON.stringify({intervalMinutes:minutes})}).then(r=>r.json()).then(d=>{
     $('#sla-status').textContent='✓ '+d.message;
     setTimeout(()=>$('#sla-status').textContent='',3000);
   }).catch(()=>{$('#sla-status').textContent='保存失败';});
 }
 function loadReminderInterval(){
-  fetch(API_BASE+'/api/settings/reminder').then(r=>r.json()).then(d=>{
+  fetch(API_BASE+'/api/settings/reminder',{headers:authHeaders()}).then(r=>r.json()).then(d=>{
     var sel=$('#reminder-interval');
     if(sel)sel.value=String(d.intervalMinutes);
   }).catch(()=>{});
-  fetch(API_BASE+'/api/settings/sla').then(r=>r.json()).then(d=>{
+  fetch(API_BASE+'/api/settings/sla',{headers:authHeaders()}).then(r=>r.json()).then(d=>{
     var sel=$('#sla-interval');
     if(sel)sel.value=String(d.intervalMinutes);
   }).catch(()=>{});
@@ -1555,7 +1577,7 @@ function doLogin(){
   if(window._jigsawPassed===false){$('#login-error').textContent='请先完成滑动验证';return;}
   fetch(API_BASE+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:phone,password:pwd,rememberMe:!!$('#login-remember').checked})}).then(r=>r.json()).then(d=>{
     if(d.success){
-      localStorage.setItem('login_user',JSON.stringify(d.user));
+      sessionStorage.setItem('login_user',JSON.stringify(d.user));
       if(d.token) API.setToken(d.token);
       enterApp(d.user);
     } else {
@@ -1649,7 +1671,7 @@ function enterApp(user){
   }
   if(currentRole==='eng_lead')loadPendingRegistrations();
   else updatePendingRegistrationBadge(0);
-  localStorage.setItem('juzi_oa_role_v1',currentRole);
+  sessionStorage.setItem('juzi_oa_role_v1',currentRole);
   var sel=$('#roleSelect');
   if(sel){
     sel.value=currentRole;
@@ -1671,7 +1693,7 @@ function enterApp(user){
   })();
 }
 function checkLogin(){
-  var saved=localStorage.getItem('login_user');
+  var saved=sessionStorage.getItem('login_user');
   if(saved){
     try{enterApp(JSON.parse(saved));}catch(e){showLoginPage();}
   } else {
@@ -1705,6 +1727,11 @@ function showLoginPage(){
   }
 }
 function doLogout(){
+  sessionStorage.removeItem('login_user');
+  sessionStorage.removeItem('auth_token');
+  sessionStorage.removeItem(LS_ROLE);
+  sessionStorage.removeItem(LS_COMMUNITY);
+  sessionStorage.removeItem(LS_KEY);
   localStorage.removeItem('login_user');
   localStorage.removeItem('auth_token');
   // 销毁所有图表实例，避免切换用户后尺寸异常

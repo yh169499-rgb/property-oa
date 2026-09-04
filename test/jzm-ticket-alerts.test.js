@@ -147,6 +147,35 @@ test('文本消息使用 mention 字段原生@主管', async (t) => {
   assert.equal(Object.hasOwn(captured.body.payload, 'mentionContactIds'), false);
 });
 
+test('提交、退回和搁置提醒原生@主管，完成通知不@任何人', async (t) => {
+  const db = await fixture();
+  saveTenantAlertConfig(db, 'tenant-a', {
+    roomId: 'room-a', imBotId: 'bot-a', managerContactId: 'manager-contact-a', contactMap: {},
+  });
+  const captured = [];
+  setMessageSenderForTests(async (input) => {
+    captured.push(input.body.payload);
+    return { success: true };
+  });
+  t.after(() => resetMessageSenderForTests());
+
+  for (const kind of ['submitted', 'returned', 'suspended', 'completed']) {
+    await sendTicketAlert({
+      db, tenantId: 'tenant-a', kind,
+      ticket: { id: 'WX-FLOW', cat: '水暖', loc: '3号楼', worker: '张师傅' },
+      actor: { name: '张师傅' },
+    });
+  }
+
+  assert.deepEqual(captured.slice(0, 3).map((payload) => payload.mention), [
+    ['manager-contact-a'], ['manager-contact-a'], ['manager-contact-a'],
+  ]);
+  assert.deepEqual(captured[3].mention, []);
+  assert.match(captured[0].text, /等待您确认/);
+  assert.match(captured[1].text, /重新派单/);
+  assert.match(captured[2].text, /搁置/);
+});
+
 test('测试发送器异常与上游失败仅暴露安全错误元数据', async (t) => {
   const db = await fixture();
   const previousToken = config.JZMM_MSG_TOKEN;

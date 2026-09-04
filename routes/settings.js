@@ -21,6 +21,11 @@ const {
   saveTenantAlertConfig,
   sendWaitingTicketsAlert,
 } = require('../services/jzm-messaging');
+const {
+  getReminderInterval,
+  setReminderInterval,
+  startReminderScheduler,
+} = require('../services/ticket-reminders');
 
 const REPORT_BUSINESS_ERRORS = new Set([
   'PROFILE_NOT_FOUND',
@@ -82,7 +87,6 @@ async function triggerJzmWorkflowEvent(sessionId, message, options = {}) {
 }
 
 // ============ 定时提醒 ============
-const reminderTimers = new Map();
 const slaTimers = new Map();
 
 function getIntervalSetting(tenantId, key) {
@@ -106,19 +110,6 @@ function getWaitingTicketCount(tenantId) {
   const row = queryOne(`SELECT COUNT(*) AS count FROM tickets
     WHERE tenant_id = ? AND status = 'wait'`, [tenantId]);
   return Number(row?.count || 0);
-}
-
-function startReminders(tenantId) {
-  const existing = reminderTimers.get(tenantId);
-  if (existing) clearInterval(existing);
-  reminderTimers.delete(tenantId);
-  const reminderInterval = getIntervalSetting(tenantId, 'reminder_interval_minutes') * 60000;
-  if (reminderInterval <= 0) return;
-  const timer = setInterval(async () => {
-    const count = getWaitingTicketCount(tenantId);
-    if (count > 0) await sendWaitingTicketsAlert({ db: getDB(), tenantId, count }).catch(() => {});
-  }, reminderInterval);
-  reminderTimers.set(tenantId, timer);
 }
 
 function checkSlaOverdue(tenantId) {
@@ -200,15 +191,15 @@ router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
 
 // GET/POST /api/settings/reminder
 router.get('/settings/reminder', requireAuth, requireAdmin, (req, res) => {
-  res.json({ intervalMinutes: getIntervalSetting(req.user.tenant_id, 'reminder_interval_minutes') });
+  res.json({ intervalMinutes: getReminderInterval(getDB(), req.user.tenant_id) });
 });
 router.post('/settings/reminder', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const intervalMinutes = setIntervalSetting(
-      req.user.tenant_id, 'reminder_interval_minutes', req.body.intervalMinutes
+    const intervalMinutes = setReminderInterval(
+      getDB(), req.user.tenant_id, req.body.intervalMinutes
     );
     await saveDB();
-    startReminders(req.user.tenant_id);
+    startReminderScheduler(req.user.tenant_id, { getDatabase: getDB, persist: saveDB });
     res.json({ success: true, intervalMinutes, message: intervalMinutes > 0 ? `每${intervalMinutes}分钟推送` : '已关闭' });
   } catch (error) {
     reportError(res, error);

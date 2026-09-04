@@ -12,12 +12,14 @@ const { requireAuth, requireAdmin } = require('../middleware/auth');
 const {
   detectTicketAction,
   resolveAssignee,
-  recordTicketActivity
+  recordTicketActivity,
+  buildTicketTimeline,
 } = require('../services/ticket-activity');
 const { resolveCommunity } = require('../services/community-resolution');
 const { getActiveRule } = require('../services/performance');
 const { isSupervisorUser } = require('../services/roles');
 const { sendTicketAlert, saveTenantAlertConfig } = require('../services/jzm-messaging');
+const { resetTicketReminderState } = require('../services/ticket-reminders');
 const { requireIntegrationToken, alertConfigFromBody } = require('../services/external-ingest');
 const {
   STAFF_TICKET_TYPES,
@@ -56,9 +58,10 @@ function rowToTicket(row) {
   var meta = {};
   try { meta = JSON.parse(row.metadata || '{}'); } catch(e) {}
   return {
-    id: row.id, type: row.type, cat: row.cat, desc: row.desc, loc: row.loc,
+    id: row.id, tenant_id: row.tenant_id || '', type: row.type, cat: row.cat, desc: row.desc, loc: row.loc,
     priority: row.priority, status: row.status, worker: row.worker || null,
     message: row.message || '', created: row.created, finished: row.finished || null,
+    assignedAt: row.assigned_at || null,
     rejectReason: row.reject_reason || '', estimated_hours: row.estimated_hours || 0,
     sessionId: row.session_id || '', community_id: row.community_id || 'default',
     repeatOf: row.repeat_of || '', repeatCount: Number(row.repeat_count) || 1,
@@ -67,7 +70,7 @@ function rowToTicket(row) {
     performanceRuleVersionId: row.performance_rule_version_id == null ? null : Number(row.performance_rule_version_id),
     notes: meta.notes || [], urged: meta.urged || [],
     suspendReason: meta.suspendReason || '', suspendEstimate: meta.suspendEstimate || '',
-    steps: meta.steps || [],
+    steps: buildTicketTimeline(getDB(), row),
     feedbackPerson: meta.feedbackPerson || meta.feedback_person || '',
     feedbackGroup: meta.feedbackGroup || meta.feedback_group || '',
     originalMessage: meta.originalMessage || meta.original_message || ''
@@ -460,7 +463,11 @@ async function createTicket(req, res) {
   const priority = isRecurring ? raiseRecurringPriority(requestedPriority) : requestedPriority;
   const metadata = notificationMetadata(t);
 
+  let transactionStarted = false;
   try {
+    const db = getDB();
+    db.run('BEGIN');
+    transactionStarted = true;
     const tenantAware = tableHasColumn('tickets', 'tenant_id');
     const tenantColumn = tenantAware ? 'tenant_id, ' : '';
     const tenantPlaceholder = tenantAware ? '?, ' : '';
@@ -482,6 +489,19 @@ async function createTicket(req, res) {
         performance_rule_version_id, assignee_user_id, assignee_staff_profile_id, assigned_at, metadata)
        VALUES (${tenantPlaceholder}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       values);
+    if (tableExists('ticket_activity_logs')) {
+      recordTicketActivity(db, {
+        tenantId: req.user.tenant_id,
+        ticketId: id,
+        actorUserId: req.user.id,
+        actorStaffId: null,
+        action: 'create',
+        metadata: { type, cat, community_id: communityId },
+        createdAt: now,
+      });
+    }
+    db.run('COMMIT');
+    transactionStarted = false;
     await saveDB();
     const row = ticketForTenant(req, id);
     const ticket = rowToTicket(row);
@@ -491,6 +511,9 @@ async function createTicket(req, res) {
     if (external) return res.json({ success: true });
     res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
+    if (transactionStarted) {
+      try { getDB().run('ROLLBACK'); } catch (_) {}
+    }
     res.status(500).json({ error: e.message });
   }
 }
@@ -581,6 +604,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
         createdAt: new Date().toISOString()
       });
     }
+    if (updates.status !== undefined && updates.status !== before.status
+        && tableExists('ticket_reminder_state')) {
+      resetTicketReminderState(db, req.user.tenant_id, req.params.id);
+    }
     db.run('COMMIT');
     transactionStarted = false;
     await saveDB();
@@ -596,6 +623,18 @@ router.patch('/:id', requireAuth, async (req, res) => {
       notifyTicketAlert({
         db: getDB(), tenantId: req.user.tenant_id, kind: 'completed', ticket, actor: req.user,
         assignee: assignee || { displayName: ticket.worker, name: ticket.worker },
+      });
+    }
+    const managerAlertKind = {
+      submit: 'submitted',
+      return: 'returned',
+      suspend: 'suspended',
+    }[action];
+    if (managerAlertKind) {
+      notifyTicketAlert({
+        db: getDB(), tenantId: req.user.tenant_id, kind: managerAlertKind,
+        ticket, actor: req.user,
+        assignee: { displayName: ticket.worker, name: ticket.worker },
       });
     }
     res.json({ success: true, community_resolution: community, record: ticket });

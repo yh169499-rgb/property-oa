@@ -187,7 +187,7 @@ test('创建、流转、小区和派单身份均强制绑定当前企业', async
     method: 'PATCH', body: JSON.stringify({ status: 'pending' }),
   });
   assert.equal(updated.status, 200);
-  assert.deepEqual(one(db, "SELECT tenant_id, actor_user_id FROM ticket_activity_logs WHERE ticket_id = 'A-NEW'"), {
+  assert.deepEqual(one(db, "SELECT tenant_id, actor_user_id FROM ticket_activity_logs WHERE ticket_id = 'A-NEW' AND action = 'suspend'"), {
     tenant_id: 'tenant-a', actor_user_id: 102,
   });
 });
