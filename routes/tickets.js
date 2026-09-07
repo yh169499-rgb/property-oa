@@ -21,6 +21,7 @@ const { isSupervisorUser } = require('../services/roles');
 const { sendTicketAlert, saveTenantAlertConfig } = require('../services/jzm-messaging');
 const { resetTicketReminderState } = require('../services/ticket-reminders');
 const { requireIntegrationToken, alertConfigFromBody } = require('../services/external-ingest');
+const { recordTicketSource } = require('../services/ticket-source-audit');
 const {
   STAFF_TICKET_TYPES,
   ticketReadScope,
@@ -57,6 +58,12 @@ const upload = multer({
 function rowToTicket(row) {
   var meta = {};
   try { meta = JSON.parse(row.metadata || '{}'); } catch(e) {}
+  var sourceAudit = null;
+  if (row.id && tableExists('ticket_source_audits')) {
+    sourceAudit = queryOne(`SELECT id, source FROM ticket_source_audits
+      WHERE ticket_id = ?${row.tenant_id ? ' AND tenant_id = ?' : ''}
+      ORDER BY id DESC LIMIT 1`, row.tenant_id ? [row.id, row.tenant_id] : [row.id]);
+  }
   return {
     id: row.id, tenant_id: row.tenant_id || '', type: row.type, cat: row.cat, desc: row.desc, loc: row.loc,
     priority: row.priority, status: row.status, worker: row.worker || null,
@@ -73,7 +80,9 @@ function rowToTicket(row) {
     steps: buildTicketTimeline(getDB(), row),
     feedbackPerson: meta.feedbackPerson || meta.feedback_person || '',
     feedbackGroup: meta.feedbackGroup || meta.feedback_group || '',
-    originalMessage: meta.originalMessage || meta.original_message || ''
+    originalMessage: meta.originalMessage || meta.original_message || '',
+    sourceAuditId: sourceAudit ? sourceAudit.id : null,
+    source: sourceAudit ? sourceAudit.source : ''
   };
 }
 
@@ -81,9 +90,11 @@ function notificationMetadata(input = {}) {
   const source = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
   const value = {
     ...source,
-    feedbackPerson: input.feedback_person || input.feedbackPerson || source.feedbackPerson || source.feedback_person || '',
+    feedbackPerson: input.feedback_person || input.feedbackPerson || input.sender_name || input.senderName
+      || source.feedbackPerson || source.feedback_person || source.sender_name || source.senderName || '',
     feedbackGroup: input.feedback_group || input.feedbackGroup || input.group_name || input.groupName || source.feedbackGroup || source.feedback_group || '',
-    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message || '',
+    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message
+      || input.message || source.message || '',
   };
   return JSON.stringify(value);
 }
@@ -443,8 +454,30 @@ async function createTicket(req, res) {
     const feedbackCount = (Number(recentOpen.feedback_count) || 1) + 1;
     const tenantSql = tableHasColumn('tickets', 'tenant_id') ? ' AND tenant_id = ?' : '';
     const tenantParams = tenantSql ? [req.user.tenant_id] : [];
-    run(`UPDATE tickets SET feedback_count = ?, repeat_key = ? WHERE id = ?${tenantSql}`,
-      [feedbackCount, repeatKey, recentOpen.id, ...tenantParams]);
+    // 合并重复反馈时保留最新来源信息，避免首次请求缺字段导致预警无法还原原文。
+    let mergedMetadata = {};
+    try { mergedMetadata = JSON.parse(recentOpen.metadata || '{}') || {}; } catch (_) {}
+    const latestMetadata = notificationMetadata(t);
+    try {
+      const incomingMetadata = JSON.parse(latestMetadata || '{}') || {};
+      ['feedbackPerson', 'feedbackGroup', 'originalMessage'].forEach((key) => {
+        if (incomingMetadata[key]) mergedMetadata[key] = incomingMetadata[key];
+      });
+    } catch (_) {}
+    run(`UPDATE tickets SET feedback_count = ?, repeat_key = ?, metadata = ? WHERE id = ?${tenantSql}`,
+      [feedbackCount, repeatKey, JSON.stringify(mergedMetadata), recentOpen.id, ...tenantParams]);
+    recordTicketSource(getDB(), {
+      tenantId: req.user.tenant_id,
+      ticketId: recentOpen.id,
+      input: {
+        ...t,
+        enterprise_name: t.enterprise_name || t.enterpriseName || req.integrationTenant?.name || '',
+      },
+      communityId,
+      communityName: community.name,
+      source: external ? 'external_merge' : 'supervisor_merge',
+      createdAt: new Date().toISOString(),
+    });
     await saveDB();
     const mergedTicket = rowToTicket(ticketForTenant(req, recentOpen.id));
     if (external) return res.json({ success: true });
@@ -500,11 +533,25 @@ async function createTicket(req, res) {
         createdAt: now,
       });
     }
+    recordTicketSource(db, {
+      tenantId: req.user.tenant_id,
+      ticketId: id,
+      input: {
+        ...t,
+        enterprise_name: t.enterprise_name || t.enterpriseName || req.integrationTenant?.name || '',
+      },
+      communityId,
+      communityName: community.name,
+      source: external ? 'external' : 'supervisor',
+      createdAt: now,
+    });
     db.run('COMMIT');
     transactionStarted = false;
     await saveDB();
     const row = ticketForTenant(req, id);
     const ticket = rowToTicket(row);
+    ticket.communityName = community.name;
+    ticket.enterpriseName = req.integrationTenant?.name || queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
     notifyTicketAlert({
       db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee,
     });

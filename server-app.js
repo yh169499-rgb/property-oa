@@ -18,6 +18,7 @@ const directoryRoutes = require('./routes/directory');
 const platformRoutes = require('./routes/platform');
 const enterpriseApplicationRoutes = require('./routes/enterprise-applications');
 const { createAiReportRouter } = require('./routes/ai-reports');
+const ticketSourceAuditRoutes = require('./routes/ticket-source-audits');
 
 function isEnterpriseGateExempt(pathname) {
   return ['/platform', '/enterprise-applications', '/tickets/external'].some(prefix => (
@@ -85,6 +86,7 @@ function createServerApp(options = {}) {
     res.json({ ok: true, service: 'property-oa' });
   });
   app.use('/api', requireEnterpriseAccount);
+  app.use('/api', ticketSourceAuditRoutes);
   app.use('/api/tickets', ticketRoutes);
   app.use('/api/communities', communityRoutes);
   app.use('/api/staff', staffRoutes);

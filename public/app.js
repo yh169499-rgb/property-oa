@@ -337,9 +337,9 @@ async function loadDrawerPhotos(ticketId) {
       if (!p.type.startsWith('image/')) {
         return '<a class="btn sm ghost" href="' + esc(p.objectUrl) + '" download="' + esc(p.name) + '">下载 ' + esc(p.name) + '</a>';
       }
-      return '<button type="button" class="photo" style="display:inline-block;margin:0 8px 8px 0;cursor:pointer;border:0;background:transparent" onclick="previewPhoto(\'' + esc(p.objectUrl) + '\')">' +
-        '<img src="' + esc(p.objectUrl) + '" alt="现场照片' + (i + 1) + '" style="width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #e6eaf0">' +
-        '<small style="display:block;text-align:center;color:#8c8c8c;margin-top:4px">' + esc(p.name) + '</small></button>';
+      return '<button type="button" class="photo" onclick="previewPhoto(\'' + esc(p.objectUrl) + '\')">' +
+        '<img class="photo-image" src="' + esc(p.objectUrl) + '" alt="现场照片' + (i + 1) + '">' +
+        '<small>' + esc(p.name) + '</small></button>';
     }).join('') + '</div>';
   } catch (error) {
     container.innerHTML = '<span style="color:#aaa;font-size:13px">照片加载失败，请重新打开工单</span>';
@@ -763,6 +763,13 @@ function activeStaff() {
     return currentHM >= start || currentHM <= end;
   });
 }
+function managedStaffForTransfer() {
+  return state.staff.filter(function(s) {
+    var isManaged = currentRole !== 'eng_lead' || !currentSupervisorProfileId
+      || String(s.managerId || '') === String(currentSupervisorProfileId);
+    return isManaged && (s.role === '维修工' || s.role === '物业管家') && s.status !== 'off';
+  });
+}
 function parseHM(hm) { var p = (hm || '08:00').split(':'); return parseInt(p[0]) * 60 + parseInt(p[1] || 0); }
 
 function enhanceState() {
@@ -862,6 +869,9 @@ function openDrawer(id) {
   $('#drawer-title').textContent=`${t.id} · ${t.cat}`; $('#drawer-sub').textContent=`${t.loc}　|　${STATUS_LABEL[t.status]}`;
   var rejects=(t.rejectHistory||[]).map(r=>`<div class="reject-history"><b>驳回：</b>${esc(r.reason)} · ${esc(r.who)} · ${fmtTime(r.time)}</div>`).join('');
   var timeline=(t.steps||[]).map((s,i)=>`<div class="tl-item ${i===t.steps.length-1&&t.status!=='done'?'current':'done'}"><div class="dot"></div><div class="tl-title">${esc(s.title)}</div><div class="tl-meta">${esc(s.who)} · ${fmtTime(s.time)}</div></div>`).join('');
+  var sourceHtml = t.sourceAuditId
+    ? `<span class="mono">${esc(t.source || 'external')} · #${esc(t.sourceAuditId)}</span>`
+    : '<span style="color:#aaa">历史工单暂无来源审计</span>';
   var photos='<div id="drawer-photos" style="color:#aaa;font-size:13px">加载照片中...</div>';
   var repeatAlert=recurrenceAlert(t);
   // 备注列表
@@ -877,7 +887,7 @@ function openDrawer(id) {
     var lastUrge = t.urged[t.urged.length - 1];
     urgedHtml = '<div style="padding:8px 12px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:12px;margin-bottom:12px;color:#856404">⚡ 已被催办（' + esc(lastUrge.who) + ' · ' + fmtTime(lastUrge.time) + '）共 ' + t.urged.length + ' 次</div>';
   }
-  $('#drawer-body').innerHTML=`${repeatAlert}${urgedHtml}<div class="drawer-section"><h4>工单信息</h4><div class="elements"><div class="elem"><div class="k">优先级</div><div class="v">${priorityHtml(t.priority)}</div></div><div class="elem"><div class="k">事件类别</div><div class="v">${esc(typeLabel(t))} · ${esc(t.cat)}</div></div><div class="elem"><div class="k">地点</div><div class="v">${esc(t.loc)}</div></div><div class="elem"><div class="k">已等待/处理</div><div class="v">${ageLabel(t)}</div></div><div class="elem"><div class="k">创建时间</div><div class="v">${fmtTime(t.created)}</div></div><div class="elem full"><div class="k">问题描述</div><div class="v">${esc(t.desc)}</div></div></div>${rejects}</div><div class="drawer-section"><h4>流转时间线</h4><div class="timeline">${timeline}</div></div>${notesHtml}<div class="drawer-section"><h4>现场材料</h4>${photos}</div><div class="drawer-section"><h4>操作（当前角色：${esc(roleObj().name)}）</h4><div class="actions">${buildActions(t)}</div></div>`;
+  $('#drawer-body').innerHTML=`${repeatAlert}${urgedHtml}<div class="drawer-section"><h4>工单信息</h4><div class="elements"><div class="elem"><div class="k">优先级</div><div class="v">${priorityHtml(t.priority)}</div></div><div class="elem"><div class="k">事件类别</div><div class="v">${esc(typeLabel(t))} · ${esc(t.cat)}</div></div><div class="elem"><div class="k">地点</div><div class="v">${esc(t.loc)}</div></div><div class="elem"><div class="k">已等待/处理</div><div class="v">${ageLabel(t)}</div></div><div class="elem"><div class="k">创建时间</div><div class="v">${fmtTime(t.created)}</div></div><div class="elem"><div class="k">来源记录</div><div class="v">${sourceHtml}</div></div><div class="elem full"><div class="k">问题描述</div><div class="v">${esc(t.desc)}</div></div></div>${rejects}</div><div class="drawer-section"><h4>流转时间线</h4><div class="timeline">${timeline}</div></div>${notesHtml}<div class="drawer-section drawer-photo-section"><h4>现场材料</h4>${photos}</div><div class="drawer-section drawer-actions"><h4>操作（当前角色：${esc(roleObj().name)}）</h4><div class="actions">${buildActions(t)}</div></div>`;
   $('#drawerMask').classList.add('open'); $('#drawer').classList.add('open');
   var historyLink=$('#recurrence-history-link');
   if(historyLink) historyLink.onclick=function(){openDrawer(historyLink.dataset.ticketId);};
@@ -899,16 +909,42 @@ function buildActions(t) {
   }
   if(t.status==='doing'){
     if(mine) return `<button class="btn teal" onclick="capturePhoto('${t.id}')">拍照</button><button class="btn teal" onclick="uploadPhoto('${t.id}')">上传照片</button><button class="btn green" onclick="workerFinish('${t.id}','once')">完成·提交</button><button class="btn gray" onclick="suspendTicket('${t.id}')">⏸ 搁置</button><button class="btn danger" onclick="workerReject('${t.id}')">退回</button> ${noteBtn}`;
+    if(isLead(t)) return `${reassignControls(t)} ${urgeBtn} ${noteBtn}`;
     return hint(`已指派给 ${esc(t.worker||'处理人')}。`) + ` ${urgeBtn} ${noteBtn}`;
   }
   if(t.status==='pending'){
     var suspendInfo = t.suspendReason ? `<div style="margin-bottom:8px;padding:8px 12px;background:var(--tint-yellow);border-radius:6px;font-size:12px;color:#92600a">⏸ 搁置原因：${esc(t.suspendReason)}${t.suspendEstimate ? '　预计恢复：' + esc(t.suspendEstimate) : ''}</div>` : '';
     if(mine || (keeper&&currentRole.startsWith('pm_keeper_'))) return suspendInfo + `<button class="btn green" onclick="resumeTicket('${t.id}')">▶ 恢复处理</button> ${noteBtn}`;
-    if(isLead(t)) return suspendInfo + `<button class="btn green" onclick="resumeTicket('${t.id}')">▶ 恢复处理</button> ${urgeBtn} ${noteBtn}`;
+    if(isLead(t)) return suspendInfo + `<button class="btn green" onclick="resumeTicket('${t.id}')">▶ 恢复处理</button> ${reassignControls(t)} ${urgeBtn} ${noteBtn}`;
     return suspendInfo + hint('工单搁置中，等待处理人恢复。');
   }
   if(t.status==='confirm') return (isLead(t)?`<button class="btn green" onclick="confirmDone('${t.id}')">确认完成</button><button class="btn danger" onclick="reject('${t.id}')">驳回工单</button>`:hint('等待主管审核。')) + ` ${noteBtn}`;
   return hint('工单已完成。') + ` ${noteBtn}`;
+}
+function reassignControls(t) {
+  var people = managedStaffForTransfer();
+  if (!people.length) return hint('暂无可转派的直属人员。');
+  var options = people.map(function(s) {
+    return `<option value="${esc(s.name)}"${s.name === t.worker ? ' selected' : ''}>${esc(s.name)} · ${esc(s.role)}</option>`;
+  }).join('');
+  return `<select id="reassignWorker-${esc(t.id)}" title="重新选择处理人"><option value="">选择处理人</option>${options}</select><button class="btn sm" onclick="reassignTicket('${esc(t.id)}')">转派</button>`;
+}
+function reassignTicket(id) {
+  var t = state.tickets.find(function(x) { return x.id === id; });
+  if (!t || !isLead(t)) { toast('仅主管可转派'); return; }
+  var select = $('#reassignWorker-' + id);
+  var workerName = select && select.value;
+  if (!workerName) { toast('请选择处理人'); return; }
+  var target = managedStaffForTransfer().find(function(s) { return s.name === workerName; });
+  if (!target) { toast('只能转派给当前主管直属人员'); return; }
+  t.worker = workerName;
+  if (t.status === 'pending') t.status = 'doing';
+  t.suspendReason = '';
+  t.suspendEstimate = '';
+  pushStep(t, '重新转派', roleObj().name);
+  save();
+  apiPatch(t.id, { status: t.status, worker: workerName, rejectReason: '主管重新转派' });
+  afterAction(id, '已转派给 ' + workerName);
 }
 function assignTicket(id){
   var t=state.tickets.find(x=>x.id===id);
@@ -970,7 +1006,7 @@ function checkAssignConflicts(workerName, newTicket, estHours){
 }
 function workerFinish(id,mode){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可提交');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可提交，且不可转单');return;}if(t.type==='repair'&&!t.steps.some(s=>s.title.includes('现场确认')))pushStep(t,'现场确认',t.worker);pushStep(t,t.type==='repair'?'维修完成·提交结果':'处理完成·提交结果',t.worker);t.status='confirm';save();apiPatch(t.id,{status:'confirm'});afterAction(id,'已提交结果，等待主管审核');}
 function confirmDone(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可确认待审核工单');return;}t.status='done';t.finished=new Date().toISOString();pushStep(t,'主管确认完成',roleObj().name);save();apiPatch(t.id,{status:'done',finished:t.finished});afterAction(id,'工单已确认完成');}
-function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回给原负责人，不允许转单');}
+function reject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='confirm'||!isLead(t)){toast('仅主管可驳回待确认工单');return;}var reason=prompt('请输入驳回原因（必填）：','现场材料不完整，请补充后重新提交');if(reason===null)return;reason=reason.trim();if(!reason){toast('驳回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'主管驳回：'+reason,roleObj().name);t.status='doing';save();apiPatch(t.id,{status:'doing',rejectReason:reason});afterAction(id,'工单已驳回，可在操作区重新转派');}
 function workerReject(id){var t=state.tickets.find(x=>x.id===id);if(!t||t.status!=='doing'){toast('当前状态不可退回');return;}var me=roleWorkerName()||currentRole.replace('pm_keeper_','');var allowed=(currentRole.startsWith('worker_')||currentRole.startsWith('pm_keeper_'))&&t.worker===me;if(!allowed){toast('仅当前负责人可退回工单');return;}var reason=prompt('请输入无法处理的原因（必填）：','现场条件不满足/需要其他工种配合/非本人技能范围');if(reason===null)return;reason=reason.trim();if(!reason){toast('退回原因不能为空');return;}t.rejectHistory=t.rejectHistory||[];t.rejectHistory.push({reason:reason,who:roleObj().name,time:new Date().toISOString()});pushStep(t,'维修人员退回：'+reason,roleObj().name);t.worker='';t.status='wait';save();apiPatch(t.id,{status:'wait',worker:'',rejectReason:reason});afterAction(id,'工单已退回，等待主管重新派单');}
 function afterAction(id,msg){toast(msg);enhanceState();renderAll();renderDashboard();if(id)openDrawer(id);}
 

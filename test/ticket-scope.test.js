@@ -384,3 +384,32 @@ test('只有主管可稳定派单并最终完成，重名或非在职直属人�
   });
   assert.equal(completed.response.status, 200);
 });
+
+test('处理人退回后清空负责人并回到待派单，主管驳回后可改派直属人员', async (t) => {
+  const db = await fixture();
+  db.run(`INSERT INTO users (id, phone, password, name, role, status)
+    VALUES (8, '13800000008', 'x', '李师傅', 'worker', 'active')`);
+  db.run(`INSERT INTO staff_profiles
+    (id, user_id, name, position, manager_id, employment_status, created_at, updated_at)
+    VALUES (8, 8, '李师傅', '维修师傅', 1, 'active', '2026-01-01', '2026-01-01')`);
+  const server = await tenantServer(db);
+  t.after(() => server.close());
+
+  const assigned = await patchTicket(server, 'UNASSIGNED', SUPERVISOR, { worker: '管家', status: 'doing' });
+  assert.equal(assigned.response.status, 200);
+  const returned = await patchTicket(server, 'UNASSIGNED', KEEPER, { status: 'wait', worker: '' });
+  assert.equal(returned.response.status, 200);
+  assert.equal(returned.body.record.status, 'wait');
+  assert.equal(returned.body.record.worker, null);
+
+  const reassigned = await patchTicket(server, 'UNASSIGNED', SUPERVISOR, { worker: '李师傅', status: 'doing' });
+  assert.equal(reassigned.response.status, 200);
+  assert.equal(reassigned.body.record.worker, '李师傅');
+  const submitted = await patchTicket(server, 'UNASSIGNED', { ...KEEPER, id: 8, name: '李师傅' }, { status: 'confirm' });
+  assert.equal(submitted.response.status, 200);
+  const rejected = await patchTicket(server, 'UNASSIGNED', SUPERVISOR, {
+    status: 'doing', worker: '管家', rejectReason: '需要其他工种',
+  });
+  assert.equal(rejected.response.status, 200);
+  assert.equal(rejected.body.record.worker, '管家');
+});

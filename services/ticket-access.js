@@ -4,7 +4,7 @@ const PROCESSOR_ROLES = new Set(['worker', 'keeper']);
 const STAFF_TICKET_TYPES = new Set(['repair', 'complaint', 'help']);
 
 const STAFF_MUTABLE_FIELDS = new Set([
-  'status', 'message', 'metadata', 'rejectReason', 'reject_reason', '_action',
+  'status', 'worker', 'message', 'metadata', 'rejectReason', 'reject_reason', '_action',
 ]);
 const STAFF_TRANSITIONS = new Map([
   ['wait', new Set(['doing'])],
@@ -79,7 +79,12 @@ function assertTicketMutation(req, ticket, updates = {}) {
   }
   if (!supervisor) {
     const forbidden = Object.keys(updates).filter((key) => !STAFF_MUTABLE_FIELDS.has(key));
-    if (forbidden.length || updates.status === 'done') {
+    const clearsAssignmentOnReturn = updates.worker !== undefined
+      && String(updates.worker || '').trim() === ''
+      && updates.status === 'wait'
+      && String(ticket.status || '') === 'doing';
+    if (forbidden.length || updates.status === 'done'
+        || (updates.worker !== undefined && !clearsAssignmentOnReturn)) {
       throw ticketAccessError('普通员工无权修改该工单字段', 'TICKET_SCOPE_FORBIDDEN', 403);
     }
   }

@@ -19,6 +19,7 @@ const TENANT_TABLES = [
   'performance_rule_versions',
   'ai_report_analyses',
   'staff_lifecycle_audit',
+  'ticket_source_audits',
 ];
 
 function values(db, sql, params = []) {
@@ -369,6 +370,25 @@ function ensureTenantSchema(db) {
     )`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_staff_lifecycle_target
       ON staff_lifecycle_audit(target_user_id, action)`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_source_audits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      ticket_id TEXT NOT NULL,
+      enterprise_name TEXT NOT NULL DEFAULT '',
+      community_id TEXT NOT NULL DEFAULT '',
+      community_name TEXT NOT NULL DEFAULT '',
+      feedback_person TEXT NOT NULL DEFAULT '',
+      feedback_group TEXT NOT NULL DEFAULT '',
+      original_message TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'external',
+      request_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_source_audit_ticket
+      ON ticket_source_audits(tenant_id, ticket_id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_source_audit_created
+      ON ticket_source_audits(tenant_id, created_at)`);
 
     for (const table of TENANT_TABLES) {
       if (

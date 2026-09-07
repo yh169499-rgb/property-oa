@@ -199,6 +199,9 @@ function formatTicketAlert(kind, ticket, actor, assignee) {
   lines.push(`反馈事件：${ticket?.cat || '其他'}`);
   if (reason) lines.push(`反馈原因：${reason}`);
   if (original) lines.push(`原文消息：${original}`);
+  if (ticket?.id) lines.push(`工单号：${ticket.id}`);
+  if (ticket?.enterpriseName) lines.push(`企业：${ticket.enterpriseName}`);
+  if (ticket?.communityName) lines.push(`小区：${ticket.communityName}`);
   lines.push('———！！请注意留意！！———');
   return lines.join('\n');
 }

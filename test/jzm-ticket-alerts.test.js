@@ -16,6 +16,48 @@ const {
   resetMessageSenderForTests,
 } = require('../services/jzm-messaging');
 
+test('紧急预警按行显示反馈人、反馈原因和原文消息', () => {
+  const { formatTicketAlert } = require('../services/jzm-messaging');
+  const text = formatTicketAlert('created', {
+    id: 'WX8030', cat: '电力照明', desc: '居民反馈停电，请安排检修。',
+    created: '2026-09-07T03:40:00.000Z',
+    metadata: JSON.stringify({
+      feedbackPerson: 'Kitty', feedbackGroup: '居民群',
+      originalMessage: '没有人解决，我要投诉',
+    }),
+  }, null, null);
+  assert.match(text, /反馈人：Kitty/);
+  assert.match(text, /原文消息：没有人解决，我要投诉/);
+  assert.ok(text.indexOf('反馈原因：') < text.indexOf('原文消息：'));
+  assert.equal(text.split('\n').filter((line) => line.includes('原文消息：')).length, 1);
+});
+
+test('外部 sender_name 会成为反馈人，预警包含工单号和小区定位信息', async (t) => {
+  const calls = [];
+  setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
+  t.after(() => resetMessageSenderForTests());
+  const server = await tenantServer(await fixture(), undefined, { id: 'tenant-a', name: '测试企业' });
+  t.after(() => server.close());
+  const previousToken = config.JZMM_INGEST_TOKEN;
+  config.JZMM_INGEST_TOKEN = 'integration-test-token';
+  t.after(() => { config.JZMM_INGEST_TOKEN = previousToken; });
+  const result = await request(server, '/api/tickets/external', null, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' },
+    body: JSON.stringify({
+      enterprise_name: '测试企业', community_name: '测试小区', sender_name: 'Kitty',
+      feedback_group: '居民群', original_message: '原始居民文本', type: 'repair',
+      cat: '电力照明', desc: '停电', loc: '3号楼502', message: '请处理',
+    }),
+  });
+  assert.equal(result.response.status, 200);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(calls.at(-1).body.payload.text, /反馈人：Kitty/);
+  assert.match(calls.at(-1).body.payload.text, /原文消息：原始居民文本/);
+  assert.match(calls.at(-1).body.payload.text, /工单号：WX/);
+  assert.match(calls.at(-1).body.payload.text, /小区：测试小区/);
+});
+
 const SUPERVISOR = { id: 1, name: '主管', role: '主管', tenant_id: 'tenant-a' };
 
 async function fixture() {

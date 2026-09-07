@@ -750,15 +750,21 @@ tbody tr:hover { background: #f8f7f6; box-shadow: inset 3px 0 0 var(--primary); 
 /* 照片 */
 .photos { display: flex; gap: 8px; flex-wrap: wrap; }
 .photo {
-  width: 72px; height: 72px; border-radius: var(--radius);
+  width: 120px; min-width: 0; min-height: 72px; border-radius: var(--radius);
   background: var(--surface);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-size: 24px; border: 1px solid var(--hairline);
+  font-size: 24px; border: 1px solid var(--hairline); padding: 0; overflow: hidden;
+  cursor: pointer;
 }
-.photo small { font-size: 9px; color: var(--muted); margin-top: 2px; }
+.photo-image { display: block; width: 100%; height: 90px; object-fit: cover; border-bottom: 1px solid var(--hairline); }
+.photo small { display: block; max-width: 100%; padding: 3px 4px; font-size: 9px; color: var(--muted); margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-photo-section { min-width: 0; }
+.drawer-photo-section #drawer-photos { min-width: 0; }
 
 /* 操作区 */
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.drawer-actions { min-width: 0; }
+.drawer-actions .actions { min-width: 0; }
 .actions .hint { color: var(--muted); font-size: 13px; padding: 4px 0; }
 .actions select {
   padding: 7px 12px;
@@ -1191,6 +1197,10 @@ tbody tr:hover { background: #f8f7f6; box-shadow: inset 3px 0 0 var(--primary); 
   .chart-box { height: 200px; }
   .chart-box.tall { height: 220px; }
   .drawer-section { padding: 12px 14px; }
+  .drawer-photo-section .photos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .drawer-photo-section .photo { width: 100%; }
+  .drawer-actions .actions { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .drawer-actions .actions .btn, .drawer-actions .actions select { width: 100%; min-width: 0; box-sizing: border-box; }
   .vtl-block { font-size: 9px; }
   .vtl-col { min-width: 70px; }
   .month-day { min-width: 60px; padding: 6px 8px; font-size: 10px; }
