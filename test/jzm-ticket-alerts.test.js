@@ -21,6 +21,7 @@ test('紧急预警按行显示反馈人、反馈原因和原文消息', () => {
   const text = formatTicketAlert('created', {
     id: 'WX8030', cat: '电力照明', desc: '居民反馈停电，请安排检修。',
     created: '2026-09-07T03:40:00.000Z',
+    enterpriseName: '多多科技', communityName: '测试小区',
     metadata: JSON.stringify({
       feedbackPerson: 'Kitty', feedbackGroup: '居民群',
       originalMessage: '没有人解决，我要投诉',
@@ -30,6 +31,7 @@ test('紧急预警按行显示反馈人、反馈原因和原文消息', () => {
   assert.match(text, /原文消息：没有人解决，我要投诉/);
   assert.ok(text.indexOf('反馈原因：') < text.indexOf('原文消息：'));
   assert.equal(text.split('\n').filter((line) => line.includes('原文消息：')).length, 1);
+  assert.doesNotMatch(text, /企业：/);
 });
 
 test('外部 sender_name 会成为反馈人，预警包含工单号和小区定位信息', async (t) => {
