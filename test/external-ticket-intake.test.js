@@ -256,6 +256,58 @@ test('two rapid concurrent intents on one database atomically create then merge'
   assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_ingest_events').total, 2);
 });
 
+test('invalid external timestamps are rejected before any intake data is written', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+
+  for (const now of ['not-a-date', new Date('not-a-date')]) {
+    assert.throws(
+      () => accept(db, { now }),
+      (error) => error.status === 400 && error.code === 'INVALID_EXTERNAL_TIME'
+    );
+  }
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM tickets').total, 0);
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_ingest_events').total, 0);
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_source_audits').total, 0);
+});
+
+test('open matches with timezone offsets are selected by actual time rather than text order', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  const repeatKey = 'repair|水暖|3号楼502';
+  const metadata = JSON.stringify({ feedbackPerson: '原反馈人', originalMessage: '原文' });
+  db.run(`INSERT INTO tickets
+    (tenant_id, id, type, cat, loc, status, created, community_id, repeat_key, metadata)
+    VALUES (?, ?, 'repair', '水暖', '3号楼502', 'wait', ?, 'community-a', ?, ?)`,
+  ['tenant-a', 'WX0101', '2026-09-14T03:05:00Z', repeatKey, metadata]);
+  db.run(`INSERT INTO tickets
+    (tenant_id, id, type, cat, loc, status, created, community_id, repeat_key, metadata)
+    VALUES (?, ?, 'repair', '水暖', '3号楼502', 'wait', ?, 'community-a', ?, ?)`,
+  ['tenant-a', 'WX0102', '2026-09-14T04:00:00+01:00', repeatKey, metadata]);
+
+  const merged = accept(db, { now: '2026-09-14T03:10:00Z' });
+
+  assert.deepEqual(merged, { decision: 'merged', ticketId: 'WX0101', shouldAlert: false });
+  assert.equal(one(db, "SELECT feedback_count FROM tickets WHERE id='WX0101'").feedback_count, 2);
+  assert.equal(one(db, "SELECT feedback_count FROM tickets WHERE id='WX0102'").feedback_count, 1);
+});
+
+test('merge source insertion failure rolls back feedback count and ingest event', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+  const first = accept(db);
+  db.run(`CREATE TRIGGER fail_merged_source BEFORE INSERT ON ticket_source_audits
+    WHEN NEW.source = 'external_merge' BEGIN SELECT RAISE(ABORT, 'merged source rejected'); END`);
+
+  assert.throws(
+    () => accept(db, { now: '2026-09-14T10:01:00.000Z', input: { feedback_person: 'B居民' } }),
+    /merged source rejected/
+  );
+  assert.equal(one(db, 'SELECT feedback_count FROM tickets WHERE id = ?', [first.ticketId]).feedback_count, 1);
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_ingest_events').total, 1);
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_source_audits').total, 1);
+});
+
 test('source insertion failure rolls back ticket and ingest event together', async (t) => {
   const db = await createFullTestDB();
   t.after(() => db.close());

@@ -100,28 +100,54 @@ function createdMilliseconds(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function invalidExternalTime() {
+  const error = new Error('外部工单时间不合法');
+  error.status = 400;
+  error.code = 'INVALID_EXTERNAL_TIME';
+  return error;
+}
+
+function normalizeExternalTime(value) {
+  if (value === undefined || value === null) return new Date().toISOString();
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw invalidExternalTime();
+    return value.toISOString();
+  }
+  if (typeof value !== 'string') throw invalidExternalTime();
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw invalidExternalTime();
+  return new Date(parsed).toISOString();
+}
+
+function sortByCreatedDescending(candidates) {
+  return candidates
+    .map((ticket) => ({ ticket, createdMs: createdMilliseconds(ticket.created) }))
+    .filter(({ createdMs }) => createdMs !== null)
+    .sort((left, right) => right.createdMs - left.createdMs);
+}
+
 function findRecentOpenMatch(db, { tenantId, communityId, repeatKey, now }) {
   const nowMs = createdMilliseconds(now);
   if (nowMs === null) return null;
-  return rows(db, `SELECT * FROM tickets
-    WHERE tenant_id = ? AND community_id = ? AND repeat_key = ? AND status <> 'done'
-    ORDER BY created DESC`, [tenantId, communityId, repeatKey]).find((ticket) => {
-    const createdMs = createdMilliseconds(ticket.created);
-    const delta = createdMs === null ? NaN : nowMs - createdMs;
+  const candidates = rows(db, `SELECT * FROM tickets
+    WHERE tenant_id = ? AND community_id = ? AND repeat_key = ? AND status <> 'done'`,
+  [tenantId, communityId, repeatKey]);
+  return sortByCreatedDescending(candidates).find(({ createdMs }) => {
+    const delta = nowMs - createdMs;
     return Number.isFinite(delta) && delta >= 0 && delta <= DUPLICATE_WINDOW_MS;
-  }) || null;
+  })?.ticket || null;
 }
 
 function findCompletedMatches(db, { tenantId, communityId, repeatKey, now }) {
   const nowMs = createdMilliseconds(now);
   if (nowMs === null) return [];
-  return rows(db, `SELECT * FROM tickets
-    WHERE tenant_id = ? AND community_id = ? AND repeat_key = ? AND status = 'done'
-    ORDER BY created DESC`, [tenantId, communityId, repeatKey]).filter((ticket) => {
-    const createdMs = createdMilliseconds(ticket.created);
-    const delta = createdMs === null ? NaN : nowMs - createdMs;
+  const candidates = rows(db, `SELECT * FROM tickets
+    WHERE tenant_id = ? AND community_id = ? AND repeat_key = ? AND status = 'done'`,
+  [tenantId, communityId, repeatKey]);
+  return sortByCreatedDescending(candidates).filter(({ createdMs }) => {
+    const delta = nowMs - createdMs;
     return Number.isFinite(delta) && delta >= 0 && delta <= RECURRENCE_WINDOW_MS;
-  });
+  }).map(({ ticket }) => ticket);
 }
 
 function nextTicketId(db) {
@@ -250,7 +276,7 @@ function recordIngestEvent(db, {
 
 function acceptExternalFeedback({ db, tenantId, supervisor, community, input = {}, now }) {
   if (!db || !tenantId || !community?.id) throw new Error('external ticket intake context is incomplete');
-  const createdAt = now instanceof Date ? now.toISOString() : text(now) || new Date().toISOString();
+  const createdAt = normalizeExternalTime(now);
   const communityId = text(community.id);
   const normalizedLocation = normalizeLocation(input.loc);
   const repeatKey = repeatKeyFor(input);
