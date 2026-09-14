@@ -20,6 +20,7 @@ const TENANT_TABLES = [
   'ai_report_analyses',
   'staff_lifecycle_audit',
   'ticket_source_audits',
+  'ticket_ingest_events',
 ];
 
 function values(db, sql, params = []) {
@@ -389,6 +390,25 @@ function ensureTenantSchema(db) {
       ON ticket_source_audits(tenant_id, ticket_id)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_source_audit_created
       ON ticket_source_audits(tenant_id, created_at)`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_ingest_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      community_id TEXT NOT NULL DEFAULT '',
+      ticket_id TEXT,
+      decision TEXT NOT NULL CHECK (decision IN ('deferred','merged','created')),
+      normalized_location TEXT NOT NULL DEFAULT '',
+      repeat_key TEXT NOT NULL DEFAULT '',
+      feedback_person TEXT NOT NULL DEFAULT '',
+      feedback_group TEXT NOT NULL DEFAULT '',
+      original_message TEXT NOT NULL DEFAULT '',
+      request_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_ingest_tenant_created
+      ON ticket_ingest_events(tenant_id, created_at)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_ticket_ingest_ticket
+      ON ticket_ingest_events(tenant_id, ticket_id)`);
 
     for (const table of TENANT_TABLES) {
       if (
