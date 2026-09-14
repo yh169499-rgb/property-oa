@@ -198,6 +198,64 @@ test('message is the canonical original and feedback person is never inferred', 
   assert.equal(source.original_message, '标准原文');
 });
 
+test('empty preferred aliases fall back to the first non-empty supported alias', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+
+  const created = accept(db, {
+    input: {
+      message: '',
+      original_message: '旧蛇形原文',
+      originalMessage: '旧驼峰原文',
+      feedback_person: '',
+      feedbackPerson: '驼峰反馈人',
+      feedback_group: '',
+      feedbackGroup: '驼峰反馈群',
+    },
+  });
+
+  const ticket = one(db, 'SELECT * FROM tickets WHERE id = ?', [created.ticketId]);
+  const metadata = JSON.parse(ticket.metadata);
+  assert.equal(metadata.originalMessage, '旧蛇形原文');
+  assert.equal(metadata.feedbackPerson, '驼峰反馈人');
+  assert.equal(metadata.feedbackGroup, '驼峰反馈群');
+  const source = one(db, 'SELECT * FROM ticket_source_audits WHERE ticket_id = ?', [created.ticketId]);
+  assert.equal(source.original_message, '旧蛇形原文');
+  assert.equal(source.feedback_person, '驼峰反馈人');
+  assert.equal(source.feedback_group, '驼峰反馈群');
+
+  const camelOriginal = accept(db, {
+    input: {
+      loc: '3号楼503',
+      message: '',
+      original_message: '',
+      originalMessage: '仅驼峰原文',
+    },
+  });
+  const camelSource = one(db, 'SELECT * FROM ticket_source_audits WHERE ticket_id = ?', [camelOriginal.ticketId]);
+  assert.equal(camelSource.original_message, '仅驼峰原文');
+});
+
+test('two rapid concurrent intents on one database atomically create then merge', async (t) => {
+  const db = await createFullTestDB();
+  t.after(() => db.close());
+
+  const [first, second] = await Promise.all([
+    Promise.resolve().then(() => accept(db, { input: { feedback_person: 'A居民' } })),
+    Promise.resolve().then(() => accept(db, {
+      now: '2026-09-14T10:00:01.000Z',
+      input: { feedback_person: 'B居民', message: 'B快速反馈同一问题' },
+    })),
+  ]);
+
+  assert.deepEqual([first.decision, second.decision].sort(), ['created', 'merged']);
+  assert.equal(first.ticketId, second.ticketId);
+  assert.equal(one(db, "SELECT COUNT(*) total FROM tickets WHERE status <> 'done'").total, 1);
+  assert.equal(one(db, 'SELECT feedback_count FROM tickets WHERE id = ?', [first.ticketId]).feedback_count, 2);
+  assert.equal(one(db, 'SELECT COUNT(DISTINCT id) total FROM tickets').total, 1);
+  assert.equal(one(db, 'SELECT COUNT(*) total FROM ticket_ingest_events').total, 2);
+});
+
 test('source insertion failure rolls back ticket and ingest event together', async (t) => {
   const db = await createFullTestDB();
   t.after(() => db.close());

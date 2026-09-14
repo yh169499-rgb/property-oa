@@ -30,6 +30,14 @@ function normalizeText(value) {
   return text(value).normalize('NFKC').toLowerCase().replace(/\s+/g, '');
 }
 
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const normalized = text(value);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
 function normalizeLocation(value) {
   return normalizeText(value).replace(/[—–－]/g, '-');
 }
@@ -68,17 +76,15 @@ function normalizeTicketType(value) {
 }
 
 function canonicalOriginalMessage(input = {}) {
-  const message = text(input.message);
-  if (message) return message;
-  return text(input.original_message ?? input.originalMessage);
+  return firstNonEmpty(input.message, input.original_message, input.originalMessage);
 }
 
 function feedbackPerson(input = {}) {
-  return text(input.feedback_person ?? input.feedbackPerson);
+  return firstNonEmpty(input.feedback_person, input.feedbackPerson);
 }
 
 function feedbackGroup(input = {}) {
-  return text(input.feedback_group ?? input.feedbackGroup);
+  return firstNonEmpty(input.feedback_group, input.feedbackGroup);
 }
 
 function repeatKeyFor(input) {
