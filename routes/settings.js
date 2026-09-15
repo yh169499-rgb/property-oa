@@ -23,7 +23,9 @@ const {
 } = require('../services/jzm-messaging');
 const {
   getReminderInterval,
+  getReminderIntervals,
   setReminderInterval,
+  setReminderIntervals,
   startReminderScheduler,
 } = require('../services/ticket-reminders');
 
@@ -33,6 +35,7 @@ const REPORT_BUSINESS_ERRORS = new Set([
   'INVALID_DATE_RANGE',
   'INVALID_STAFF_ID',
   'INVALID_PERFORMANCE_RULE',
+  'INVALID_REMINDER_INTERVALS',
 ]);
 
 function reportError(res, error) {
@@ -191,16 +194,35 @@ router.get('/reminder/trigger', requireAuth, requireAdmin, async (req, res) => {
 
 // GET/POST /api/settings/reminder
 router.get('/settings/reminder', requireAuth, requireAdmin, (req, res) => {
-  res.json({ intervalMinutes: getReminderInterval(getDB(), req.user.tenant_id) });
+  const db = getDB();
+  res.json({
+    intervalMinutes: getReminderInterval(db, req.user.tenant_id),
+    intervals: getReminderIntervals(db, req.user.tenant_id),
+  });
 });
 router.post('/settings/reminder', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const intervalMinutes = setReminderInterval(
-      getDB(), req.user.tenant_id, req.body.intervalMinutes
-    );
+    const db = getDB();
+    const body = req.body || {};
+    let intervals;
+    if (Object.prototype.hasOwnProperty.call(body, 'intervals')) {
+      intervals = setReminderIntervals(db, req.user.tenant_id, body.intervals);
+    } else {
+      const intervalMinutes = setReminderInterval(
+        db, req.user.tenant_id, body.intervalMinutes
+      );
+      intervals = setReminderIntervals(db, req.user.tenant_id,
+        { wait: intervalMinutes, pending: intervalMinutes, confirm: intervalMinutes });
+    }
+    const intervalMinutes = getReminderInterval(db, req.user.tenant_id);
     await saveDB();
     startReminderScheduler(req.user.tenant_id, { getDatabase: getDB, persist: saveDB });
-    res.json({ success: true, intervalMinutes, message: intervalMinutes > 0 ? `每${intervalMinutes}分钟推送` : '已关闭' });
+    res.json({
+      success: true,
+      intervalMinutes,
+      intervals,
+      message: Object.values(intervals).some((value) => value > 0) ? '提醒设置已保存' : '已关闭',
+    });
   } catch (error) {
     reportError(res, error);
   }
