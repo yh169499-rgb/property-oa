@@ -131,6 +131,30 @@ async function request(server, path, user, options = {}) {
   return { response, body: await response.json() };
 }
 
+test('内部建单来源元数据按 message 和规范反馈人优先级冻结', async (t) => {
+  const db = await fixture();
+  const server = await tenantServer(db);
+  t.after(() => server.close());
+  const result = await request(server, '/api/tickets', SUPERVISOR, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼502', community_id: 'c1',
+      message: '规范正文', original_message: '旧蛇形原文', originalMessage: '旧驼峰原文',
+      feedback_person: '蛇形反馈人', feedbackPerson: '驼峰反馈人', sender_name: '不应读取',
+      metadata: {
+        message: '元数据正文', original_message: '元数据旧原文', originalMessage: '元数据驼峰原文',
+        feedbackPerson: '元数据反馈人', feedback_person: '元数据蛇形反馈人', senderName: '元数据错误人',
+      },
+    }),
+  });
+  assert.equal(result.response.status, 200);
+  const metadata = JSON.parse(one(db, 'SELECT metadata FROM tickets ORDER BY rowid DESC LIMIT 1').metadata);
+  assert.equal(metadata.originalMessage, '规范正文');
+  assert.equal(metadata.feedbackPerson, '蛇形反馈人');
+  assert.notEqual(metadata.feedbackPerson, '不应读取');
+});
+
 function captureWarnings(t) {
   const originalWarn = console.warn;
   const warnings = [];

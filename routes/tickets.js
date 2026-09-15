@@ -89,13 +89,20 @@ function rowToTicket(row) {
 
 function notificationMetadata(input = {}) {
   const source = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const firstNonEmpty = (...values) => values.find((value) => (
+    value !== undefined && value !== null && String(value).trim() !== ''
+  )) || '';
   const value = {
     ...source,
-    feedbackPerson: input.feedback_person || input.feedbackPerson || input.sender_name || input.senderName
-      || source.feedbackPerson || source.feedback_person || source.sender_name || source.senderName || '',
+    feedbackPerson: firstNonEmpty(
+      input.feedback_person, input.feedbackPerson,
+      source.feedbackPerson, source.feedback_person,
+    ),
     feedbackGroup: input.feedback_group || input.feedbackGroup || input.group_name || input.groupName || source.feedbackGroup || source.feedback_group || '',
-    originalMessage: input.original_message || input.originalMessage || source.originalMessage || source.original_message
-      || input.message || source.message || '',
+    originalMessage: firstNonEmpty(
+      input.message, input.original_message, input.originalMessage,
+      source.message, source.original_message, source.originalMessage,
+    ),
   };
   return JSON.stringify(value);
 }
@@ -381,19 +388,75 @@ router.get('/:id', requireAuth, (req, res) => {
 });
 
 // POST /api/tickets（外部接入路由必须在 /:id 之前声明）
-router.post('/external', requireIntegrationToken, createTicket);
+router.post('/external', requireIntegrationToken, createExternalTicket);
 router.post('/', requireAuth, createTicket);
+
+async function createExternalTicket(req, res) {
+  const t = req.body || {};
+  if (clientTenantProvided(t)) return clientTenantError(res);
+  let externalAlertConfig = null;
+  try { externalAlertConfig = alertConfigFromBody(t); }
+  catch (error) {
+    return res.status(error.status || 400).json({
+      error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID',
+    });
+  }
+  const type = normalizeTicketType(t.type);
+  if (!STAFF_TICKET_TYPES.has(type)) {
+    return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
+  }
+  let community;
+  try { community = resolveTicketCommunity(getDB(), t, req.user.tenant_id); }
+  catch (error) {
+    return res.status(error.status || 400).json({
+      error: error.message, code: error.code || 'COMMUNITY_INVALID',
+    });
+  }
+  try { assertCommunityAccess(req, community.id); }
+  catch (error) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  if (externalAlertConfig) {
+    try {
+      saveTenantAlertConfig(getDB(), req.user.tenant_id, externalAlertConfig);
+    } catch (error) {
+      return res.status(error.status || 400).json({
+        error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID',
+      });
+    }
+  }
+  try {
+    const intake = acceptExternalFeedback({
+      db: getDB(),
+      tenantId: req.user.tenant_id,
+      supervisor: req.user,
+      community,
+      input: { ...t, type },
+    });
+    await saveDB();
+    if (intake.shouldAlert && intake.ticketId) {
+      const row = ticketForTenant(req, intake.ticketId);
+      const ticket = rowToTicket(row);
+      ticket.communityName = community.name;
+      ticket.enterpriseName = req.integrationTenant?.name
+        || queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
+      notifyTicketAlert({
+        db: getDB(), tenantId: req.user.tenant_id, kind: 'created',
+        ticket, actor: req.user, assignee: null,
+      });
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      error: error.message, code: error.code || 'EXTERNAL_TICKET_INTAKE_FAILED',
+    });
+  }
+}
 
 async function createTicket(req, res) {
   const t = req.body || {};
   if (clientTenantProvided(t)) return clientTenantError(res);
   const supervisor = isSupervisorUser(req.user);
-  const external = Boolean(req.externalIntegration);
-  let externalAlertConfig = null;
-  if (external) {
-    try { externalAlertConfig = alertConfigFromBody(t); }
-    catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' }); }
-  }
   const type = normalizeTicketType(t.type);
   if (!STAFF_TICKET_TYPES.has(type)) {
     return res.status(400).json({ error: '工单类型不合法', code: 'INVALID_TICKET_TYPE' });
@@ -403,43 +466,7 @@ async function createTicket(req, res) {
   catch (error) { return res.status(error.status || 400).json({ error: error.message, code: error.code || 'COMMUNITY_INVALID' }); }
   try { assertCommunityAccess(req, community.id); }
   catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
-  if (externalAlertConfig) {
-    try {
-      saveTenantAlertConfig(getDB(), req.user.tenant_id, externalAlertConfig);
-    } catch (error) {
-      return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' });
-    }
-  }
-
-  // 外部 POST 是反馈受理入口：由服务端事务完成位置不完整受理、重复反馈合并和新单创建。
-  // 它必须与内部主管建单逻辑隔离，避免重复查重、覆盖首位来源或重复发送创建预警。
-  if (external) {
-    try {
-      const intake = acceptExternalFeedback({
-        db: getDB(),
-        tenantId: req.user.tenant_id,
-        supervisor: req.user,
-        community,
-        input: { ...t, type },
-      });
-      await saveDB();
-      if (intake.shouldAlert && intake.ticketId) {
-        const row = ticketForTenant(req, intake.ticketId);
-        const ticket = rowToTicket(row);
-        ticket.communityName = community.name;
-        ticket.enterpriseName = req.integrationTenant?.name || queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
-        notifyTicketAlert({
-          db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee: null,
-        });
-      }
-      return res.json({ success: true });
-    } catch (error) {
-      return res.status(error.status || 500).json({ error: error.message, code: error.code || 'EXTERNAL_TICKET_INTAKE_FAILED' });
-    }
-  }
-
-  // 外部系统不能覆盖内部编号、状态、优先级、处理人或创建时间，避免伪造历史数据。
-  const rawId = supervisor && !external && t.id ? String(t.id).trim() : '';
+  const rawId = supervisor && t.id ? String(t.id).trim() : '';
   const invalidIds = ['测试', 'test', ''];
   let id;
   if (rawId && !invalidIds.includes(rawId.toLowerCase())) { id = rawId; }
@@ -448,20 +475,20 @@ async function createTicket(req, res) {
     const maxNum = maxRow ? parseInt(maxRow.id.replace('WX', '')) || 0 : 0;
     id = 'WX' + String(maxNum + 1).padStart(4, '0');
   }
-  const now = supervisor && !external && t.created ? t.created : new Date().toISOString();
+  const now = supervisor && t.created ? t.created : new Date().toISOString();
   const communityId = community.id;
   const cat = t.cat || '其他';
   const loc = t.loc || '';
-  const requestedStatus = supervisor && !external ? String(t.status || 'wait') : 'wait';
+  const requestedStatus = supervisor ? String(t.status || 'wait') : 'wait';
   if (!['wait', 'doing'].includes(requestedStatus)) {
     return res.status(400).json({ error: '工单初始状态不合法', code: 'INVALID_TICKET_INITIAL_STATE' });
   }
-  const requestedPriority = supervisor && !external ? String(t.priority || 'normal') : 'normal';
+  const requestedPriority = supervisor ? String(t.priority || 'normal') : 'normal';
   if (!['low', 'normal', 'high', 'urgent'].includes(requestedPriority)) {
     return res.status(400).json({ error: '工单优先级不合法', code: 'INVALID_TICKET_PRIORITY' });
   }
   let assignee = null;
-  const requestedWorker = supervisor && !external ? String(t.worker || '').trim() : '';
+  const requestedWorker = supervisor ? String(t.worker || '').trim() : '';
   if (requestedWorker) {
     try { assignee = resolveAssignee(getDB(), requestedWorker, req.user.id, req.user.tenant_id); }
     catch (error) { return res.status(error.status).json({ error: error.message, code: error.code }); }
@@ -504,12 +531,11 @@ async function createTicket(req, res) {
       },
       communityId,
       communityName: community.name,
-      source: external ? 'external_merge' : 'supervisor_merge',
+      source: 'supervisor_merge',
       createdAt: new Date().toISOString(),
     });
     await saveDB();
     const mergedTicket = rowToTicket(ticketForTenant(req, recentOpen.id));
-    if (external) return res.json({ success: true });
     return res.json({ success: true, action: 'merged', merged: true, mergedInto: recentOpen.id, record: mergedTicket });
   }
 
@@ -535,8 +561,8 @@ async function createTicket(req, res) {
     const tenantPlaceholder = tenantAware ? '?, ' : '';
     const values = [id, type, cat, t.desc || '', loc, priority, requestedStatus,
       assignee ? assignee.displayName : '', t.message || '', now,
-      supervisor && !external ? (t.estimated_hours || 0) : 0,
-      supervisor && !external ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
+      supervisor ? (t.estimated_hours || 0) : 0,
+      supervisor ? (t.sessionId || '') : '', communityId, repeatKey, repeatOf,
       repeatCount, isRecurring ? 1 : 0, recurrenceNote, 1,
       activePerformanceRuleId(getDB(), req.user.tenant_id),
       assignee ? assignee.assigneeUserId : null,
@@ -571,7 +597,7 @@ async function createTicket(req, res) {
       },
       communityId,
       communityName: community.name,
-      source: external ? 'external' : 'supervisor',
+      source: 'supervisor',
       createdAt: now,
     });
     db.run('COMMIT');
@@ -580,11 +606,10 @@ async function createTicket(req, res) {
     const row = ticketForTenant(req, id);
     const ticket = rowToTicket(row);
     ticket.communityName = community.name;
-    ticket.enterpriseName = req.integrationTenant?.name || queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
+    ticket.enterpriseName = queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
     notifyTicketAlert({
       db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee,
     });
-    if (external) return res.json({ success: true });
     res.json({ success: true, action: isRecurring ? 'created_recurring' : 'created', community_resolution: community, record: ticket });
   } catch (e) {
     if (transactionStarted) {
