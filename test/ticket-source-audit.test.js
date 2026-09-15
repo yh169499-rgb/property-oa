@@ -42,8 +42,8 @@ test('外部建单保存企业、小区、反馈人、原文和脱敏请求摘�
     headers: { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' },
     body: JSON.stringify({
       enterprise_name: '测试企业', community_name: '测试小区',
-      sender_name: 'Kitty', feedback_group: '居民群', original_message: '居民原始文本',
-      type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼', message: '{"整理消息":"整理后的文本"}',
+      feedback_person: 'Kitty', feedback_group: '居民群', original_message: '旧原文', message: '居民原始文本',
+      type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼',
     }),
   });
   assert.equal(result.response.status, 200);
@@ -53,6 +53,23 @@ test('外部建单保存企业、小区、反馈人、原文和脱敏请求摘�
   assert.equal(audit.community_name, '测试小区');
   assert.match(audit.request_json, /测试企业/);
   assert.doesNotMatch(audit.request_json, /integration-test-token/);
+});
+
+test('来源审计以 message 为首选原文，空值回退别名但不读取 sender_name', async () => {
+  const db = await fixture();
+  const { normalizeSourceFields, sanitizeRequest } = require('../services/ticket-source-audit');
+  assert.deepEqual(normalizeSourceFields({ message: '正文', original_message: '旧原文', feedback_person: '反馈人', sender_name: '不应读取' }), {
+    enterpriseName: '', communityName: '', feedbackPerson: '反馈人', feedbackGroup: '', originalMessage: '正文',
+  });
+  assert.deepEqual(normalizeSourceFields({ message: '', originalMessage: '回退原文', feedbackPerson: '人' }), {
+    enterpriseName: '', communityName: '', feedbackPerson: '人', feedbackGroup: '', originalMessage: '回退原文',
+  });
+  assert.equal(normalizeSourceFields({ sender_name: '不应读取' }).feedbackPerson, '');
+  const sanitized = JSON.parse(sanitizeRequest({ roomid: 'room', roomId: 'room2', room_id: 'room3', imbotid: 'bot', imBotId: 'bot2', im_bot_id: 'bot3', contactid: 'contact', contactId: 'contact2', contact_id: 'contact3', managerContactid: 'manager', manager_contact_id: 'manager2', enterprise_name: '企业', message: '原文' }));
+  for (const key of ['roomid', 'roomId', 'room_id', 'imbotid', 'imBotId', 'im_bot_id', 'contactid', 'contactId', 'contact_id', 'managerContactid', 'manager_contact_id']) assert.equal(sanitized[key], '[REDACTED]');
+  assert.equal(sanitized.enterprise_name, '企业');
+  assert.equal(sanitized.message, '原文');
+  void db;
 });
 
 test('来源查询只返回当前租户且按工单号可定位预警来源', async (t) => {

@@ -22,6 +22,7 @@ const { sendTicketAlert, saveTenantAlertConfig } = require('../services/jzm-mess
 const { resetTicketReminderState } = require('../services/ticket-reminders');
 const { requireIntegrationToken, alertConfigFromBody } = require('../services/external-ingest');
 const { recordTicketSource } = require('../services/ticket-source-audit');
+const { acceptExternalFeedback } = require('../services/external-ticket-intake');
 const {
   STAFF_TICKET_TYPES,
   ticketReadScope,
@@ -409,6 +410,34 @@ async function createTicket(req, res) {
       return res.status(error.status || 400).json({ error: error.message, code: error.code || 'JZM_ALERT_CONFIG_INVALID' });
     }
   }
+
+  // 外部 POST 是反馈受理入口：由服务端事务完成位置不完整受理、重复反馈合并和新单创建。
+  // 它必须与内部主管建单逻辑隔离，避免重复查重、覆盖首位来源或重复发送创建预警。
+  if (external) {
+    try {
+      const intake = acceptExternalFeedback({
+        db: getDB(),
+        tenantId: req.user.tenant_id,
+        supervisor: req.user,
+        community,
+        input: { ...t, type },
+      });
+      await saveDB();
+      if (intake.shouldAlert && intake.ticketId) {
+        const row = ticketForTenant(req, intake.ticketId);
+        const ticket = rowToTicket(row);
+        ticket.communityName = community.name;
+        ticket.enterpriseName = req.integrationTenant?.name || queryOne('SELECT name FROM tenants WHERE id = ?', [req.user.tenant_id])?.name || '';
+        notifyTicketAlert({
+          db: getDB(), tenantId: req.user.tenant_id, kind: 'created', ticket, actor: req.user, assignee: null,
+        });
+      }
+      return res.json({ success: true });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.message, code: error.code || 'EXTERNAL_TICKET_INTAKE_FAILED' });
+    }
+  }
+
   // 外部系统不能覆盖内部编号、状态、优先级、处理人或创建时间，避免伪造历史数据。
   const rawId = supervisor && !external && t.id ? String(t.id).trim() : '';
   const invalidIds = ['测试', 'test', ''];

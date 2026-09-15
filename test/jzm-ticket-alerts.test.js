@@ -34,7 +34,7 @@ test('紧急预警按行显示反馈人、反馈原因和原文消息', () => {
   assert.doesNotMatch(text, /企业：/);
 });
 
-test('外部 sender_name 会成为反馈人，预警包含工单号和小区定位信息', async (t) => {
+test('外部反馈使用 feedback_person/message 生成预警，原文单独成行且只创建一次', async (t) => {
   const calls = [];
   setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
   t.after(() => resetMessageSenderForTests());
@@ -47,17 +47,59 @@ test('外部 sender_name 会成为反馈人，预警包含工单号和小区定�
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' },
     body: JSON.stringify({
-      enterprise_name: '测试企业', community_name: '测试小区', sender_name: 'Kitty',
-      feedback_group: '居民群', original_message: '原始居民文本', type: 'repair',
-      cat: '电力照明', desc: '停电', loc: '3号楼502', message: '请处理',
+      enterprise_name: '测试企业', community_name: '测试小区', feedback_person: 'Kitty',
+      feedback_group: '居民群', type: 'repair',
+      cat: '电力照明', desc: '停电', loc: '3号楼502', message: '居民原始文本',
     }),
   });
   assert.equal(result.response.status, 200);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(calls.at(-1).body.payload.text, /反馈人：Kitty/);
-  assert.match(calls.at(-1).body.payload.text, /原文消息：原始居民文本/);
+  assert.match(calls.at(-1).body.payload.text, /原文消息：居民原始文本/);
+  assert.equal(calls.at(-1).body.payload.text.split('\n').filter((line) => line.includes('原文消息：')).length, 1);
   assert.match(calls.at(-1).body.payload.text, /工单号：WX/);
   assert.match(calls.at(-1).body.payload.text, /小区：测试小区/);
+});
+
+test('外部反馈位置不完整只受理不建单不发消息，完整重复反馈合并且保留首位来源', async (t) => {
+  const calls = [];
+  setMessageSenderForTests(async (input) => { calls.push(input); return { success: true }; });
+  t.after(() => resetMessageSenderForTests());
+  const db = await fixture();
+  const server = await tenantServer(db, undefined, { id: 'tenant-a', name: '测试企业' });
+  t.after(() => server.close());
+  const previousToken = config.JZMM_INGEST_TOKEN;
+  config.JZMM_INGEST_TOKEN = 'integration-test-token';
+  t.after(() => { config.JZMM_INGEST_TOKEN = previousToken; });
+  const headers = { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' };
+  const base = { enterprise_name: '测试企业', community_name: '测试小区', type: 'repair', cat: '水暖', desc: '漏水' };
+  const deferred = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers, body: JSON.stringify({ ...base, loc: '待确认', message: '还不知道位置' }),
+  });
+  assert.deepEqual(deferred.body, { success: true });
+  assert.equal(one(db, 'SELECT COUNT(*) count FROM tickets').count, 0);
+  assert.equal(calls.length, 0);
+
+  const first = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers, body: JSON.stringify({ ...base, loc: '3号楼502', message: '首条原文', feedback_person: 'A居民', feedback_group: '居民群', roomid: 'room-a', imbotid: 'bot-a', contactid: 'manager-contact-a' }),
+  });
+  assert.deepEqual(first.body, { success: true });
+  const second = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers, body: JSON.stringify({ ...base, loc: '3号楼502', message: '第二条原文', feedback_person: 'B居民', feedback_group: '其他群', roomId: 'room-a', imBotId: 'bot-a', managerContactId: 'manager-contact-a' }),
+  });
+  assert.deepEqual(second.body, { success: true });
+  assert.equal(one(db, 'SELECT COUNT(*) count FROM tickets').count, 1);
+  assert.equal(calls.length, 1, '合并反馈不应再次发送创建预警');
+  const ticket = one(db, 'SELECT * FROM tickets LIMIT 1');
+  const metadata = JSON.parse(ticket.metadata);
+  assert.equal(metadata.feedbackPerson, 'A居民');
+  assert.equal(metadata.feedbackGroup, '居民群');
+  assert.equal(metadata.originalMessage, '首条原文');
+  assert.equal(ticket.feedback_count, 2);
+  assert.equal(one(db, "SELECT source FROM ticket_source_audits WHERE source='external_merge'").source, 'external_merge');
+  const audit = one(db, 'SELECT request_json FROM ticket_source_audits ORDER BY id DESC LIMIT 1');
+  assert.match(audit.request_json, /\[REDACTED\]/);
+  assert.doesNotMatch(audit.request_json, /manager-contact-a/);
 });
 
 const SUPERVISOR = { id: 1, name: '主管', role: '主管', tenant_id: 'tenant-a' };
@@ -564,4 +606,24 @@ test('外部建单拒绝错误令牌和未知企业', async (t) => {
   });
   assert.equal(unknown.response.status, 404);
   assert.equal(unknown.body.code, 'ENTERPRISE_NOT_FOUND');
+});
+
+test('外部企业名和小区名兼容驼峰字段，未知小区保持稳定错误', async (t) => {
+  const server = await tenantServer(await fixture(), undefined, { id: 'tenant-a', name: '测试企业' });
+  t.after(() => server.close());
+  const previousToken = config.JZMM_INGEST_TOKEN;
+  config.JZMM_INGEST_TOKEN = 'integration-test-token';
+  t.after(() => { config.JZMM_INGEST_TOKEN = previousToken; });
+  const headers = { 'Content-Type': 'application/json', 'X-JZM-Ingest-Token': 'integration-test-token' };
+  const ok = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers,
+    body: JSON.stringify({ enterpriseName: '测试企业', communityName: '测试小区', type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼', message: '原文' }),
+  });
+  assert.deepEqual(ok.body, { success: true });
+  const unknown = await request(server, '/api/tickets/external', null, {
+    method: 'POST', headers,
+    body: JSON.stringify({ enterpriseName: '测试企业', communityName: '不存在小区', type: 'repair', cat: '水暖', desc: '漏水', loc: '3号楼', message: '原文' }),
+  });
+  assert.equal(unknown.response.status, 400);
+  assert.equal(unknown.body.code, 'COMMUNITY_NOT_FOUND');
 });

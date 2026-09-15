@@ -2,7 +2,11 @@ const { queryAll, queryOne } = require('../db');
 
 const SENSITIVE_KEYS = new Set([
   'x-jzm-ingest-token', 'x-integration-token', 'token', 'msgToken',
-  'contactMap', 'contact_map', 'contacts', 'managerContactId', 'manager_contact_id',
+  'contactMap', 'contact_map', 'contacts',
+  'roomid', 'roomId', 'room_id',
+  'imbotid', 'imBotId', 'im_bot_id',
+  'contactid', 'contactId', 'contact_id',
+  'managerContactid', 'managerContactId', 'manager_contact_id',
 ]);
 
 function tableExists(db, name = 'ticket_source_audits') {
@@ -21,10 +25,10 @@ function normalizeSourceFields(input = {}) {
   return {
     enterpriseName: String(pick('enterprise_name', 'enterpriseName', 'company_name', 'companyName', 'tenant_name', 'tenantName')).trim(),
     communityName: String(pick('community_name', 'communityName')).trim(),
-    feedbackPerson: String(pick('feedback_person', 'feedbackPerson', 'sender_name', 'senderName')).trim(),
+    feedbackPerson: String(pick('feedback_person', 'feedbackPerson')).trim(),
     feedbackGroup: String(pick('feedback_group', 'feedbackGroup', 'group_name', 'groupName')).trim(),
-    // 部分外部调用方只提供 message；在未显式传原文时保留它，避免预警丢失居民正文。
-    originalMessage: String(pick('original_message', 'originalMessage', 'message')).trim(),
+    // message 是外部反馈的规范原文；为空时才回退兼容别名。
+    originalMessage: String(pick('message', 'original_message', 'originalMessage')).trim(),
   };
 }
 
